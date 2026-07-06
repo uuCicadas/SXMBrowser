@@ -1,0 +1,228 @@
+import Foundation
+
+public enum ScanDirection: String, CaseIterable, Codable, Sendable {
+    case fwd
+    case bwd
+
+    public var label: String {
+        switch self {
+        case .fwd: "Forward"
+        case .bwd: "Backward"
+        }
+    }
+}
+
+public enum ChannelKind: String, Codable, Sendable {
+    case stm
+    case afm
+}
+
+public enum ProcessingMode: String, CaseIterable, Codable, Sendable {
+    case raw
+    case lineMean
+    case lineLinear
+    case planeLinear
+
+    public var label: String {
+        switch self {
+        case .raw: "Raw"
+        case .lineMean: "Line mean subtract"
+        case .lineLinear: "Line linear fit"
+        case .planeLinear: "Plane linear fit"
+        }
+    }
+}
+
+public enum PaletteName: String, CaseIterable, Codable, Sendable {
+    case gwyddionNet
+    case gray
+    case grayInverted
+    case gold
+    case viridis
+    case inferno
+    case bwr
+    case flame
+
+    public var label: String {
+        switch self {
+        case .gwyddionNet: "Gwyddion.net"
+        case .gray: "Basic gray"
+        case .grayInverted: "Basic gray inverted"
+        case .gold: "Gold"
+        case .viridis: "Viridis"
+        case .inferno: "Inferno"
+        case .bwr: "Blue White Red"
+        case .flame: "Flame"
+        }
+    }
+}
+
+public struct SXMChannel: Identifiable, Hashable, Sendable {
+    public var id: String { name }
+    public let name: String
+    public let unit: String
+    public let directions: [ScanDirection]
+    public let kind: ChannelKind
+
+    public init(name: String, unit: String, directions: [ScanDirection], kind: ChannelKind) {
+        self.name = name
+        self.unit = unit
+        self.directions = directions
+        self.kind = kind
+    }
+}
+
+public struct SXMMetadata: Identifiable, Hashable, Sendable {
+    public let id: UUID
+    public let path: URL
+    public let filename: String
+    public let header: [String: String]
+    public let recordedTime: Date?
+    public let modifiedTime: Date
+    public let pixels: (width: Int, height: Int)
+    public let scanRange: (x: Double, y: Double)?
+    public let scanOffset: (x: Double, y: Double)?
+    public let scanAngle: Double?
+    public let scanDir: String?
+    public let zControllerOn: Bool?
+    public let channels: [SXMChannel]
+    public let defaultChannel: String?
+
+    public init(
+        id: UUID = UUID(),
+        path: URL,
+        filename: String,
+        header: [String: String],
+        recordedTime: Date?,
+        modifiedTime: Date,
+        pixels: (width: Int, height: Int),
+        scanRange: (x: Double, y: Double)?,
+        scanOffset: (x: Double, y: Double)?,
+        scanAngle: Double?,
+        scanDir: String?,
+        zControllerOn: Bool?,
+        channels: [SXMChannel],
+        defaultChannel: String?
+    ) {
+        self.id = id
+        self.path = path
+        self.filename = filename
+        self.header = header
+        self.recordedTime = recordedTime
+        self.modifiedTime = modifiedTime
+        self.pixels = pixels
+        self.scanRange = scanRange
+        self.scanOffset = scanOffset
+        self.scanAngle = scanAngle
+        self.scanDir = scanDir
+        self.zControllerOn = zControllerOn
+        self.channels = channels
+        self.defaultChannel = defaultChannel
+    }
+
+    public static func == (lhs: SXMMetadata, rhs: SXMMetadata) -> Bool {
+        lhs.id == rhs.id
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+}
+
+public struct Matrix: Sendable {
+    public let width: Int
+    public let height: Int
+    public var values: [Float]
+
+    public init(width: Int, height: Int, values: [Float]) {
+        self.width = width
+        self.height = height
+        self.values = values
+    }
+
+    public subscript(x: Int, y: Int) -> Float {
+        get { values[y * width + x] }
+        set { values[y * width + x] = newValue }
+    }
+}
+
+public struct MatrixKey: Hashable, Sendable {
+    public let channel: String
+    public let direction: ScanDirection
+
+    public init(channel: String, direction: ScanDirection) {
+        self.channel = channel
+        self.direction = direction
+    }
+}
+
+public struct SXMFullFile: Sendable {
+    public let metadata: SXMMetadata
+    public let matrices: [MatrixKey: Matrix]
+
+    public init(metadata: SXMMetadata, matrices: [MatrixKey: Matrix]) {
+        self.metadata = metadata
+        self.matrices = matrices
+    }
+}
+
+public struct HistogramStats: Sendable {
+    public let count: Int
+    public let min: Double
+    public let max: Double
+    public let p1: Double
+    public let p99: Double
+    public let mean: Double
+    public let std: Double
+    public let bins: Int
+    public let hist: [Int]
+    public let edges: [Double]
+}
+
+public struct RenderOptions: Hashable, Sendable {
+    public let channel: String
+    public let direction: ScanDirection
+    public let processing: ProcessingMode
+    public let palette: PaletteName
+    public let vmin: Double?
+    public let vmax: Double?
+    public let outputSize: Int?
+    public let invert: Bool
+
+    public init(
+        channel: String,
+        direction: ScanDirection,
+        processing: ProcessingMode,
+        palette: PaletteName,
+        vmin: Double? = nil,
+        vmax: Double? = nil,
+        outputSize: Int? = nil,
+        invert: Bool = false
+    ) {
+        self.channel = channel
+        self.direction = direction
+        self.processing = processing
+        self.palette = palette
+        self.vmin = vmin
+        self.vmax = vmax
+        self.outputSize = outputSize
+        self.invert = invert
+    }
+}
+
+public func classifyChannel(_ name: String) -> ChannelKind {
+    let folded = name.lowercased()
+    let afmKeywords = ["frequency shift", "freq", "df", "delta f", "amplitude", "excitation", "pll", "oc_"]
+    if afmKeywords.contains(where: { folded.contains($0) }) || name.contains("Δf") {
+        return .afm
+    }
+    return .stm
+}
+
+public func defaultPalette(for channelName: String) -> PaletteName {
+    classifyChannel(channelName) == .afm ? .gray : .gwyddionNet
+}
+
+public func defaultProcessing(for channelName: String) -> ProcessingMode {
+    classifyChannel(channelName) == .afm ? .raw : .lineLinear
+}
