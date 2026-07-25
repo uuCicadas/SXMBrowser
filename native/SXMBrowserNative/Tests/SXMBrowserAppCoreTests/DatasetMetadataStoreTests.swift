@@ -551,6 +551,144 @@ func rebindUnknownDatasetFailsWithoutWriting() async throws {
 }
 
 @Test
+func updateDatasetReturnsTheVerifiedRecordAndPersistsMutation()
+    async throws
+{
+    let fileURL = URL(fileURLWithPath: "/virtual/metadata-v1.json")
+    let record = try datasetRecord(path: "/tmp/Existing")
+    let originalData = try encodedMetadata(
+        try DatasetMetadataDocumentV1(datasets: [record])
+    )
+    let access = InMemoryMetadataFileAccess(
+        fileURL: fileURL,
+        data: originalData
+    )
+    let store = DatasetMetadataStore(
+        fileURL: fileURL,
+        fileAccess: access
+    )
+    let tagID = UUID()
+    let updateDate = Date(timeIntervalSince1970: 1_800_000_000)
+
+    let updated = try await store.updateDataset(
+        id: record.id,
+        updatedAt: updateDate
+    ) { dataset in
+        _ = try dataset.createTag(id: tagID, name: "Verified")
+    }
+
+    #expect(updated.id == record.id)
+    #expect(updated.updatedAt == updateDate)
+    #expect(updated.tags.map(\.id) == [tagID])
+    #expect(
+        try await store.load().datasets.first(where: {
+            $0.id == record.id
+        }) == updated
+    )
+    #expect(access.writeCount == 1)
+}
+
+@Test
+func updateDatasetUnknownIDAndMutationFailuresNeverWrite() async throws {
+    let fileURL = URL(fileURLWithPath: "/virtual/metadata-v1.json")
+    let record = try datasetRecord(path: "/tmp/Existing")
+    let originalData = try encodedMetadata(
+        try DatasetMetadataDocumentV1(datasets: [record])
+    )
+    let access = InMemoryMetadataFileAccess(
+        fileURL: fileURL,
+        data: originalData
+    )
+    let store = DatasetMetadataStore(
+        fileURL: fileURL,
+        fileAccess: access
+    )
+    let missingID = UUID()
+
+    do {
+        _ = try await store.updateDataset(id: missingID) { _ in }
+        Issue.record("Expected missing dataset ID to fail")
+    } catch let error as DatasetMetadataValidationError {
+        #expect(error == .datasetNotFound(missingID))
+    } catch {
+        Issue.record("Unexpected error: \(error)")
+    }
+
+    do {
+        _ = try await store.updateDataset(id: record.id) { _ in
+            throw MetadataStoreTestError.expectedMutationFailure
+        }
+        Issue.record("Expected mutation to fail")
+    } catch MetadataStoreTestError.expectedMutationFailure {
+        // Expected.
+    } catch {
+        Issue.record("Unexpected error: \(error)")
+    }
+
+    do {
+        _ = try await store.updateDataset(id: record.id) { dataset in
+            _ = try dataset.createTag(name: "Duplicate")
+            _ = try dataset.createTag(name: " duplicate ")
+        }
+        Issue.record("Expected validation to fail")
+    } catch let error as DatasetMetadataValidationError {
+        #expect(error == .duplicateTagName("duplicate"))
+    } catch {
+        Issue.record("Unexpected error: \(error)")
+    }
+
+    #expect(access.writeCount == 0)
+    #expect(access.data(at: fileURL) == originalData)
+}
+
+@Test
+func concurrentDatasetUpdatesDoNotLoseMutations() async throws {
+    let fileURL = URL(fileURLWithPath: "/virtual/metadata-v1.json")
+    let record = try datasetRecord(path: "/tmp/Existing")
+    let originalData = try encodedMetadata(
+        try DatasetMetadataDocumentV1(datasets: [record])
+    )
+    let access = InMemoryMetadataFileAccess(
+        fileURL: fileURL,
+        data: originalData
+    )
+    let store = DatasetMetadataStore(
+        fileURL: fileURL,
+        fileAccess: access
+    )
+    let tagIDs = (0..<20).map { _ in UUID() }
+
+    try await withThrowingTaskGroup(of: Void.self) { group in
+        for index in tagIDs.indices {
+            group.addTask {
+                _ = try await store.updateDataset(
+                    id: record.id,
+                    updatedAt: Date(
+                        timeIntervalSince1970:
+                            1_800_000_000 + Double(index)
+                    )
+                ) { dataset in
+                    _ = try dataset.createTag(
+                        id: tagIDs[index],
+                        name: "Tag \(index)"
+                    )
+                }
+            }
+        }
+        try await group.waitForAll()
+    }
+
+    let updated = try #require(
+        try await store.load().datasets.first(where: {
+            $0.id == record.id
+        })
+    )
+    #expect(updated.tags.count == tagIDs.count)
+    #expect(Set(updated.tags.map(\.id)) == Set(tagIDs))
+    #expect(access.writeCount == tagIDs.count)
+}
+
+@Test
 func bookmarkAbstractionSupportsNilStaleAndFailure() throws {
     let folderURL = URL(fileURLWithPath: "/tmp/Dataset")
     let unavailable = FakeFolderBookmarker(behavior: .unavailable)

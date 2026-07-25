@@ -214,6 +214,36 @@ public actor DatasetMetadataStore {
     }
 
     @discardableResult
+    public func updateDataset(
+        id: UUID,
+        updatedAt: Date = .now,
+        mutation: @Sendable (
+            inout DatasetRecordV1
+        ) throws -> Void
+    ) throws -> DatasetRecordV1 {
+        let verified = try transaction { document in
+            guard var dataset = document.datasets.first(where: {
+                $0.id == id
+            }) else {
+                throw DatasetMetadataValidationError.datasetNotFound(id)
+            }
+            try mutation(&dataset)
+            try dataset.markUpdated(at: updatedAt)
+            try document.replaceDataset(dataset)
+        }
+        guard let dataset = verified.datasets.first(where: {
+            $0.id == id
+        }) else {
+            throw DatasetMetadataStoreError.verificationFailed(
+                fileURL: fileURL,
+                message: "The verified document omitted the updated dataset.",
+                rollbackFailure: nil
+            )
+        }
+        return dataset
+    }
+
+    @discardableResult
     public func findOrCreateDataset(
         forFolderURL folderURL: URL,
         folderBookmark: Data? = nil,
