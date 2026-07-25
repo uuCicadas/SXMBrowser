@@ -456,6 +456,7 @@ private struct AssociationWireV1: Codable {
 private struct AxisPreferenceWireV1: Codable {
     let sxmPath: String
     let kind: String
+    let experimentIdentity: String?
     let schemaFingerprint: String
     let xColumn: String
     let yColumn: String
@@ -463,6 +464,7 @@ private struct AxisPreferenceWireV1: Codable {
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case sxmPath
         case kind
+        case experimentIdentity
         case schemaFingerprint
         case xColumn
         case yColumn
@@ -471,6 +473,7 @@ private struct AxisPreferenceWireV1: Codable {
     init(_ preference: SpectrumAxisPreferenceV1) {
         sxmPath = preference.key.sxmPath.rawValue
         kind = preference.key.kind.rawValue
+        experimentIdentity = preference.key.experimentIdentity
         schemaFingerprint = preference.key.schemaFingerprint
         xColumn = preference.selection.xColumn
         yColumn = preference.selection.yColumn
@@ -484,6 +487,10 @@ private struct AxisPreferenceWireV1: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         sxmPath = try container.decode(String.self, forKey: .sxmPath)
         kind = try container.decode(String.self, forKey: .kind)
+        experimentIdentity = try container.decodeIfPresent(
+            String.self,
+            forKey: .experimentIdentity
+        )
         schemaFingerprint = try container.decode(
             String.self,
             forKey: .schemaFingerprint
@@ -686,7 +693,15 @@ private func transfer(
             try SpectrumAxisPreferenceKeyV1(
                 sxmPath: sxmPath,
                 kind: kind,
+                experimentIdentity: wirePreference.experimentIdentity,
                 schemaFingerprint: wirePreference.schemaFingerprint
+            )
+        }
+        if let experimentIdentity = wirePreference.experimentIdentity {
+            try requireCanonical(
+                experimentIdentity,
+                canonical: key.experimentIdentity ?? "",
+                at: "\(path).experimentIdentity"
             )
         }
         try requireCanonical(
@@ -907,6 +922,10 @@ private func axisPreferenceSortsBefore(
     }
     if lhs.key.kind.rawValue != rhs.key.kind.rawValue {
         return lhs.key.kind.rawValue < rhs.key.kind.rawValue
+    }
+    if lhs.key.experimentIdentity != rhs.key.experimentIdentity {
+        return (lhs.key.experimentIdentity ?? "")
+            < (rhs.key.experimentIdentity ?? "")
     }
     if lhs.key.schemaFingerprint != rhs.key.schemaFingerprint {
         return lhs.key.schemaFingerprint < rhs.key.schemaFingerprint

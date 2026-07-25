@@ -10,6 +10,7 @@ public struct SpectrumAxisRuntimeGroup: Equatable, Sendable {
     public let id: String
     public let sxmID: UUID
     public let kind: SpectroscopyKind
+    public let experimentIdentity: String
     public let schemaFingerprint: String
     public let availableColumns: [String]
     public let preferredX: String
@@ -19,6 +20,7 @@ public struct SpectrumAxisRuntimeGroup: Equatable, Sendable {
         id: String,
         sxmID: UUID,
         kind: SpectroscopyKind,
+        experimentIdentity: String? = nil,
         schemaFingerprint: String,
         availableColumns: [String],
         preferredX: String,
@@ -27,6 +29,10 @@ public struct SpectrumAxisRuntimeGroup: Equatable, Sendable {
         self.id = id
         self.sxmID = sxmID
         self.kind = kind
+        self.experimentIdentity = SpectroscopyExperimentIdentity.make(
+            experiment: experimentIdentity,
+            fallbackKind: kind
+        )
         self.schemaFingerprint = schemaFingerprint
         self.availableColumns = availableColumns
         self.preferredX = preferredX
@@ -38,6 +44,7 @@ public struct SpectrumAxisRuntimeGroup: Equatable, Sendable {
             id: group.id,
             sxmID: group.sxmID,
             kind: group.kind,
+            experimentIdentity: group.experimentIdentity,
             schemaFingerprint: group.columnSchema.fingerprint,
             availableColumns: group.availableColumns,
             preferredX: group.xLabel,
@@ -51,6 +58,8 @@ public enum SpectrumAxisPreferenceRestoreReason:
 {
     case missingSXMPath
     case groupUnavailable
+    case experimentUnavailable(availableIdentities: [String])
+    case ambiguousExperiment(availableIdentities: [String])
     case incompatibleSchema(availableFingerprints: [String])
     case missingColumn(axis: SpectrumAxis, column: String)
     case ambiguousColumn(
@@ -88,6 +97,17 @@ extension SpectrumAxisPreferenceRestoreIssue: LocalizedError {
         case .groupUnavailable:
             return "\(prefix) has no compatible spectroscopy group in the "
                 + "current dataset."
+        case .experimentUnavailable(let available):
+            let list = available.isEmpty
+                ? "none"
+                : available.joined(separator: ", ")
+            return "\(prefix) does not match the available experiment "
+                + "identities (\(list))."
+        case .ambiguousExperiment(let available):
+            return "\(prefix) is a legacy preference that matches multiple "
+                + "experiment identities ("
+                + available.joined(separator: ", ")
+                + "); it was not applied."
         case .incompatibleSchema(let available):
             let list = available.isEmpty
                 ? "none"
@@ -133,6 +153,7 @@ public struct SpectrumAxisPreferenceProjection:
                   let key = try? SpectrumAxisPreferenceKeyV1(
                       sxmPath: sxmPath,
                       kind: group.kind,
+                      experimentIdentity: group.experimentIdentity,
                       schemaFingerprint: group.schemaFingerprint
                   ) else {
                 continue
@@ -145,19 +166,58 @@ public struct SpectrumAxisPreferenceProjection:
         let orderedPreferences = preferences.sorted {
             $0.key.stableIdentifier < $1.key.stableIdentifier
         }
+        let explicitKeys = Set(
+            orderedPreferences.compactMap { preference in
+                preference.key.experimentIdentity == nil
+                    ? nil
+                    : preference.key
+            }
+        )
         var restoreIssues: [SpectrumAxisPreferenceRestoreIssue] = []
+        var retainedByKey: [
+            SpectrumAxisPreferenceKeyV1: SpectrumAxisPreferenceV1
+        ] = [:]
         for preference in orderedPreferences {
-            guard let group = groupByKey[preference.key] else {
+            let resolution = resolvedRuntimeGroup(
+                for: preference.key,
+                exactGroups: groupByKey,
+                groups: orderedGroups,
+                pathIndex: pathIndex
+            )
+            guard let group = resolution.group,
+                  let resolvedKey = resolution.resolvedKey else {
                 restoreIssues.append(
-                    unmatchedIssue(
-                        for: preference.key,
-                        groups: orderedGroups,
-                        pathIndex: pathIndex
-                    )
+                    resolution.issue
+                        ?? unmatchedIssue(
+                            for: preference.key,
+                            groups: orderedGroups,
+                            pathIndex: pathIndex
+                        )
                 )
+                retainedByKey[preference.key] = preference
                 continue
             }
 
+            let retainedPreference: SpectrumAxisPreferenceV1
+            if resolvedKey == preference.key {
+                retainedPreference = preference
+            } else {
+                retainedPreference = (
+                    try? SpectrumAxisPreferenceV1(
+                        key: resolvedKey,
+                        selection: preference.selection
+                    )
+                ) ?? preference
+            }
+            if !explicitKeys.contains(resolvedKey)
+                || preference.key.experimentIdentity != nil {
+                retainedByKey[resolvedKey] = retainedPreference
+            }
+
+            if preference.key.experimentIdentity == nil,
+               explicitKeys.contains(resolvedKey) {
+                continue
+            }
             let resolved = resolveSelection(
                 preference.selection,
                 in: group,
@@ -174,7 +234,9 @@ public struct SpectrumAxisPreferenceProjection:
             selectionsByGroupID: selections
         )
         issues = restoreIssues
-        retainedPreferences = orderedPreferences
+        retainedPreferences = retainedByKey.values.sorted {
+            $0.key.stableIdentifier < $1.key.stableIdentifier
+        }
     }
 
     public static func safeDefaults(
@@ -254,6 +316,7 @@ public struct SpectrumAxisPreferenceUpdatePlan:
         key = try SpectrumAxisPreferenceKeyV1(
             sxmPath: sxmPath,
             kind: group.kind,
+            experimentIdentity: group.experimentIdentity,
             schemaFingerprint: group.schemaFingerprint
         )
         groupID = group.id
@@ -400,6 +463,96 @@ private func restoredColumn(
     return nil
 }
 
+private struct RuntimeGroupResolution {
+    let group: SpectrumAxisRuntimeGroup?
+    let resolvedKey: SpectrumAxisPreferenceKeyV1?
+    let issue: SpectrumAxisPreferenceRestoreIssue?
+}
+
+private func resolvedRuntimeGroup(
+    for key: SpectrumAxisPreferenceKeyV1,
+    exactGroups: [
+        SpectrumAxisPreferenceKeyV1: SpectrumAxisRuntimeGroup
+    ],
+    groups: [SpectrumAxisRuntimeGroup],
+    pathIndex: DatasetPathIndex
+) -> RuntimeGroupResolution {
+    if key.experimentIdentity != nil {
+        if let group = exactGroups[key] {
+            return RuntimeGroupResolution(
+                group: group,
+                resolvedKey: key,
+                issue: nil
+            )
+        }
+        return RuntimeGroupResolution(
+            group: nil,
+            resolvedKey: nil,
+            issue: unmatchedIssue(
+                for: key,
+                groups: groups,
+                pathIndex: pathIndex
+            )
+        )
+    }
+
+    guard let sxmID = pathIndex.sxmID(for: key.sxmPath) else {
+        return RuntimeGroupResolution(
+            group: nil,
+            resolvedKey: nil,
+            issue: SpectrumAxisPreferenceRestoreIssue(
+                key: key,
+                groupID: nil,
+                reason: .missingSXMPath
+            )
+        )
+    }
+    let candidates = groups.filter {
+        $0.sxmID == sxmID
+            && $0.kind.rawValue == key.kind.rawValue
+            && $0.schemaFingerprint == key.schemaFingerprint
+    }
+    guard candidates.count == 1, let group = candidates.first else {
+        if candidates.count > 1 {
+            let identities = Array(
+                Set(candidates.map(\.experimentIdentity))
+            ).sorted()
+            return RuntimeGroupResolution(
+                group: nil,
+                resolvedKey: nil,
+                issue: SpectrumAxisPreferenceRestoreIssue(
+                    key: key,
+                    groupID: nil,
+                    reason: .ambiguousExperiment(
+                        availableIdentities: identities
+                    )
+                )
+            )
+        }
+        return RuntimeGroupResolution(
+            group: nil,
+            resolvedKey: nil,
+            issue: unmatchedIssue(
+                for: key,
+                groups: groups,
+                pathIndex: pathIndex
+            )
+        )
+    }
+
+    let upgradedKey = try? SpectrumAxisPreferenceKeyV1(
+        sxmPath: key.sxmPath,
+        kind: key.kind,
+        experimentIdentity: group.experimentIdentity,
+        schemaFingerprint: key.schemaFingerprint
+    )
+    return RuntimeGroupResolution(
+        group: group,
+        resolvedKey: upgradedKey,
+        issue: nil
+    )
+}
+
 private func unmatchedIssue(
     for key: SpectrumAxisPreferenceKeyV1,
     groups: [SpectrumAxisRuntimeGroup],
@@ -422,8 +575,28 @@ private func unmatchedIssue(
             reason: .groupUnavailable
         )
     }
+    let matchingExperiment: [SpectrumAxisRuntimeGroup]
+    if let experimentIdentity = key.experimentIdentity {
+        matchingExperiment = matchingKind.filter {
+            $0.experimentIdentity == experimentIdentity
+        }
+        if matchingExperiment.isEmpty {
+            let identities = Array(
+                Set(matchingKind.map(\.experimentIdentity))
+            ).sorted()
+            return SpectrumAxisPreferenceRestoreIssue(
+                key: key,
+                groupID: nil,
+                reason: .experimentUnavailable(
+                    availableIdentities: identities
+                )
+            )
+        }
+    } else {
+        matchingExperiment = matchingKind
+    }
     let fingerprints = Array(
-        Set(matchingKind.map(\.schemaFingerprint))
+        Set(matchingExperiment.map(\.schemaFingerprint))
     ).sorted()
     return SpectrumAxisPreferenceRestoreIssue(
         key: key,

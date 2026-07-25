@@ -251,6 +251,33 @@ func metadataCodableRoundTripIsCanonicalAndDeterministic() throws {
             .spectrumAxisPreferences[0]
             .key.schemaFingerprint == sampleFingerprint
     )
+    #expect(
+        decoded.datasets[0]
+            .spectrumAxisPreferences[0]
+            .key.experimentIdentity == nil
+    )
+}
+
+@Test
+func metadataAxisPreferenceRoundTripsCanonicalExperimentIdentity() throws {
+    let preference = try SpectrumAxisPreferenceV1(
+        sxmPath: "images/a.sxm",
+        kind: .other,
+        experimentIdentity: "  CAFÉ   Sweep ",
+        schemaFingerprint: sampleFingerprint,
+        selection: AxisSelection(
+            xColumn: "Frequency",
+            yColumn: "Current"
+        )
+    )
+    let encoded = try JSONEncoder().encode(preference)
+    let decoded = try JSONDecoder().decode(
+        SpectrumAxisPreferenceV1.self,
+        from: encoded
+    )
+
+    #expect(decoded == preference)
+    #expect(decoded.key.experimentIdentity == "café sweep")
 }
 
 @Test

@@ -383,7 +383,11 @@ final class AppModel: ObservableObject {
         [SpectrumAxisPreferenceRestoreIssue] {
         spectrumAxisRestoreIssues.filter { issue in
             switch issue.reason {
-            case .incompatibleSchema, .missingColumn, .ambiguousColumn:
+            case .experimentUnavailable,
+                 .ambiguousExperiment,
+                 .incompatibleSchema,
+                 .missingColumn,
+                 .ambiguousColumn:
                 true
             case .missingSXMPath, .groupUnavailable:
                 false
@@ -1701,6 +1705,8 @@ final class AppModel: ObservableObject {
             return DatasetMetadataImportDATFile(
                 path: path,
                 kind: spectrum.kind,
+                experiment: spectrum.experiment,
+                experimentIdentity: spectrum.experimentIdentity,
                 schemaFingerprint:
                     spectrum.curve.columnSchema.fingerprint,
                 columns: spectrum.curve.columns,

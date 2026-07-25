@@ -65,6 +65,7 @@ private func makeTransferTag(
 private func makeAxisPreference(
     sxmPath: String = "images/a.sxm",
     kind: SpectroscopyKind = .bias,
+    experimentIdentity: String? = nil,
     fingerprint: String = transferFingerprint,
     xColumn: String = "Bias (V)",
     yColumn: String = "Current (A)"
@@ -72,6 +73,7 @@ private func makeAxisPreference(
     try SpectrumAxisPreferenceV1(
         sxmPath: sxmPath,
         kind: kind,
+        experimentIdentity: experimentIdentity,
         schemaFingerprint: fingerprint,
         selection: AxisSelection(
             xColumn: xColumn,
@@ -159,8 +161,40 @@ func transferEncodingMatchesCompactGoldenJSONAndRoundTrips() throws {
     )
 
     #expect(encoded == expected)
-    #expect(try codec.decode(encoded) == transfer)
+    let decoded = try codec.decode(encoded)
+    #expect(decoded == transfer)
+    #expect(
+        decoded.spectrumAxisPreferences[0].key.experimentIdentity == nil
+    )
     #expect(try codec.encode(codec.decode(encoded)) == expected)
+}
+
+@Test
+func transferRoundTripsExplicitExperimentIdentity() throws {
+    let codec = DatasetMetadataTransferCodec()
+    let preference = try makeAxisPreference(
+        kind: .other,
+        experimentIdentity: " Frequency   Sweep "
+    )
+    let transfer = try DatasetMetadataTransferV1(
+        tags: [],
+        manualAssociations: [],
+        hiddenDATPaths: [],
+        spectrumAxisPreferences: [preference]
+    )
+
+    let encoded = try codec.encode(transfer)
+    let json = try #require(String(data: encoded, encoding: .utf8))
+    let decoded = try codec.decode(encoded)
+
+    #expect(
+        json.contains(#""experimentIdentity":"frequency sweep""#)
+    )
+    #expect(decoded == transfer)
+    #expect(
+        decoded.spectrumAxisPreferences[0].key.experimentIdentity
+            == "frequency sweep"
+    )
 }
 
 @Test
@@ -457,6 +491,13 @@ func canonicalStringValuesAreRequiredInsteadOfSilentlyCleaned() {
                     #"[{"sxmPath":"a.sxm","kind":"bias","schemaFingerprint":"0123456789ABCDEF","xColumn":"X","yColumn":"Y"}]"#
             ),
             "$.spectrumAxisPreferences[0].schemaFingerprint"
+        ),
+        (
+            transferJSON(
+                spectrumAxisPreferences:
+                    #"[{"sxmPath":"a.sxm","kind":"other","experimentIdentity":" Frequency  Sweep ","schemaFingerprint":"0123456789abcdef","xColumn":"X","yColumn":"Y"}]"#
+            ),
+            "$.spectrumAxisPreferences[0].experimentIdentity"
         ),
         (
             transferJSON(

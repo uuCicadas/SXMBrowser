@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 53 (2026-07-25): 按实验类型和标准化列结构隔离谱图与轴偏好
 - Build 52 (2026-07-25): 收紧缺失清单、分离头与恢复副本校验边界
 - Build 51 (2026-07-25): 使版本与备份检查点支持原子恢复和标准 TSV 清单
 - Build 50 (2026-07-25): 新增阶段二严格一键验收入口

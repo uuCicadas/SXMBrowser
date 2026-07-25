@@ -33,6 +33,7 @@ private func dat(_ value: String) throws -> DatasetRelativePath {
 private func importDAT(
     _ path: String,
     kind: SpectroscopyKind = .bias,
+    experiment: String? = nil,
     columns: [String] = ["Bias", "Current", "Phase"],
     fingerprint: String? = nil,
     automaticParent: String? = "a.sxm"
@@ -40,6 +41,7 @@ private func importDAT(
     DatasetMetadataImportDATFile(
         path: try dat(path),
         kind: kind,
+        experiment: experiment,
         schemaFingerprint:
             fingerprint
             ?? SpectroscopyColumnSchema(columns: columns).fingerprint,
@@ -103,6 +105,8 @@ private func importTransfer(
 private func importAxis(
     sxmPath: String,
     kind: SpectroscopyKind = .bias,
+    experimentIdentity: String? = nil,
+    legacy: Bool = false,
     columns: [String] = ["Bias", "Current", "Phase"],
     fingerprint: String? = nil,
     x: String,
@@ -111,6 +115,9 @@ private func importAxis(
     try SpectrumAxisPreferenceV1(
         sxmPath: sxmPath,
         kind: kind,
+        experimentIdentity: legacy
+            ? nil
+            : (experimentIdentity ?? kind.rawValue),
         schemaFingerprint:
             fingerprint
             ?? SpectroscopyColumnSchema(columns: columns).fingerprint,
@@ -669,6 +676,138 @@ func associationMergePrecedesAxisGroupingAndHiddenCurvesStillCount()
             if case .axisGroupUnavailable = $0 { return true }
             return false
         }
+    )
+}
+
+@Test
+func importAxisPreferencesStayIndependentByExperiment() throws {
+    let columns = ["Frequency", "Current", "Phase"]
+    let inventory = try importInventory(
+        datFiles: [
+            importDAT(
+                "frequency.dat",
+                kind: .other,
+                experiment: "Frequency Sweep",
+                columns: columns
+            ),
+            importDAT(
+                "lock-in.dat",
+                kind: .other,
+                experiment: "Lock-In Sweep",
+                columns: columns
+            ),
+        ]
+    )
+    let frequency = try importAxis(
+        sxmPath: "a.sxm",
+        kind: .other,
+        experimentIdentity: "frequency sweep",
+        columns: columns,
+        x: "Frequency",
+        y: "Phase"
+    )
+    let lockIn = try importAxis(
+        sxmPath: "a.sxm",
+        kind: .other,
+        experimentIdentity: "lock-in sweep",
+        columns: columns,
+        x: "Phase",
+        y: "Current"
+    )
+
+    let plan = try DatasetMetadataImportPlanner().plan(
+        transfer: importTransfer(axes: [lockIn, frequency]),
+        into: importRecord(),
+        inventory: inventory
+    )
+
+    #expect(plan.issues.isEmpty)
+    #expect(
+        Set(plan.preview.spectrumAxisPreferences)
+            == Set([frequency, lockIn])
+    )
+}
+
+@Test
+func importUniquelyUpgradesLegacyExperimentAxisKey() throws {
+    let columns = ["Frequency", "Current", "Phase"]
+    let inventory = try importInventory(
+        datFiles: [
+            importDAT(
+                "frequency.dat",
+                kind: .other,
+                experiment: " Frequency   Sweep ",
+                columns: columns
+            ),
+        ]
+    )
+    let legacy = try importAxis(
+        sxmPath: "a.sxm",
+        kind: .other,
+        legacy: true,
+        columns: columns,
+        x: "Frequency",
+        y: "Phase"
+    )
+
+    let plan = try DatasetMetadataImportPlanner().plan(
+        transfer: importTransfer(axes: [legacy]),
+        into: importRecord(),
+        inventory: inventory
+    )
+
+    #expect(plan.issues.isEmpty)
+    #expect(
+        plan.preview.spectrumAxisPreferences.first?
+            .key.experimentIdentity == "frequency sweep"
+    )
+}
+
+@Test
+func importRejectsAmbiguousLegacyExperimentAxisKey() throws {
+    let columns = ["Frequency", "Current", "Phase"]
+    let inventory = try importInventory(
+        datFiles: [
+            importDAT(
+                "frequency.dat",
+                kind: .other,
+                experiment: "Frequency Sweep",
+                columns: columns
+            ),
+            importDAT(
+                "lock-in.dat",
+                kind: .other,
+                experiment: "Lock-In Sweep",
+                columns: columns
+            ),
+        ]
+    )
+    let legacy = try importAxis(
+        sxmPath: "a.sxm",
+        kind: .other,
+        legacy: true,
+        columns: columns,
+        x: "Frequency",
+        y: "Phase"
+    )
+
+    let plan = try DatasetMetadataImportPlanner().plan(
+        transfer: importTransfer(axes: [legacy]),
+        into: importRecord(),
+        inventory: inventory
+    )
+
+    #expect(plan.preview.spectrumAxisPreferences.isEmpty)
+    #expect(
+        plan.issues == [
+            .axisExperimentAmbiguous(
+                key: legacy.key,
+                availableIdentities: [
+                    "frequency sweep",
+                    "lock-in sweep",
+                ]
+            ),
+        ]
     )
 }
 

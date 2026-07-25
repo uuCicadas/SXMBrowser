@@ -7,6 +7,8 @@ public struct DatasetMetadataImportDATFile:
 {
     public let path: DatasetRelativePath
     public let kind: SpectroscopyKind
+    public let experiment: String?
+    public let experimentIdentity: String
     public let schemaFingerprint: String
     public let columns: [String]
     public let automaticParentSXMPath: DatasetRelativePath?
@@ -14,12 +16,19 @@ public struct DatasetMetadataImportDATFile:
     public init(
         path: DatasetRelativePath,
         kind: SpectroscopyKind,
+        experiment: String? = nil,
+        experimentIdentity: String? = nil,
         schemaFingerprint: String,
         columns: [String],
         automaticParentSXMPath: DatasetRelativePath?
     ) {
         self.path = path
         self.kind = kind
+        self.experiment = experiment
+        self.experimentIdentity = SpectroscopyExperimentIdentity.make(
+            experiment: experimentIdentity ?? experiment,
+            fallbackKind: kind
+        )
         self.schemaFingerprint = schemaFingerprint
         self.columns = columns
         self.automaticParentSXMPath = automaticParentSXMPath
@@ -290,6 +299,10 @@ public enum DatasetMetadataImportIssue:
         key: SpectrumAxisPreferenceKeyV1,
         availableFingerprints: [String]
     )
+    case axisExperimentAmbiguous(
+        key: SpectrumAxisPreferenceKeyV1,
+        availableIdentities: [String]
+    )
     case axisColumnMissing(
         key: SpectrumAxisPreferenceKeyV1,
         axis: SpectrumAxis,
@@ -351,6 +364,7 @@ public enum DatasetMetadataImportIssue:
              .associationSXMMissing,
              .hiddenDATMissing,
              .axisGroupUnavailable,
+             .axisExperimentAmbiguous,
              .axisColumnMissing,
              .axisColumnAmbiguous:
             true
@@ -955,18 +969,68 @@ private func mergedAxisPreferences(
     )
 
     for importedPreference in imported {
-        let key = importedPreference.key
-        guard let group = groups[key] else {
+        let requestedKey = importedPreference.key
+        let key: SpectrumAxisPreferenceKeyV1
+        let group: SimulatedAxisGroup
+        if requestedKey.experimentIdentity == nil {
+            let candidates = groups.values.filter {
+                $0.key.sxmPath == requestedKey.sxmPath
+                    && $0.key.kind.rawValue
+                        == requestedKey.kind.rawValue
+                    && $0.key.schemaFingerprint
+                        == requestedKey.schemaFingerprint
+            }
+            if candidates.count > 1 {
+                issues.append(
+                    .axisExperimentAmbiguous(
+                        key: requestedKey,
+                        availableIdentities: Array(
+                            Set(
+                                candidates.compactMap {
+                                    $0.key.experimentIdentity
+                                }
+                            )
+                        ).sorted()
+                    )
+                )
+                continue
+            }
+            guard let candidate = candidates.first else {
+                let availableFingerprints = groups.keys
+                    .filter {
+                        $0.sxmPath == requestedKey.sxmPath
+                            && $0.kind.rawValue
+                                == requestedKey.kind.rawValue
+                    }
+                    .map(\.schemaFingerprint)
+                    .sorted()
+                issues.append(
+                    .axisGroupUnavailable(
+                        key: requestedKey,
+                        availableFingerprints: availableFingerprints
+                    )
+                )
+                continue
+            }
+            key = candidate.key
+            group = candidate
+        } else if let exactGroup = groups[requestedKey] {
+            key = requestedKey
+            group = exactGroup
+        } else {
             let availableFingerprints = groups.keys
                 .filter {
-                    $0.sxmPath == key.sxmPath
-                        && $0.kind.rawValue == key.kind.rawValue
+                    $0.sxmPath == requestedKey.sxmPath
+                        && $0.kind.rawValue
+                            == requestedKey.kind.rawValue
+                        && $0.experimentIdentity
+                            == requestedKey.experimentIdentity
                 }
                 .map(\.schemaFingerprint)
                 .sorted()
             issues.append(
                 .axisGroupUnavailable(
-                    key: key,
+                    key: requestedKey,
                     availableFingerprints: availableFingerprints
                 )
             )
@@ -1076,6 +1140,7 @@ private func simulatedAxisGroups(
             key = try SpectrumAxisPreferenceKeyV1(
                 sxmPath: parent,
                 kind: file.kind,
+                experimentIdentity: file.experimentIdentity,
                 schemaFingerprint: file.schemaFingerprint
             )
         } catch let error as DatasetMetadataValidationError {

@@ -15,6 +15,20 @@ public enum SpectroscopyKind: String, Codable, Sendable {
     }
 }
 
+public enum SpectroscopyExperimentIdentity {
+    public static func make(
+        experiment: String?,
+        fallbackKind kind: SpectroscopyKind
+    ) -> String {
+        let normalized = (experiment ?? "")
+            .precomposedStringWithCanonicalMapping
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+            .lowercased(with: Locale(identifier: "en_US_POSIX"))
+        return normalized.isEmpty ? kind.rawValue : normalized
+    }
+}
+
 public struct SpectroscopyColumnSchema: Codable, Hashable, Sendable {
     public let normalizedColumns: [String]
     public let fingerprint: String
@@ -48,11 +62,39 @@ public struct SpectroscopyColumnSchema: Codable, Hashable, Sendable {
 
 public struct SpectroscopyGroupKey: Codable, Hashable, Sendable {
     public let kind: SpectroscopyKind
+    public let experimentIdentity: String
     public let columnSchema: SpectroscopyColumnSchema
+    public let fingerprint: String
 
-    public init(kind: SpectroscopyKind, columnSchema: SpectroscopyColumnSchema) {
+    public init(
+        kind: SpectroscopyKind,
+        experiment: String?,
+        columnSchema: SpectroscopyColumnSchema
+    ) {
         self.kind = kind
+        self.experimentIdentity = SpectroscopyExperimentIdentity.make(
+            experiment: experiment,
+            fallbackKind: kind
+        )
         self.columnSchema = columnSchema
+        self.fingerprint = deterministicFingerprint(
+            [
+                kind.rawValue,
+                experimentIdentity,
+                columnSchema.fingerprint,
+            ]
+        )
+    }
+
+    public init(
+        kind: SpectroscopyKind,
+        columnSchema: SpectroscopyColumnSchema
+    ) {
+        self.init(
+            kind: kind,
+            experiment: nil,
+            columnSchema: columnSchema
+        )
     }
 }
 
@@ -126,6 +168,7 @@ public struct SpectroscopyFile: Identifiable, Hashable, Sendable {
     public let filename: String
     public let kind: SpectroscopyKind
     public let experiment: String
+    public let experimentIdentity: String
     public let modifiedTime: Date
     public let savedTime: Date?
     public let position: (x: Double, y: Double)?
@@ -140,6 +183,7 @@ public struct SpectroscopyFile: Identifiable, Hashable, Sendable {
         filename: String,
         kind: SpectroscopyKind,
         experiment: String,
+        experimentIdentity: String? = nil,
         modifiedTime: Date,
         savedTime: Date?,
         position: (x: Double, y: Double)?,
@@ -153,6 +197,10 @@ public struct SpectroscopyFile: Identifiable, Hashable, Sendable {
         self.filename = filename
         self.kind = kind
         self.experiment = experiment
+        self.experimentIdentity = SpectroscopyExperimentIdentity.make(
+            experiment: experimentIdentity ?? experiment,
+            fallbackKind: kind
+        )
         self.modifiedTime = modifiedTime
         self.savedTime = savedTime
         self.position = position
@@ -176,6 +224,8 @@ public struct SpectroscopyGroup: Identifiable, Hashable, Sendable {
     public let sxmID: SXMMetadata.ID
     public let sxmFilename: String
     public let kind: SpectroscopyKind
+    public let experiment: String
+    public let experimentIdentity: String
     public let columnSchema: SpectroscopyColumnSchema
     public let xLabel: String
     public let yLabel: String
@@ -185,18 +235,22 @@ public struct SpectroscopyGroup: Identifiable, Hashable, Sendable {
     public init?(sxm: SXMMetadata, key: SpectroscopyGroupKey, spectra: [SpectroscopyFile]) {
         guard !spectra.isEmpty,
               spectra.allSatisfy({
-                  $0.kind == key.kind && $0.curve.columnSchema == key.columnSchema
+                  $0.kind == key.kind
+                      && $0.experimentIdentity == key.experimentIdentity
+                      && $0.curve.columnSchema == key.columnSchema
               }) else {
             return nil
         }
         let ordered = spectra.sorted { lhs, rhs in
             lhs.filename.localizedStandardCompare(rhs.filename) == .orderedAscending
         }
-        let stableID = "\(sxm.id.uuidString)-\(key.kind.rawValue)-\(key.columnSchema.fingerprint)"
+        let stableID = "\(sxm.id.uuidString)-\(key.fingerprint)"
         self.id = stableID
         self.sxmID = sxm.id
         self.sxmFilename = sxm.filename
         self.kind = key.kind
+        self.experiment = ordered[0].experiment
+        self.experimentIdentity = key.experimentIdentity
         self.columnSchema = key.columnSchema
         self.xLabel = ordered.first?.xLabel ?? "X"
         self.yLabel = ordered.first?.yLabel ?? "Y"
@@ -211,6 +265,7 @@ public struct SpectroscopyGroup: Identifiable, Hashable, Sendable {
         let buckets = Dictionary(grouping: spectra) { spectrum in
             SpectroscopyGroupKey(
                 kind: spectrum.kind,
+                experiment: spectrum.experimentIdentity,
                 columnSchema: spectrum.curve.columnSchema
             )
         }
@@ -221,7 +276,9 @@ public struct SpectroscopyGroup: Identifiable, Hashable, Sendable {
     }
 
     public var title: String {
-        "\(kind.label) spectroscopy"
+        experiment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "\(kind.label) spectroscopy"
+            : experiment
     }
 
     public var curveCountText: String {
@@ -282,6 +339,9 @@ private func groupOrderedBefore(
     if lhsRank != rhsRank {
         return lhsRank < rhsRank
     }
+    if lhs.experimentIdentity != rhs.experimentIdentity {
+        return lhs.experimentIdentity < rhs.experimentIdentity
+    }
     if lhs.columnSchema.normalizedColumns != rhs.columnSchema.normalizedColumns {
         return lhs.columnSchema.normalizedColumns.lexicographicallyPrecedes(
             rhs.columnSchema.normalizedColumns
@@ -296,4 +356,16 @@ private func spectroscopyKindRank(_ kind: SpectroscopyKind) -> Int {
     case .bias: 1
     case .other: 2
     }
+}
+
+private func deterministicFingerprint(_ components: [String]) -> String {
+    let identity = components
+        .map { "\($0.utf8.count):\($0)" }
+        .joined(separator: "|")
+    var hash: UInt64 = 14_695_981_039_346_656_037
+    for byte in identity.utf8 {
+        hash ^= UInt64(byte)
+        hash &*= 1_099_511_628_211
+    }
+    return String(format: "%016llx", hash)
 }

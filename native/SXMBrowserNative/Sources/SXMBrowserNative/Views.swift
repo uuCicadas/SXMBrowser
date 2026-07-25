@@ -703,6 +703,13 @@ private struct MetadataImportPreviewSheet: View {
                 "\(axisGroupDescription(key)) is unavailable "
                 + "(\(available))."
 
+        case .axisExperimentAmbiguous(let key, let identities):
+            return
+                "\(axisGroupDescription(key)) is a legacy preference that "
+                + "matches multiple experiments: "
+                + identities.joined(separator: ", ")
+                + ". It was not imported."
+
         case .axisColumnMissing(let key, let axis, let column):
             return
                 "\(axisLabel(axis)) column “\(column)” is missing for "
@@ -763,7 +770,11 @@ private struct MetadataImportPreviewSheet: View {
     private func axisGroupDescription(
         _ key: SpectrumAxisPreferenceKeyV1
     ) -> String {
-        "\(key.kind.label) group for \(key.sxmPath.rawValue)"
+        let experiment = key.experimentIdentity.map {
+            " experiment \($0)"
+        } ?? ""
+        return "\(key.kind.label)\(experiment) group for "
+            + key.sxmPath.rawValue
     }
 
     private func axisLabel(_ axis: SpectrumAxis) -> String {

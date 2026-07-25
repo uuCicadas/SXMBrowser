@@ -175,6 +175,11 @@ public final class SpectroscopyParser: Sendable {
                 filename: url.lastPathComponent,
                 kind: kind,
                 experiment: header["Experiment"] ?? kind.label,
+                experimentIdentity:
+                    SpectroscopyExperimentIdentity.make(
+                        experiment: header["Experiment"],
+                        fallbackKind: kind
+                    ),
                 modifiedTime: modifiedTime,
                 savedTime: parseSpectroscopyDate(header["Saved Date"]),
                 position: parsePosition(header),

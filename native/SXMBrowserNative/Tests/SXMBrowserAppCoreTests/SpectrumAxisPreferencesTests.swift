@@ -23,6 +23,7 @@ private func axisRuntimeGroup(
     id: String,
     sxmID: UUID,
     kind: SpectroscopyKind = .bias,
+    experimentIdentity: String? = nil,
     columns: [String],
     preferredX: String,
     preferredY: String
@@ -31,6 +32,7 @@ private func axisRuntimeGroup(
         id: id,
         sxmID: sxmID,
         kind: kind,
+        experimentIdentity: experimentIdentity,
         schemaFingerprint:
             SpectroscopyColumnSchema(columns: columns).fingerprint,
         availableColumns: columns,
@@ -40,6 +42,21 @@ private func axisRuntimeGroup(
 }
 
 private func axisPreference(
+    sxmPath: String,
+    group: SpectrumAxisRuntimeGroup,
+    x: String,
+    y: String
+) throws -> SpectrumAxisPreferenceV1 {
+    try SpectrumAxisPreferenceV1(
+        sxmPath: sxmPath,
+        kind: group.kind,
+        experimentIdentity: group.experimentIdentity,
+        schemaFingerprint: group.schemaFingerprint,
+        selection: AxisSelection(xColumn: x, yColumn: y)
+    )
+}
+
+private func legacyAxisPreference(
     sxmPath: String,
     group: SpectrumAxisRuntimeGroup,
     x: String,
@@ -170,6 +187,166 @@ func stableAxisPreferencesRemainIndependentAcrossGroups() throws {
     )
     #expect(
         projection.axisState.selection(forGroupID: z.id)
+            == AxisSelection(xColumn: "Frequency", yColumn: "Current")
+    )
+}
+
+@Test
+func axisPreferencesRemainIndependentAcrossExperimentGroups() throws {
+    let folder = URL(fileURLWithPath: "/tmp/Axis-Experiments")
+    let sxmID = UUID()
+    let columns = ["Frequency", "Current", "Phase"]
+    let frequency = axisRuntimeGroup(
+        id: "frequency-group",
+        sxmID: sxmID,
+        kind: .other,
+        experimentIdentity: "Frequency Sweep",
+        columns: columns,
+        preferredX: "Frequency",
+        preferredY: "Current"
+    )
+    let lockIn = axisRuntimeGroup(
+        id: "lock-in-group",
+        sxmID: sxmID,
+        kind: .other,
+        experimentIdentity: "Lock-In Sweep",
+        columns: columns,
+        preferredX: "Frequency",
+        preferredY: "Current"
+    )
+    let index = try axisPreferenceIndex(
+        folder: folder,
+        sxmItems: [(sxmID, "image.sxm")]
+    )
+    let projection = SpectrumAxisPreferenceProjection(
+        preferences: [
+            try axisPreference(
+                sxmPath: "image.sxm",
+                group: frequency,
+                x: "Frequency",
+                y: "Phase"
+            ),
+            try axisPreference(
+                sxmPath: "image.sxm",
+                group: lockIn,
+                x: "Phase",
+                y: "Current"
+            ),
+        ],
+        groups: [lockIn, frequency],
+        pathIndex: index
+    )
+
+    #expect(projection.issues.isEmpty)
+    #expect(
+        projection.axisState.selection(forGroupID: frequency.id)
+            == AxisSelection(xColumn: "Frequency", yColumn: "Phase")
+    )
+    #expect(
+        projection.axisState.selection(forGroupID: lockIn.id)
+            == AxisSelection(xColumn: "Phase", yColumn: "Current")
+    )
+}
+
+@Test
+func uniqueLegacyAxisPreferenceUpgradesToExplicitExperimentKey() throws {
+    let folder = URL(fileURLWithPath: "/tmp/Axis-Legacy-Unique")
+    let sxmID = UUID()
+    let group = axisRuntimeGroup(
+        id: "frequency-group",
+        sxmID: sxmID,
+        kind: .other,
+        experimentIdentity: " Frequency   Sweep ",
+        columns: ["Frequency", "Current", "Phase"],
+        preferredX: "Frequency",
+        preferredY: "Current"
+    )
+    let legacy = try legacyAxisPreference(
+        sxmPath: "image.sxm",
+        group: group,
+        x: "Frequency",
+        y: "Phase"
+    )
+    let index = try axisPreferenceIndex(
+        folder: folder,
+        sxmItems: [(sxmID, "image.sxm")]
+    )
+
+    let projection = SpectrumAxisPreferenceProjection(
+        preferences: [legacy],
+        groups: [group],
+        pathIndex: index
+    )
+
+    #expect(projection.issues.isEmpty)
+    #expect(
+        projection.axisState.selection(forGroupID: group.id)
+            == AxisSelection(xColumn: "Frequency", yColumn: "Phase")
+    )
+    #expect(projection.retainedPreferences.count == 1)
+    #expect(
+        projection.retainedPreferences[0].key.experimentIdentity
+            == "frequency sweep"
+    )
+}
+
+@Test
+func ambiguousLegacyAxisPreferenceIsRetainedButNotApplied() throws {
+    let folder = URL(fileURLWithPath: "/tmp/Axis-Legacy-Ambiguous")
+    let sxmID = UUID()
+    let columns = ["Frequency", "Current", "Phase"]
+    let first = axisRuntimeGroup(
+        id: "frequency-group",
+        sxmID: sxmID,
+        kind: .other,
+        experimentIdentity: "Frequency Sweep",
+        columns: columns,
+        preferredX: "Frequency",
+        preferredY: "Current"
+    )
+    let second = axisRuntimeGroup(
+        id: "lock-in-group",
+        sxmID: sxmID,
+        kind: .other,
+        experimentIdentity: "Lock-In Sweep",
+        columns: columns,
+        preferredX: "Frequency",
+        preferredY: "Current"
+    )
+    let legacy = try legacyAxisPreference(
+        sxmPath: "image.sxm",
+        group: first,
+        x: "Phase",
+        y: "Current"
+    )
+    let index = try axisPreferenceIndex(
+        folder: folder,
+        sxmItems: [(sxmID, "image.sxm")]
+    )
+
+    let projection = SpectrumAxisPreferenceProjection(
+        preferences: [legacy],
+        groups: [second, first],
+        pathIndex: index
+    )
+
+    #expect(projection.retainedPreferences == [legacy])
+    #expect(
+        projection.issues.map(\.reason) == [
+            .ambiguousExperiment(
+                availableIdentities: [
+                    "frequency sweep",
+                    "lock-in sweep",
+                ]
+            ),
+        ]
+    )
+    #expect(
+        projection.axisState.selection(forGroupID: first.id)
+            == AxisSelection(xColumn: "Frequency", yColumn: "Current")
+    )
+    #expect(
+        projection.axisState.selection(forGroupID: second.id)
             == AxisSelection(xColumn: "Frequency", yColumn: "Current")
     )
 }

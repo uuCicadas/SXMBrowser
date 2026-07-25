@@ -326,15 +326,23 @@ public struct DatasetManualAssociationV1: Codable, Hashable, Sendable {
 public struct SpectrumAxisPreferenceKeyV1: Codable, Hashable, Sendable {
     public let sxmPath: DatasetRelativePath
     public let kind: SpectroscopyKind
+    public let experimentIdentity: String?
     public let schemaFingerprint: String
 
     public init(
         sxmPath: DatasetRelativePath,
         kind: SpectroscopyKind,
+        experimentIdentity: String? = nil,
         schemaFingerprint: String
     ) throws {
         self.sxmPath = try sxmPath.validated(for: .sxm)
         self.kind = kind
+        self.experimentIdentity = experimentIdentity.map {
+            SpectroscopyExperimentIdentity.make(
+                experiment: $0,
+                fallbackKind: kind
+            )
+        }
         self.schemaFingerprint = try canonicalSchemaFingerprint(
             schemaFingerprint
         )
@@ -343,17 +351,24 @@ public struct SpectrumAxisPreferenceKeyV1: Codable, Hashable, Sendable {
     public init(
         sxmPath: String,
         kind: SpectroscopyKind,
+        experimentIdentity: String? = nil,
         schemaFingerprint: String
     ) throws {
         try self.init(
             sxmPath: DatasetRelativePath.sxm(sxmPath),
             kind: kind,
+            experimentIdentity: experimentIdentity,
             schemaFingerprint: schemaFingerprint
         )
     }
 
     public var stableIdentifier: String {
-        "\(sxmPath.rawValue)|\(kind.rawValue)|\(schemaFingerprint)"
+        guard let experimentIdentity else {
+            return "\(sxmPath.rawValue)|\(kind.rawValue)|\(schemaFingerprint)"
+        }
+        return "\(sxmPath.rawValue)|\(kind.rawValue)"
+            + "|\(experimentIdentity.utf8.count):\(experimentIdentity)"
+            + "|\(schemaFingerprint)"
     }
 
     public static func == (
@@ -362,18 +377,21 @@ public struct SpectrumAxisPreferenceKeyV1: Codable, Hashable, Sendable {
     ) -> Bool {
         lhs.sxmPath == rhs.sxmPath
             && lhs.kind.rawValue == rhs.kind.rawValue
+            && lhs.experimentIdentity == rhs.experimentIdentity
             && lhs.schemaFingerprint == rhs.schemaFingerprint
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(sxmPath)
         hasher.combine(kind.rawValue)
+        hasher.combine(experimentIdentity)
         hasher.combine(schemaFingerprint)
     }
 
     private enum CodingKeys: String, CodingKey {
         case sxmPath
         case kind
+        case experimentIdentity
         case schemaFingerprint
     }
 
@@ -388,6 +406,10 @@ public struct SpectrumAxisPreferenceKeyV1: Codable, Hashable, Sendable {
                 SpectroscopyKind.self,
                 forKey: .kind
             ),
+            experimentIdentity: container.decodeIfPresent(
+                String.self,
+                forKey: .experimentIdentity
+            ),
             schemaFingerprint: container.decode(
                 String.self,
                 forKey: .schemaFingerprint
@@ -399,6 +421,10 @@ public struct SpectrumAxisPreferenceKeyV1: Codable, Hashable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(sxmPath, forKey: .sxmPath)
         try container.encode(kind, forKey: .kind)
+        try container.encodeIfPresent(
+            experimentIdentity,
+            forKey: .experimentIdentity
+        )
         try container.encode(schemaFingerprint, forKey: .schemaFingerprint)
     }
 }
@@ -421,6 +447,7 @@ public struct SpectrumAxisPreferenceV1: Codable, Hashable, Sendable {
     public init(
         sxmPath: String,
         kind: SpectroscopyKind,
+        experimentIdentity: String? = nil,
         schemaFingerprint: String,
         selection: AxisSelection
     ) throws {
@@ -428,6 +455,7 @@ public struct SpectrumAxisPreferenceV1: Codable, Hashable, Sendable {
             key: SpectrumAxisPreferenceKeyV1(
                 sxmPath: sxmPath,
                 kind: kind,
+                experimentIdentity: experimentIdentity,
                 schemaFingerprint: schemaFingerprint
             ),
             selection: selection
