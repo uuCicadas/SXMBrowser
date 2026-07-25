@@ -614,6 +614,39 @@ public struct DatasetRecordV1: Codable, Equatable, Identifiable, Sendable {
         )
     }
 
+    @discardableResult
+    public mutating func mergeTag(
+        id: UUID = UUID(),
+        name: String,
+        sxmPaths: [DatasetRelativePath]
+    ) throws -> DatasetTagV1 {
+        let candidate = try DatasetTagV1(
+            id: id,
+            name: name,
+            sxmPaths: sxmPaths
+        )
+        let comparisonKey = canonicalTagComparisonKey(candidate.name)
+
+        if let index = tags.firstIndex(where: {
+            canonicalTagComparisonKey($0.name) == comparisonKey
+        }) {
+            let existing = tags[index]
+            let merged = try DatasetTagV1(
+                id: existing.id,
+                name: existing.name,
+                sxmPaths: existing.sxmPaths + candidate.sxmPaths
+            )
+            tags[index] = merged
+            return merged
+        }
+
+        guard !tags.contains(where: { $0.id == candidate.id }) else {
+            throw DatasetMetadataValidationError.duplicateTagID(candidate.id)
+        }
+        tags.append(candidate)
+        return candidate
+    }
+
     public mutating func moveTag(
         id: UUID,
         to destinationIndex: Int
@@ -829,7 +862,7 @@ public struct DatasetMetadataDocumentV1: Codable, Equatable, Sendable {
     }
 }
 
-private func canonicalTagName(_ name: String) throws -> String {
+func canonicalTagName(_ name: String) throws -> String {
     let canonical = name
         .precomposedStringWithCanonicalMapping
         .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -839,7 +872,7 @@ private func canonicalTagName(_ name: String) throws -> String {
     return canonical
 }
 
-private func canonicalTagComparisonKey(_ name: String) -> String {
+func canonicalTagComparisonKey(_ name: String) -> String {
     name
         .precomposedStringWithCanonicalMapping
         .folding(

@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 33 (2026-07-25): add safe idempotent legacy tag migration core
 - Build 32 (2026-07-25): preserve bookmark and dataset identity across folder moves
 - Build 31 (2026-07-25): add atomic application support metadata store
 - Build 30 (2026-07-25): add validated versioned dataset metadata models
