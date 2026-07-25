@@ -4,6 +4,9 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+## 2.1.0 - 2026-07-25
+
+- Build 56 (2026-07-25): 准备数据管线、缓存与持久化版本 2.1.0
 - Build 55 (2026-07-25): 从精确标签 Bundle 恢复验收并事务发布里程碑源码包
 - Build 54 (2026-07-25): 自动复现 Au1110419 到 Au1110420 的迟到渲染回归
 - Build 53 (2026-07-25): 按实验类型和标准化列结构隔离谱图与轴偏好
@@ -40,6 +43,7 @@ All notable local builds of SXM Browser are recorded here.
 - Build 22 (2026-07-25): partition spectra by compatible column schema
 - Build 21 (2026-07-25): require complete finite DAT rows
 - Build 20 (2026-07-25): surface SXM and DAT scan diagnostics
+
 ## 2.0.1 - 2026-07-25
 
 - Build 19 (2026-07-25): prepare reliability and file-safety release 2.0.1
