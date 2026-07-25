@@ -16,6 +16,7 @@ struct ContentView: View {
     @State private var liveSidebarWidth: CGFloat
     @State private var liveInspectorWidth: CGFloat
     @State private var isResizingSplit = false
+    @FocusState private var isFilenameSearchFocused: Bool
 
     init(model: AppModel) {
         self.model = model
@@ -114,6 +115,11 @@ struct ContentView: View {
                 }
                 .keyboardShortcut("1", modifiers: [.command, .option])
                 .help(model.isSidebarVisible ? "Hide file list" : "Show file list")
+                .accessibilityLabel(
+                    model.isSidebarVisible
+                        ? "Hide file list"
+                        : "Show file list"
+                )
             }
 
             ToolbarItemGroup(placement: .automatic) {
@@ -126,6 +132,7 @@ struct ContentView: View {
                 }
                 .keyboardShortcut("0", modifiers: [.command, .option])
                 .help("Reset layout")
+                .accessibilityLabel("Reset layout")
 
                 Button {
                     withAnimation(.easeInOut(duration: 0.16)) {
@@ -136,6 +143,11 @@ struct ContentView: View {
                 }
                 .keyboardShortcut("2", modifiers: [.command, .option])
                 .help(model.isInspectorVisible ? "Hide inspector" : "Show inspector")
+                .accessibilityLabel(
+                    model.isInspectorVisible
+                        ? "Hide inspector"
+                        : "Show inspector"
+                )
             }
         }
         .sheet(
@@ -165,6 +177,21 @@ struct ContentView: View {
                 liveInspectorWidth = newValue
             }
         }
+        .onChange(
+            of: model.filenameSearchFocusRequestID
+        ) { _, requestID in
+            guard requestID != nil else { return }
+            DispatchQueue.main.async {
+                isFilenameSearchFocused = true
+            }
+        }
+        .onChange(
+            of: model.filenameSearchBlurRequestID
+        ) { _, requestID in
+            guard requestID != nil else { return }
+            isFilenameSearchFocused = false
+            NSApp.keyWindow?.makeFirstResponder(nil)
+        }
     }
 
     private func inlineBrowser(
@@ -173,7 +200,11 @@ struct ContentView: View {
         HStack(spacing: 0) {
             if model.isSidebarVisible,
                layout.sidebarPlacement == .inline {
-                SidebarView(model: model)
+                SidebarView(
+                    model: model,
+                    filenameSearchFocus:
+                        $isFilenameSearchFocused
+                )
                     .frame(width: liveSidebarWidth)
                     .clipped()
                     .transition(
@@ -223,7 +254,10 @@ struct ContentView: View {
     }
 
     private var floatingSidebar: some View {
-        SidebarView(model: model)
+        SidebarView(
+            model: model,
+            filenameSearchFocus: $isFilenameSearchFocused
+        )
             .frame(width: liveSidebarWidth)
             .frame(maxHeight: .infinity)
             .background(AppTheme.sidebar)
@@ -1176,11 +1210,40 @@ struct SplitHandle: View {
                         onCommit()
                     }
             )
+            .accessibilityElement()
+            .accessibilityLabel(
+                edge == .leading
+                    ? "File list width"
+                    : "Inspector width"
+            )
+            .accessibilityValue(
+                "\(Int(width.rounded())) points"
+            )
+            .accessibilityHint(
+                "Adjust the pane width. Double-click resets it."
+            )
+            .accessibilityAdjustableAction { direction in
+                let delta: CGFloat
+                switch direction {
+                case .increment:
+                    delta = 20
+                case .decrement:
+                    delta = -20
+                @unknown default:
+                    return
+                }
+                width = min(
+                    range.upperBound,
+                    max(range.lowerBound, width + delta)
+                )
+                onCommit()
+            }
     }
 }
 
 struct SidebarView: View {
     @ObservedObject var model: AppModel
+    let filenameSearchFocus: FocusState<Bool>.Binding
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1203,6 +1266,10 @@ struct SidebarView: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(Capsule().fill(AppTheme.subtleFill))
+                        .accessibilityLabel("Search results")
+                        .accessibilityValue(
+                            model.searchResultCountText
+                        )
 
                     if model.isLoading {
                         ProgressView()
@@ -1220,6 +1287,10 @@ struct SidebarView: View {
                         .buttonStyle(.borderless)
                         .foregroundStyle(.orange)
                         .help("Show scan issues")
+                        .accessibilityLabel("Show scan issues")
+                        .accessibilityValue(
+                            "\(model.scanIssues.count) issues"
+                        )
                     }
                 }
 
@@ -1247,7 +1318,7 @@ struct SidebarView: View {
                 SearchField(text: Binding(
                     get: { model.filenameSearch },
                     set: { model.setFilenameSearch($0) }
-                )) {
+                ), isFocused: filenameSearchFocus) {
                     model.jumpToFilenameSearch()
                 } onClear: {
                     model.clearFilenameSearch()
@@ -1432,12 +1503,23 @@ struct TagGroupView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
+                .accessibilityLabel(
+                    model.expandedTagIDs.contains(tag.id)
+                        ? "Collapse \(tag.name)"
+                        : "Expand \(tag.name)"
+                )
+                .accessibilityValue("\(files.count) files")
 
                 Button {
                     model.selectTag(tag.id)
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: "tag")
+                        Image(
+                            systemName:
+                                model.activeTagID == tag.id
+                                ? "tag.fill"
+                                : "tag"
+                        )
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(.secondary)
                     Text(tag.name)
@@ -1469,6 +1551,20 @@ struct TagGroupView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(tag.name)
+                .accessibilityValue(
+                    [
+                        "\(files.count) files",
+                        model.activeTagID == tag.id
+                            ? "Active tag"
+                            : "Inactive tag",
+                    ].joined(separator: ", ")
+                )
+                .accessibilityAddTraits(
+                    model.activeTagID == tag.id
+                        ? .isSelected
+                        : []
+                )
                 .contextMenu {
                     Button {
                         model.promptToRenameTag(tag.id)
@@ -1569,7 +1665,7 @@ struct SXMFileSidebarItem: View {
                     modifiers: NSEvent.modifierFlags,
                     tagContext: tagContext
                 )
-                NSApp.keyWindow?.makeFirstResponder(nil)
+                model.requestFilenameSearchBlur()
             } label: {
                 FileRow(
                     file: file,
@@ -1580,6 +1676,34 @@ struct SXMFileSidebarItem: View {
             }
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity)
+            .accessibilityLabel(file.filename)
+            .accessibilityValue(
+                [
+                    model.selectedID == file.id
+                        ? "Current file"
+                        : (
+                            model.selectedIDs.contains(file.id)
+                                ? "Selected file"
+                                : "Not selected"
+                        ),
+                    "\(file.pixels.width) by "
+                        + "\(file.pixels.height) pixels",
+                    file.defaultChannel.map {
+                        "Channel \($0)"
+                    },
+                ]
+                .compactMap { $0 }
+                .joined(separator: ", ")
+            )
+            .accessibilityAddTraits(
+                model.selectedIDs.contains(file.id)
+                    ? .isSelected
+                    : []
+            )
+            .accessibilityHint(
+                "Press to select. Use Command or Shift "
+                    + "for multiple selection."
+            )
             .contextMenu {
                 FileContextMenu(model: model, file: file, tagContext: tagContext)
             }
@@ -1631,6 +1755,8 @@ struct SXMFileSidebarItem: View {
 }
 
 struct SpectroscopySidebarRow: View {
+    @Environment(\.colorSchemeContrast)
+    private var colorSchemeContrast
     @ObservedObject var model: AppModel
     let spectrum: SpectroscopyFile
     var tagContext: UUID? = nil
@@ -1686,6 +1812,10 @@ struct SpectroscopySidebarRow: View {
                         Image(systemName: "scope")
                             .font(.caption)
                             .foregroundStyle(Color.accentColor)
+                    } else if isSelected {
+                        Image(systemName: "checkmark")
+                            .font(.caption.bold())
+                            .foregroundStyle(Color.accentColor)
                     }
                 }
                 .contentShape(Rectangle())
@@ -1697,11 +1827,15 @@ struct SpectroscopySidebarRow: View {
                     spectrumStyleDescription(for: spectrum),
                     isFocused
                         ? "Focused spectrum"
-                        : "Spectrum",
+                        : (
+                            isSelected
+                                ? "Selected spectrum"
+                                : "Spectrum"
+                        ),
                 ].joined(separator: ", ")
             )
             .accessibilityAddTraits(
-                isFocused ? .isSelected : []
+                isSelected ? .isSelected : []
             )
         }
         .padding(.horizontal, 8)
@@ -1709,13 +1843,26 @@ struct SpectroscopySidebarRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 5)
-                .fill(model.sidebarSelectedSpectrumIDs.contains(spectrum.id) ? Color.accentColor.opacity(0.18) : Color.clear)
+                .fill(
+                    isSelected
+                        ? Color.accentColor.opacity(
+                            colorSchemeContrast == .increased
+                                ? 0.30
+                                : 0.18
+                        )
+                        : Color.clear
+                )
         )
         .overlay(alignment: .leading) {
-            if isFocused {
+            if isSelected {
                 Capsule()
                     .fill(Color.accentColor)
-                    .frame(width: 3)
+                    .frame(
+                        width:
+                            colorSchemeContrast == .increased
+                            ? 5
+                            : 3
+                    )
                     .padding(.vertical, 4)
             }
         }
@@ -1728,6 +1875,12 @@ struct SpectroscopySidebarRow: View {
     private var isFocused: Bool {
         model.singleSpectroscopyState.focusedSpectrumID
             == spectrum.id
+    }
+
+    private var isSelected: Bool {
+        model.sidebarSelectedSpectrumIDs.contains(
+            spectrum.id
+        )
     }
 }
 
@@ -1798,6 +1951,7 @@ private struct SpectrumStyleGlyph: View {
 
 struct SearchField: View {
     @Binding var text: String
+    let isFocused: FocusState<Bool>.Binding
     let onSubmit: () -> Void
     let onClear: () -> Void
 
@@ -1810,8 +1964,15 @@ struct SearchField: View {
             TextField("Search file name", text: $text)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
+                .focused(isFocused)
                 .onSubmit(onSubmit)
                 .onExitCommand(perform: onClear)
+                .accessibilityLabel(
+                    "Search SXM and associated DAT file names"
+                )
+                .accessibilityHint(
+                    "Type to filter files. Press Escape to clear."
+                )
 
             if !text.isEmpty {
                 Button {
@@ -1822,6 +1983,7 @@ struct SearchField: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Clear filename search")
             }
         }
         .padding(.horizontal, 9)
@@ -1830,6 +1992,15 @@ struct SearchField: View {
             RoundedRectangle(cornerRadius: 6)
                 .fill(AppTheme.subtleFill.opacity(0.95))
         )
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(
+                    isFocused.wrappedValue
+                        ? Color.accentColor
+                        : Color.clear,
+                    lineWidth: 2
+                )
+        }
     }
 }
 
@@ -1870,26 +2041,52 @@ struct FilledMenuButton<Content: View>: View {
 }
 
 struct FileRow: View {
+    @Environment(\.colorSchemeContrast)
+    private var colorSchemeContrast
+
     let file: SXMMetadata
     let isSelected: Bool
     let isCurrent: Bool
     var isDropTargeted = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(file.filename)
-                .font(.system(size: 13, weight: .medium))
-                .lineLimit(1)
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(file.filename)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
 
-            HStack(spacing: 6) {
-                Text("\(file.pixels.width)x\(file.pixels.height)")
-                if let channel = file.defaultChannel {
-                    Text(channel)
-                        .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(
+                        "\(file.pixels.width)x"
+                            + "\(file.pixels.height)"
+                    )
+                    if let channel = file.defaultChannel {
+                        Text(channel)
+                            .lineLimit(1)
+                    }
                 }
+                .font(.caption)
+                .foregroundStyle(
+                    isSelected
+                        ? Color.white.opacity(0.90)
+                        : Color.secondary
+                )
             }
-            .font(.caption)
-            .foregroundStyle(isSelected ? Color.white.opacity(0.78) : Color.secondary)
+
+            Spacer(minLength: 0)
+
+            if isSelected {
+                Image(
+                    systemName:
+                        isCurrent
+                        ? "checkmark.circle.fill"
+                        : "checkmark.circle"
+                )
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Color.white)
+                .accessibilityHidden(true)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -1900,7 +2097,23 @@ struct FileRow: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(isDropTargeted ? Color.accentColor.opacity(0.95) : (isCurrent && isSelected ? Color.white.opacity(0.75) : Color.clear), lineWidth: isDropTargeted ? 1.6 : 1)
+                .stroke(
+                    isDropTargeted
+                        ? Color.accentColor
+                        : (
+                            isCurrent && isSelected
+                                ? Color.white
+                                : Color.clear
+                        ),
+                    lineWidth:
+                        isDropTargeted
+                        ? 2
+                        : (
+                            colorSchemeContrast == .increased
+                            ? 2
+                            : 1
+                        )
+                )
                 .padding(1)
         )
         .foregroundStyle(isSelected ? Color.white : Color.primary)
@@ -2004,8 +2217,32 @@ struct MainImageView: View {
         }
         .background(AppTheme.page)
         .overlay {
-            KeyboardArrowOverlay { direction in
-                model.moveSelectionForArrow(direction)
+            KeyboardCommandOverlay { command in
+                switch command {
+                case .move(
+                    let direction,
+                    let extendingSelection
+                ):
+                    model.moveSelectionForArrow(
+                        direction,
+                        extendingSelection:
+                            extendingSelection
+                    )
+                    return true
+                case .openSelection:
+                    guard model.mode == .grid,
+                          model.selectedFile != nil else {
+                        return false
+                    }
+                    model.setMode(.single)
+                    return true
+                case .showGrid:
+                    guard model.mode == .single else {
+                        return false
+                    }
+                    model.setMode(.grid)
+                    return true
+                }
             }
         }
     }
@@ -2637,21 +2874,24 @@ extension BrowserStateView where Actions == EmptyView {
     }
 }
 
-struct KeyboardArrowOverlay: NSViewRepresentable {
-    let onArrow: (MoveCommandDirection) -> Void
+struct KeyboardCommandOverlay: NSViewRepresentable {
+    let onCommand: (BrowserKeyboardCommand) -> Bool
 
-    func makeNSView(context: Context) -> KeyboardArrowCatcherView {
-        let view = KeyboardArrowCatcherView()
-        view.onArrow = onArrow
+    func makeNSView(context: Context) -> KeyboardCommandCatcherView {
+        let view = KeyboardCommandCatcherView()
+        view.onCommand = onCommand
         return view
     }
 
-    func updateNSView(_ nsView: KeyboardArrowCatcherView, context: Context) {
-        nsView.onArrow = onArrow
+    func updateNSView(
+        _ nsView: KeyboardCommandCatcherView,
+        context: Context
+    ) {
+        nsView.onCommand = onCommand
     }
 
     static func dismantleNSView(
-        _ nsView: KeyboardArrowCatcherView,
+        _ nsView: KeyboardCommandCatcherView,
         coordinator: ()
     ) {
         nsView.stopMonitoring()
@@ -2659,8 +2899,8 @@ struct KeyboardArrowOverlay: NSViewRepresentable {
 }
 
 @MainActor
-final class KeyboardArrowCatcherView: NSView {
-    var onArrow: ((MoveCommandDirection) -> Void)?
+final class KeyboardCommandCatcherView: NSView {
+    var onCommand: ((BrowserKeyboardCommand) -> Bool)?
     private var eventMonitor: Any?
 
     override var acceptsFirstResponder: Bool { true }
@@ -2693,28 +2933,21 @@ final class KeyboardArrowCatcherView: NSView {
     }
 
     private func handleKeyDown(_ event: NSEvent) -> Bool {
-        guard isEventForThisWindow(event),
-              !interactiveControlHasFocus,
-              hasNoCommandModifiers(event) else {
+        guard isEventForThisWindow(event) else {
             return false
         }
-        let direction: MoveCommandDirection?
-        switch event.keyCode {
-        case 123:
-            direction = .left
-        case 124:
-            direction = .right
-        case 125:
-            direction = .down
-        case 126:
-            direction = .up
-        default:
-            direction = nil
+        guard let command = BrowserKeyboardRouting.command(
+            forMacVirtualKeyCode: event.keyCode,
+            hasCommandModifiers:
+                hasCommandModifiers(event),
+            isShiftPressed:
+                event.modifierFlags.contains(.shift),
+            interactiveControlHasFocus:
+                interactiveControlHasFocus
+        ) else {
+            return false
         }
-
-        guard let direction else { return false }
-        onArrow?(direction)
-        return true
+        return onCommand?(command) ?? false
     }
 
     private func isEventForThisWindow(_ event: NSEvent) -> Bool {
@@ -2725,9 +2958,9 @@ final class KeyboardArrowCatcherView: NSView {
         return NSApp.keyWindow === window
     }
 
-    private func hasNoCommandModifiers(_ event: NSEvent) -> Bool {
+    private func hasCommandModifiers(_ event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection([.command, .option, .control])
-        return modifiers.isEmpty
+        return !modifiers.isEmpty
     }
 
     private var interactiveControlHasFocus: Bool {
@@ -2865,6 +3098,8 @@ private extension GridDensity {
 
 struct ThumbnailCard: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast)
+    private var colorSchemeContrast
     @ObservedObject var model: AppModel
     let file: SXMMetadata
     @State private var image: NSImage?
@@ -2933,8 +3168,50 @@ struct ThumbnailCard: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(isSelected ? Color.accentColor.opacity(isCurrent ? 0.95 : 0.65) : AppTheme.tileBorder(for: colorScheme), lineWidth: isCurrent ? 1.8 : (isSelected ? 1.3 : 1))
+                .stroke(
+                    isSelected
+                        ? Color.accentColor.opacity(
+                            isCurrent ? 1 : 0.8
+                        )
+                        : AppTheme.tileBorder(
+                            for: colorScheme
+                        ),
+                    lineWidth:
+                        colorSchemeContrast == .increased
+                        ? (
+                            isCurrent
+                            ? 3
+                            : (isSelected ? 2.4 : 1.5)
+                        )
+                        : (
+                            isCurrent
+                            ? 1.8
+                            : (isSelected ? 1.3 : 1)
+                        )
+                )
         )
+        .overlay(alignment: .topTrailing) {
+            if isSelected {
+                Image(
+                    systemName:
+                        isCurrent
+                        ? "checkmark.circle.fill"
+                        : "checkmark.circle"
+                )
+                .font(.system(size: 17, weight: .bold))
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(
+                    Color.white,
+                    Color.accentColor
+                )
+                .padding(13)
+                .shadow(
+                    color: Color.black.opacity(0.65),
+                    radius: 2
+                )
+                .accessibilityHidden(true)
+            }
+        }
         .shadow(
             color: isSelected ? Color.accentColor.opacity(0.10) : Color.black.opacity(0.045),
             radius: isSelected ? 8 : 5,
@@ -2946,6 +3223,7 @@ struct ThumbnailCard: View {
             TapGesture(count: 2)
                 .exclusively(before: TapGesture(count: 1))
                 .onEnded { value in
+                    model.requestFilenameSearchBlur()
                     switch value {
                     case .first:
                         model.select(file)
@@ -2957,6 +3235,38 @@ struct ThumbnailCard: View {
         )
         .contextMenu {
             FileContextMenu(model: model, file: file)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(file.filename)
+        .accessibilityValue(
+            [
+                isCurrent
+                    ? "Current file"
+                    : (isSelected ? "Selected file" : "Not selected"),
+                "\(file.pixels.width) by "
+                    + "\(file.pixels.height) pixels",
+                file.defaultChannel.map {
+                    "Channel \($0)"
+                },
+            ]
+            .compactMap { $0 }
+            .joined(separator: ", ")
+        )
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(
+            isSelected ? .isSelected : []
+        )
+        .accessibilityHint(
+            "Activate to select. Open action shows Single view."
+        )
+        .accessibilityAction {
+            model.requestFilenameSearchBlur()
+            model.select(file)
+        }
+        .accessibilityAction(named: "Open in Single view") {
+            model.requestFilenameSearchBlur()
+            model.select(file)
+            model.setMode(.single)
         }
         .task(id: thumbnailTaskID) {
             image = await model.thumbnail(for: file, usingSelection: isCurrent)

@@ -104,6 +104,28 @@ func steppingDoesNotClampAtEitherEnd() {
 }
 
 @Test
+func extendingSelectionKeepsAnchorAndStopsAtVisibleBounds() {
+    let visible: [Item] = [.a, .b, .c, .d, .e]
+    var state = SelectionState<Item>()
+    state.selectOnly(.b, in: visible)
+
+    state.extend(by: 2, in: visible)
+    #expect(state.primaryID == .d)
+    #expect(state.anchorID == .b)
+    #expect(state.selectedIDs == [.b, .c, .d])
+
+    state.extend(by: -1, in: visible)
+    #expect(state.primaryID == .c)
+    #expect(state.anchorID == .b)
+    #expect(state.selectedIDs == [.b, .c])
+
+    state.extend(by: -10, in: visible)
+    #expect(state.primaryID == .c)
+    #expect(state.selectedIDs == [.b, .c])
+    expectValid(state, visibleIDs: visible)
+}
+
+@Test
 func removalChoosesSuccessorThenPredecessor() {
     let oldVisible: [Item] = [.a, .b, .c, .d]
     var middle = SelectionState<Item>()

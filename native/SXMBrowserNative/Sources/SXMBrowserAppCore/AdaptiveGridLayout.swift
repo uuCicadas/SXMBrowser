@@ -80,7 +80,7 @@ public struct AdaptiveGridMetrics: Sendable, Equatable {
     }
 }
 
-public enum GridNavigationDirection: Sendable {
+public enum GridNavigationDirection: Equatable, Sendable {
     case left
     case right
     case up

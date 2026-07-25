@@ -45,6 +45,13 @@ struct SXMBrowserNativeApp: App {
             }
 
             CommandMenu("SXM Browser") {
+                Button("Focus Filename Search") {
+                    model.requestFilenameSearchFocus()
+                }
+                .keyboardShortcut("f", modifiers: [.command])
+
+                Divider()
+
                 Button(model.isSidebarVisible ? "Hide File List" : "Show File List") {
                     withAnimation(.easeInOut(duration: 0.16)) {
                         model.isSidebarVisible.toggle()

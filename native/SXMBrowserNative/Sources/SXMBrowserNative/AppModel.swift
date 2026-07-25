@@ -266,6 +266,10 @@ final class AppModel: ObservableObject {
         }
     }
     @Published private(set) var gridNavigationColumnCount = 1
+    @Published private(set) var filenameSearchFocusRequestID:
+        UUID?
+    @Published private(set) var filenameSearchBlurRequestID:
+        UUID?
     @Published var scaleLocked = false
     @Published var scaleMin: Double?
     @Published var scaleMax: Double?
@@ -670,6 +674,15 @@ final class AppModel: ObservableObject {
         filenameSearchRequestGate.cancel()
         filenameSearch = ""
         setAppliedFilenameSearch("")
+    }
+
+    func requestFilenameSearchFocus() {
+        isSidebarVisible = true
+        filenameSearchFocusRequestID = UUID()
+    }
+
+    func requestFilenameSearchBlur() {
+        filenameSearchBlurRequestID = UUID()
     }
 
     private func commitFilenameSearch() {
@@ -2289,11 +2302,18 @@ final class AppModel: ObservableObject {
         selection.canStep(by: delta, in: visibleFiles.map(\.id))
     }
 
-    func stepSelection(_ delta: Int) {
+    func stepSelection(
+        _ delta: Int,
+        extendingSelection: Bool = false
+    ) {
         let list = visibleFiles
         guard canStepSelection(by: delta) else { return }
         updateSelection { state, visibleIDs in
-            state.step(by: delta, in: visibleIDs)
+            if extendingSelection {
+                state.extend(by: delta, in: visibleIDs)
+            } else {
+                state.step(by: delta, in: visibleIDs)
+            }
         }
         if let selectedID,
            let selected = list.first(where: { $0.id == selectedID }) {
@@ -2301,13 +2321,22 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func moveSelectionForArrow(_ direction: MoveCommandDirection) {
+    func moveSelectionForArrow(
+        _ direction: GridNavigationDirection,
+        extendingSelection: Bool = false
+    ) {
         switch mode {
         case .single:
             if direction == .left {
-                stepSelection(-1)
+                stepSelection(
+                    -1,
+                    extendingSelection: extendingSelection
+                )
             } else if direction == .right {
-                stepSelection(1)
+                stepSelection(
+                    1,
+                    extendingSelection: extendingSelection
+                )
             }
         case .grid:
             let gridDirection: GridNavigationDirection
@@ -2320,14 +2349,13 @@ final class AppModel: ObservableObject {
                 gridDirection = .up
             case .down:
                 gridDirection = .down
-            default:
-                return
             }
             stepSelection(
                 AdaptiveGridNavigation.selectionDelta(
                     for: gridDirection,
                     columnCount: gridNavigationColumnCount
-                )
+                ),
+                extendingSelection: extendingSelection
             )
         }
     }
