@@ -331,6 +331,19 @@ private actor TestRenderBackend: RenderBackend {
 }
 
 @MainActor
+private struct CoordinatorVisiblePresentation {
+    let frame: CoordinatorRenderedFrame
+    let metadataID: SXMMetadata.ID
+    let filename: String
+    let metadataIdentity: String
+    let titleIdentity: String
+
+    var imageMarker: CGFloat {
+        frame.image.size.width
+    }
+}
+
+@MainActor
 private final class CoordinatorProbe {
     private(set) var started:
         [RenderRequestIdentity<SXMMetadata.ID>] = []
@@ -339,6 +352,10 @@ private final class CoordinatorProbe {
     private(set) var failures: [RenderFailure] = []
     private(set) var begunWork: [RenderCoordinatorWorkID] = []
     private(set) var endedWork: Set<RenderCoordinatorWorkID> = []
+    private(set) var visiblePresentation:
+        CoordinatorVisiblePresentation?
+
+    private let metadataByID: [SXMMetadata.ID: SXMMetadata]
 
     private var imageWaiters: [
         (Int, CheckedContinuation<Void, Never>)
@@ -353,6 +370,12 @@ private final class CoordinatorProbe {
         RenderCoordinatorWorkID:
             [CheckedContinuation<Void, Never>]
     ] = [:]
+
+    init(metadata: [SXMMetadata] = []) {
+        metadataByID = Dictionary(
+            uniqueKeysWithValues: metadata.map { ($0.id, $0) }
+        )
+    }
 
     var hooks: RenderCoordinatorTestHooks {
         RenderCoordinatorTestHooks(
@@ -369,16 +392,21 @@ private final class CoordinatorProbe {
         switch event {
         case .started(let request, _):
             started.append(request)
+            visiblePresentation = nil
         case .imageReady(let frame):
             images.append(frame)
+            publishVisiblePresentation(frame)
             resolveImageWaiters()
         case .histogramReady(let frame):
             histograms.append(frame)
+            publishVisiblePresentation(frame)
             resolveHistogramWaiters()
         case .failed(let failure):
             failures.append(failure)
+            visiblePresentation = nil
             resolveFailureWaiters()
         case .cleared:
+            visiblePresentation = nil
             break
         }
     }
@@ -454,19 +482,40 @@ private final class CoordinatorProbe {
             waiter.resume()
         }
     }
+
+    private func publishVisiblePresentation(
+        _ frame: CoordinatorRenderedFrame
+    ) {
+        guard let metadata = metadataByID[frame.request.fileID] else {
+            return
+        }
+        visiblePresentation = CoordinatorVisiblePresentation(
+            frame: frame,
+            metadataID: metadata.id,
+            filename: metadata.filename,
+            metadataIdentity:
+                metadata.header["identity"] ?? metadata.filename,
+            titleIdentity: metadata.filename
+        )
+    }
 }
 
 private func metadata(
     id: UUID = UUID(),
-    marker: Int = 1
+    marker: Int = 1,
+    filename: String? = nil
 ) -> SXMMetadata {
-    SXMMetadata(
+    let filename = filename ?? "coordinator-\(marker).sxm"
+    return SXMMetadata(
         id: id,
         path: URL(
-            fileURLWithPath: "/tmp/coordinator-\(marker).sxm"
+            fileURLWithPath: "/tmp/\(filename)"
         ),
-        filename: "coordinator-\(marker).sxm",
-        header: ["marker": String(marker)],
+        filename: filename,
+        header: [
+            "marker": String(marker),
+            "identity": filename,
+        ],
         recordedTime: nil,
         modifiedTime: Date(timeIntervalSince1970: 100),
         pixels: (width: 1, height: 1),
@@ -605,6 +654,180 @@ func rapidImageChangesUseOneProcessingPipelineAndPublishNewest()
     let options = try #require(await backend.imageOptions().last)
     #expect(options.vmin == 99)
     #expect(options.vmax == 109)
+}
+
+@Test
+@MainActor
+func au1110419ToAu1110420LateRenderNeverPublishesStaleIdentity()
+    async throws
+{
+    let firstFilename = "Au1110419"
+    let secondFilename = "Au1110420"
+    let firstMarker = 419
+    let secondMarker = 420
+    let first = metadata(
+        marker: firstMarker,
+        filename: firstFilename
+    )
+    let second = metadata(
+        marker: secondMarker,
+        filename: secondFilename
+    )
+    let processGate = SuspensionGate<ProcessCall, Matrix>(
+        cancellationMode: .ignore
+    )
+    let imageGate = SuspensionGate<ImageCall, NSImage>()
+    let histogramGate = SuspensionGate<
+        HistogramCall,
+        HistogramDistribution
+    >()
+    let reader = TestMatrixReader()
+    let backend = TestRenderBackend(
+        processGate: processGate,
+        imageGate: imageGate,
+        histogramGate: histogramGate
+    )
+    let probe = CoordinatorProbe(metadata: [first, second])
+    let coordinator = coordinator(
+        reader: reader,
+        backend: backend,
+        probe: probe
+    )
+    var processStarts = processGate.starts.makeAsyncIterator()
+    var imageStarts = imageGate.starts.makeAsyncIterator()
+    var histogramStarts = histogramGate.starts.makeAsyncIterator()
+    var requests: [RenderRequestIdentity<SXMMetadata.ID>] = []
+    var processCalls: [GateCall<ProcessCall>] = []
+
+    for index in 0..<100 {
+        let file = index.isMultiple(of: 2) ? first : second
+        requests.append(
+            coordinator.render(
+                file: file,
+                configuration: renderConfiguration()
+            )
+        )
+        processCalls.append(
+            try #require(await processStarts.next())
+        )
+    }
+
+    let expectedRequest = try #require(requests.last)
+    let newestProcess = try #require(processCalls.last)
+    #expect(expectedRequest.fileID == second.id)
+    #expect(
+        newestProcess.input.matrix.values
+            == [Float(secondMarker)]
+    )
+
+    await processGate.succeed(
+        id: newestProcess.id,
+        with: newestProcess.input.matrix
+    )
+    let imageCall = try #require(await imageStarts.next())
+    let histogramCall = try #require(await histogramStarts.next())
+    #expect(
+        imageCall.input.matrix.values == [Float(secondMarker)]
+    )
+    #expect(
+        histogramCall.input.matrix.values == [Float(secondMarker)]
+    )
+    #expect(histogramCall.input.statistics.min == Double(secondMarker))
+    #expect(histogramCall.input.statistics.mean == Double(secondMarker))
+
+    await imageGate.succeed(
+        id: imageCall.id,
+        with: NSImage(
+            size: NSSize(width: CGFloat(secondMarker), height: 1)
+        )
+    )
+    await probe.waitForImages(1)
+    await histogramGate.succeed(
+        id: histogramCall.id,
+        with: HistogramDistribution(
+            bins: histogramCall.input.bins,
+            counts: [secondMarker],
+            edges: [
+                Double(secondMarker),
+                Double(secondMarker + 1),
+            ]
+        )
+    )
+    await probe.waitForHistograms(1)
+
+    for call in processCalls.dropLast().reversed() {
+        await processGate.succeed(
+            id: call.id,
+            with: call.input.matrix
+        )
+    }
+    let processingWork = probe.begunWork.filter {
+        if case .processing = $0 { true } else { false }
+    }
+    for workID in processingWork {
+        await probe.waitUntilEnded(workID)
+    }
+
+    let finalFrame = try #require(probe.histograms.last)
+    let finalStats = try #require(finalFrame.stats)
+    let visible = try #require(probe.visiblePresentation)
+
+    #expect(probe.started.count == 100)
+    #expect(Set(probe.started.map(\.requestID)).count == 100)
+    #expect(probe.started.first?.fileID == first.id)
+    #expect(probe.started.last?.fileID == second.id)
+    #expect(
+        probe.started.filter { $0.fileID == first.id }.count == 50
+    )
+    #expect(
+        probe.started.filter { $0.fileID == second.id }.count == 50
+    )
+    #expect(processingWork.count == 100)
+    #expect(probe.images.count == 1)
+    #expect(probe.histograms.count == 1)
+    #expect(probe.failures.isEmpty)
+    #expect(
+        probe.images.allSatisfy {
+            $0.request.fileID == second.id
+                && $0.image.size.width == CGFloat(secondMarker)
+        }
+    )
+    #expect(
+        probe.histograms.allSatisfy {
+            $0.request.fileID == second.id
+                && $0.stats?.min == Double(secondMarker)
+                && $0.stats?.mean == Double(secondMarker)
+                && $0.stats?.hist == [secondMarker]
+        }
+    )
+    #expect(finalFrame.request == expectedRequest)
+    #expect(finalFrame.request.fileID == second.id)
+    #expect(finalFrame.image.size.width == CGFloat(secondMarker))
+    #expect(finalStats.statistics.min == Double(secondMarker))
+    #expect(finalStats.statistics.mean == Double(secondMarker))
+    #expect(finalStats.distribution.counts == [secondMarker])
+    #expect(
+        finalStats.distribution.edges
+            == [
+                Double(secondMarker),
+                Double(secondMarker + 1),
+            ]
+    )
+    #expect(visible.frame.request == expectedRequest)
+    #expect(visible.metadataID == second.id)
+    #expect(visible.filename == secondFilename)
+    #expect(visible.metadataIdentity == secondFilename)
+    #expect(visible.titleIdentity == secondFilename)
+    #expect(visible.imageMarker == CGFloat(secondMarker))
+    #expect(
+        await backend.counts()
+            == BackendCounts(
+                process: 100,
+                statistics: 1,
+                histogram: 1,
+                image: 1
+            )
+    )
 }
 
 @Test
