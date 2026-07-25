@@ -166,9 +166,7 @@ final class AppModel: ObservableObject {
 
     private let parser = SXMParser()
     private let spectroscopyParser = SpectroscopyParser()
-    private var fullCache: [URL: SXMFullFile] = [:]
-    private var fullCacheOrder: [URL] = []
-    private let fullCacheLimit = 24
+    private var matrixCache = MatrixLoadCache()
     private let thumbnailCache = NSCache<NSString, NSImage>()
     private var thumbnailTasks: [String: ThumbnailTaskEntry] = [:]
     private let thumbnailLimiter = AsyncLimiter(limit: 4)
@@ -428,8 +426,11 @@ final class AppModel: ObservableObject {
         filenameSearch = ""
         spectrumAxisState.clear()
         processedRenderCache = nil
-        fullCache.removeAll()
-        fullCacheOrder.removeAll()
+        let previousMatrixCache = matrixCache
+        matrixCache = MatrixLoadCache()
+        Task {
+            await previousMatrixCache.clear()
+        }
         thumbnailCache.removeAllObjects()
         cancelThumbnailTasks()
         loadTags(for: url)
@@ -1195,8 +1196,21 @@ final class AppModel: ObservableObject {
                 if let cached {
                     processed = cached.matrix
                 } else {
-                    let full = try await fullFile(for: file)
-                    guard let matrix = full.matrices[MatrixKey(channel: channel, direction: direction)] else {
+                    let matrixKey = MatrixKey(
+                        channel: channel,
+                        direction: direction
+                    )
+                    let matrix: Matrix
+                    do {
+                        matrix = try await loadMatrix(
+                            for: file,
+                            key: matrixKey,
+                            priority: .userInitiated
+                        )
+                    } catch let error as SXMParserError {
+                        guard case .matrixNotFound = error else {
+                            throw error
+                        }
                         publishRenderFailure(
                             request,
                             message: "Direction is not available for this channel."
@@ -1321,8 +1335,14 @@ final class AppModel: ObservableObject {
 
         Task {
             do {
-                let full = try await fullFile(for: file)
-                guard let matrix = full.matrices[MatrixKey(channel: channel, direction: direction)] else { return }
+                let matrix = try await loadMatrix(
+                    for: file,
+                    key: MatrixKey(
+                        channel: channel,
+                        direction: direction
+                    ),
+                    priority: .userInitiated
+                )
                 let options = RenderOptions(
                     channel: channel,
                     direction: direction,
@@ -1349,27 +1369,26 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func fullFile(for metadata: SXMMetadata) async throws -> SXMFullFile {
-        if let cached = fullCache[metadata.path] {
-            touchCache(metadata.path)
-            return cached
-        }
+    private func loadMatrix(
+        for metadata: SXMMetadata,
+        key: MatrixKey,
+        priority: TaskPriority?
+    ) async throws -> Matrix {
+        let cache = matrixCache
+        let cacheKey = MatrixCacheKey(
+            datasetRevision: renderRequestGate.datasetRevision,
+            fileID: metadata.id,
+            path: metadata.path,
+            modifiedTime: metadata.modifiedTime,
+            matrixKey: key
+        )
         let parser = self.parser
-        let full = try await runDetachedCancellable(priority: .userInitiated) {
-            try parser.loadFullFile(metadata)
+        return try await cache.matrix(
+            for: cacheKey,
+            priority: priority
+        ) {
+            try parser.loadMatrix(metadata, key: key)
         }
-        fullCache[metadata.path] = full
-        fullCacheOrder.append(metadata.path)
-        while fullCacheOrder.count > fullCacheLimit {
-            let old = fullCacheOrder.removeFirst()
-            fullCache.removeValue(forKey: old)
-        }
-        return full
-    }
-
-    private func touchCache(_ url: URL) {
-        fullCacheOrder.removeAll { $0 == url }
-        fullCacheOrder.append(url)
     }
 
     private func updateSelection(
@@ -1614,8 +1633,11 @@ final class AppModel: ObservableObject {
     }
 
     private func removeCachedData(for url: URL) {
-        fullCache.removeValue(forKey: url)
-        fullCacheOrder.removeAll { $0 == url }
+        let cache = matrixCache
+        let path = url.standardizedFileURL.path
+        Task {
+            await cache.removeEntries(forStandardizedPath: path)
+        }
         processedRenderCache = nil
         thumbnailCache.removeAllObjects()
         cancelThumbnailTasks()
@@ -1869,9 +1891,15 @@ final class AppModel: ObservableObject {
 
         do {
             if Task.isCancelled { return nil }
-            let full = try await fullFile(for: file)
+            let matrix = try await loadMatrix(
+                for: file,
+                key: MatrixKey(
+                    channel: channel,
+                    direction: direction
+                ),
+                priority: .utility
+            )
             if Task.isCancelled { return nil }
-            guard let matrix = full.matrices[MatrixKey(channel: channel, direction: direction)] else { return nil }
             let options = RenderOptions(
                 channel: channel,
                 direction: direction,

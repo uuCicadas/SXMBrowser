@@ -191,6 +191,78 @@ func msbPayloadIsDecodedExactlyAndAllowsTrailingBytes() throws {
 }
 
 @Test
+func singleMatrixLoadUsesExactChannelOffsetsAndFlipsBackwardRows() throws {
+    let url = try makeSXMFixture(
+        samples: [
+            1, 2, 3, 4,
+            10, 11, 12, 13,
+            20, 21, 22, 23,
+        ],
+        channelRows: [
+            "0\tZ\tm\tboth",
+            "1\tCurrent\tA\tforward",
+        ]
+    )
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    let parser = SXMParser()
+    let metadata = try parser.loadMetadata(url)
+
+    let forward = try parser.loadMatrix(
+        metadata,
+        key: MatrixKey(channel: "Z", direction: .fwd)
+    )
+    let backward = try parser.loadMatrix(
+        metadata,
+        key: MatrixKey(channel: "Z", direction: .bwd)
+    )
+    let laterChannel = try parser.loadMatrix(
+        metadata,
+        key: MatrixKey(channel: "Current", direction: .fwd)
+    )
+
+    #expect(forward.values == [1, 2, 3, 4])
+    #expect(backward.values == [11, 10, 13, 12])
+    #expect(laterChannel.values == [20, 21, 22, 23])
+}
+
+@Test
+func singleMatrixLoadValidatesWholePayloadAndRequestedKey() throws {
+    let short = try makeSXMFixture(
+        direction: "both",
+        samples: [1, 2, 3, 4]
+    )
+    defer { try? FileManager.default.removeItem(at: short) }
+    let parser = SXMParser()
+    let metadata = try parser.loadMetadata(short)
+
+    #expect(
+        capturedParserError {
+            try parser.loadMatrix(
+                metadata,
+                key: MatrixKey(channel: "Z", direction: .fwd)
+            )
+        } == .shortData(short, expectedBytes: 32, availableBytes: 16)
+    )
+
+    let complete = try makeSXMFixture(samples: [1, 2, 3, 4])
+    defer { try? FileManager.default.removeItem(at: complete) }
+    let completeMetadata = try parser.loadMetadata(complete)
+    #expect(
+        capturedParserError {
+            try parser.loadMatrix(
+                completeMetadata,
+                key: MatrixKey(channel: "Missing", direction: .fwd)
+            )
+        } == .matrixNotFound(
+            complete,
+            channel: "Missing",
+            direction: .fwd
+        )
+    )
+}
+
+@Test
 func fullLoadRevalidatesHeaderAndRejectsExternalReplacement() throws {
     let url = try makeSXMFixture(
         pixels: "1 1",
@@ -211,6 +283,53 @@ func fullLoadRevalidatesHeaderAndRejectsExternalReplacement() throws {
         capturedParserError { try SXMParser().loadFullFile(metadata) }
             == .unsupportedScanType(url, rawValue: "FLOAT LSBFIRST")
     )
+}
+
+@Test
+func singleMatrixLoadRevalidatesHeaderAndHonorsPreCancellation() async throws {
+    let url = try makeSXMFixture(
+        pixels: "1 1",
+        samples: [1]
+    )
+    defer { try? FileManager.default.removeItem(at: url) }
+    let parser = SXMParser()
+    let metadata = try parser.loadMetadata(url)
+
+    let replacement = try makeSXMFixture(
+        pixels: "1 1",
+        scanType: "FLOAT LSBFIRST",
+        samples: [1]
+    )
+    defer { try? FileManager.default.removeItem(at: replacement) }
+    try Data(contentsOf: replacement).write(to: url, options: .atomic)
+
+    #expect(
+        capturedParserError {
+            try parser.loadMatrix(
+                metadata,
+                key: MatrixKey(channel: "Z", direction: .fwd)
+            )
+        } == .unsupportedScanType(url, rawValue: "FLOAT LSBFIRST")
+    )
+
+    let cancelledURL = try makeSXMFixture(samples: [1, 2, 3, 4])
+    defer { try? FileManager.default.removeItem(at: cancelledURL) }
+    let cancelledMetadata = try parser.loadMetadata(cancelledURL)
+    let wasCancelled = await Task {
+        withUnsafeCurrentTask { $0?.cancel() }
+        do {
+            _ = try parser.loadMatrix(
+                cancelledMetadata,
+                key: MatrixKey(channel: "Z", direction: .fwd)
+            )
+            return false
+        } catch is CancellationError {
+            return true
+        } catch {
+            return false
+        }
+    }.value
+    #expect(wasCancelled)
 }
 
 @Test

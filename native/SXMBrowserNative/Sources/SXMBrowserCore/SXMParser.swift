@@ -17,6 +17,7 @@ public enum SXMParserError: LocalizedError, Equatable, Sendable {
     case missingScanType(URL)
     case unsupportedScanType(URL, rawValue: String)
     case dataSizeOverflow(URL, pixelCount: Int, matrixCount: Int)
+    case matrixNotFound(URL, channel: String, direction: ScanDirection)
     case cannotOpen(URL)
     case shortData(URL, expectedBytes: UInt64, availableBytes: UInt64)
 
@@ -41,6 +42,8 @@ public enum SXMParserError: LocalizedError, Equatable, Sendable {
             "Unsupported SCANIT_TYPE \"\(rawValue)\": \(url.lastPathComponent)"
         case .dataSizeOverflow(let url, let pixelCount, let matrixCount):
             "Matrix byte size overflows for \(pixelCount) pixels × \(matrixCount) matrices: \(url.lastPathComponent)"
+        case .matrixNotFound(let url, let channel, let direction):
+            "Matrix \(channel) \(direction.label) is not available: \(url.lastPathComponent)"
         case .cannotOpen(let url): "Cannot open file: \(url.path)"
         case .shortData(let url, let expectedBytes, let availableBytes):
             "File has \(availableBytes) matrix bytes; expected \(expectedBytes): \(url.lastPathComponent)"
@@ -164,6 +167,51 @@ public final class SXMParser: Sendable {
         return SXMFullFile(metadata: refreshed, matrices: matrices)
     }
 
+    public func loadMatrix(
+        _ metadata: SXMMetadata,
+        key: MatrixKey
+    ) throws -> Matrix {
+        try Task.checkCancellation()
+        let headerRead = try readHeader(metadata.path)
+        try Task.checkCancellation()
+        let specs = try parseDataInfo(
+            headerRead.header["DATA_INFO"] ?? "",
+            cancellation: .task
+        )
+        let currentMetadata = try self.metadata(
+            from: metadata.path,
+            header: headerRead.header,
+            specs: specs,
+            id: metadata.id
+        )
+        let encoding = try storageEncoding(
+            headerRead.header["SCANIT_TYPE"],
+            url: metadata.path
+        )
+        let layout = try matrixLayout(
+            url: metadata.path,
+            width: currentMetadata.pixels.width,
+            height: currentMetadata.pixels.height,
+            specs: specs
+        )
+        guard let matrixIndex = matrixIndex(for: key, specs: specs) else {
+            throw SXMParserError.matrixNotFound(
+                metadata.path,
+                channel: key.channel,
+                direction: key.direction
+            )
+        }
+        try Task.checkCancellation()
+        return try readMatrix(
+            url: metadata.path,
+            payloadOffset: headerRead.bodyOffset,
+            layout: layout,
+            matrixIndex: matrixIndex,
+            direction: key.direction,
+            encoding: encoding
+        )
+    }
+
     private func metadata(
         from url: URL,
         header: [String: String],
@@ -249,6 +297,60 @@ public final class SXMParser: Sendable {
         }
         defer { try? handle.close() }
 
+        let layout = try matrixLayout(
+            url: url,
+            width: width,
+            height: height,
+            specs: specs
+        )
+        try validateFileLength(handle, url: url, payloadOffset: offset, layout: layout)
+        try handle.seek(toOffset: offset)
+
+        var matrices: [MatrixKey: Matrix] = [:]
+        var consumedPayloadBytes = 0
+
+        for spec in specs {
+            for direction in spec.directions {
+                try Task.checkCancellation()
+                let chunk = try readExactly(handle, count: layout.byteCount)
+                if chunk.count < layout.byteCount {
+                    throw SXMParserError.shortData(
+                        url,
+                        expectedBytes: UInt64(layout.expectedPayloadBytes),
+                        availableBytes: UInt64(consumedPayloadBytes + chunk.count)
+                    )
+                }
+                consumedPayloadBytes += chunk.count
+                let values = try decodeValues(
+                    chunk,
+                    itemCount: layout.itemCount,
+                    width: layout.width,
+                    height: layout.height,
+                    direction: direction,
+                    encoding: encoding
+                )
+                try Task.checkCancellation()
+                matrices[MatrixKey(channel: spec.name, direction: direction)] = Matrix(width: width, height: height, values: values)
+            }
+        }
+        return matrices
+    }
+
+    private struct MatrixLayout {
+        let width: Int
+        let height: Int
+        let itemCount: Int
+        let byteCount: Int
+        let matrixCount: Int
+        let expectedPayloadBytes: Int
+    }
+
+    private func matrixLayout(
+        url: URL,
+        width: Int,
+        height: Int,
+        specs: [ChannelSpec]
+    ) throws -> MatrixLayout {
         let (itemCount, pixelOverflow) = width.multipliedReportingOverflow(by: height)
         guard !pixelOverflow else {
             throw SXMParserError.pixelCountOverflow(
@@ -292,66 +394,155 @@ public final class SXMParser: Sendable {
                 matrixCount: matrixCount
             )
         }
+        return MatrixLayout(
+            width: width,
+            height: height,
+            itemCount: itemCount,
+            byteCount: byteCount,
+            matrixCount: matrixCount,
+            expectedPayloadBytes: expectedPayloadBytes
+        )
+    }
 
+    private func matrixIndex(
+        for key: MatrixKey,
+        specs: [ChannelSpec]
+    ) -> Int? {
+        var index = 0
+        for spec in specs {
+            for direction in spec.directions {
+                if spec.name == key.channel, direction == key.direction {
+                    return index
+                }
+                index += 1
+            }
+        }
+        return nil
+    }
+
+    private func validateFileLength(
+        _ handle: FileHandle,
+        url: URL,
+        payloadOffset: UInt64,
+        layout: MatrixLayout
+    ) throws {
         try Task.checkCancellation()
         let fileLength = try handle.seekToEnd()
-        let availablePayloadBytes = fileLength >= offset ? fileLength - offset : 0
-        let expectedPayloadBytes64 = UInt64(expectedPayloadBytes)
-        guard availablePayloadBytes >= expectedPayloadBytes64 else {
+        let availablePayloadBytes = fileLength >= payloadOffset
+            ? fileLength - payloadOffset
+            : 0
+        let expectedPayloadBytes = UInt64(layout.expectedPayloadBytes)
+        guard availablePayloadBytes >= expectedPayloadBytes else {
             throw SXMParserError.shortData(
                 url,
-                expectedBytes: expectedPayloadBytes64,
+                expectedBytes: expectedPayloadBytes,
                 availableBytes: availablePayloadBytes
             )
         }
-        try handle.seek(toOffset: offset)
+    }
 
-        var matrices: [MatrixKey: Matrix] = [:]
-        var consumedPayloadBytes = 0
+    private func readMatrix(
+        url: URL,
+        payloadOffset: UInt64,
+        layout: MatrixLayout,
+        matrixIndex: Int,
+        direction: ScanDirection,
+        encoding: SXMStorageEncoding
+    ) throws -> Matrix {
+        try Task.checkCancellation()
+        guard let handle = try? FileHandle(forReadingFrom: url) else {
+            throw SXMParserError.cannotOpen(url)
+        }
+        defer { try? handle.close() }
 
-        for spec in specs {
-            for direction in spec.directions {
-                try Task.checkCancellation()
-                let chunk = try readExactly(handle, count: byteCount)
-                if chunk.count < byteCount {
-                    throw SXMParserError.shortData(
-                        url,
-                        expectedBytes: expectedPayloadBytes64,
-                        availableBytes: UInt64(consumedPayloadBytes + chunk.count)
-                    )
+        try validateFileLength(
+            handle,
+            url: url,
+            payloadOffset: payloadOffset,
+            layout: layout
+        )
+        let (relativeOffset, offsetOverflow) = layout.byteCount
+            .multipliedReportingOverflow(by: matrixIndex)
+        guard !offsetOverflow,
+              let relativeOffset64 = UInt64(exactly: relativeOffset) else {
+            throw SXMParserError.dataSizeOverflow(
+                url,
+                pixelCount: layout.itemCount,
+                matrixCount: layout.matrixCount
+            )
+        }
+        let (matrixOffset, matrixOffsetOverflow) = payloadOffset
+            .addingReportingOverflow(relativeOffset64)
+        guard !matrixOffsetOverflow else {
+            throw SXMParserError.dataSizeOverflow(
+                url,
+                pixelCount: layout.itemCount,
+                matrixCount: layout.matrixCount
+            )
+        }
+        try handle.seek(toOffset: matrixOffset)
+        let chunk = try readExactly(handle, count: layout.byteCount)
+        guard chunk.count == layout.byteCount else {
+            let matrixBytesBefore = relativeOffset
+            throw SXMParserError.shortData(
+                url,
+                expectedBytes: UInt64(layout.expectedPayloadBytes),
+                availableBytes: UInt64(matrixBytesBefore + chunk.count)
+            )
+        }
+        let values = try decodeValues(
+            chunk,
+            itemCount: layout.itemCount,
+            width: layout.width,
+            height: layout.height,
+            direction: direction,
+            encoding: encoding
+        )
+        return Matrix(
+            width: layout.width,
+            height: layout.height,
+            values: values
+        )
+    }
+
+    private func decodeValues(
+        _ chunk: Data,
+        itemCount: Int,
+        width: Int,
+        height: Int,
+        direction: ScanDirection,
+        encoding: SXMStorageEncoding
+    ) throws -> [Float] {
+        var values = [Float](repeating: 0, count: itemCount)
+        try chunk.withUnsafeBytes { rawBuffer in
+            guard let bytes = rawBuffer.bindMemory(to: UInt8.self).baseAddress else {
+                return
+            }
+            for idx in 0..<itemCount {
+                if idx.isMultiple(of: 4_096) {
+                    try Task.checkCancellation()
                 }
-                consumedPayloadBytes += chunk.count
-                var values = [Float](repeating: 0, count: itemCount)
-                try chunk.withUnsafeBytes { rawBuffer in
-                    guard let bytes = rawBuffer.bindMemory(to: UInt8.self).baseAddress else { return }
-                    for idx in 0..<itemCount {
-                        if idx.isMultiple(of: 4_096) {
-                            try Task.checkCancellation()
-                        }
-                        let j = idx * 4
-                        let bits: UInt32
-                        switch encoding {
-                        case .float32MSBFirst:
-                            bits = (UInt32(bytes[j]) << 24)
-                                | (UInt32(bytes[j + 1]) << 16)
-                                | (UInt32(bytes[j + 2]) << 8)
-                                | UInt32(bytes[j + 3])
-                        }
-                        values[idx] = Float(bitPattern: bits)
-                    }
+                let byteIndex = idx * Self.bytesPerSample
+                let bits: UInt32
+                switch encoding {
+                case .float32MSBFirst:
+                    bits = (UInt32(bytes[byteIndex]) << 24)
+                        | (UInt32(bytes[byteIndex + 1]) << 16)
+                        | (UInt32(bytes[byteIndex + 2]) << 8)
+                        | UInt32(bytes[byteIndex + 3])
                 }
-                if direction == .bwd {
-                    values = try flipHorizontally(
-                        values: values,
-                        width: width,
-                        height: height
-                    )
-                }
-                try Task.checkCancellation()
-                matrices[MatrixKey(channel: spec.name, direction: direction)] = Matrix(width: width, height: height, values: values)
+                values[idx] = Float(bitPattern: bits)
             }
         }
-        return matrices
+        if direction == .bwd {
+            values = try flipHorizontally(
+                values: values,
+                width: width,
+                height: height
+            )
+        }
+        try Task.checkCancellation()
+        return values
     }
 
     private func readExactly(_ handle: FileHandle, count: Int) throws -> Data {
