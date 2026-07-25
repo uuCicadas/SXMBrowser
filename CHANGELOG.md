@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 28 (2026-07-25): add byte-accounted matrix cache primitives
 - Build 27 (2026-07-25): propagate cancellation through parsing and rendering
 - Build 26 (2026-07-25): rebin histograms without rerendering images
 - Build 25 (2026-07-25): reuse matrix statistics across histogram bins
