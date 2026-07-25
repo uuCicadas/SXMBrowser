@@ -450,21 +450,104 @@ func standardizedLookupCreateAndLastOpenedReuseDatasetIdentity()
 
     let created = try await store.findOrCreateDataset(
         forFolderURL: firstURL,
-        folderBookmark: nil,
+        folderBookmark: Data([0x00]),
         updatedAt: Date(timeIntervalSince1970: 10)
     )
-    let reopened = try await store.findOrCreateDataset(
+    let reopenedWithoutBookmark = try await store.findOrCreateDataset(
+        forFolderURL: equivalentURL,
+        folderBookmark: nil,
+        updatedAt: Date(timeIntervalSince1970: 15)
+    )
+    let reopenedWithBookmark = try await store.findOrCreateDataset(
         forFolderURL: equivalentURL,
         folderBookmark: Data([0x01]),
         updatedAt: Date(timeIntervalSince1970: 20)
     )
 
-    #expect(reopened.id == created.id)
-    #expect(reopened.lastKnownPath == "/tmp/Dataset")
-    #expect(reopened.folderBookmark == Data([0x01]))
+    #expect(reopenedWithoutBookmark.id == created.id)
+    #expect(reopenedWithoutBookmark.folderBookmark == Data([0x00]))
+    #expect(reopenedWithBookmark.id == created.id)
+    #expect(reopenedWithBookmark.lastKnownPath == "/tmp/Dataset")
+    #expect(reopenedWithBookmark.folderBookmark == Data([0x01]))
     #expect(try await store.dataset(forFolderURL: firstURL)?.id == created.id)
     #expect(try await store.lastOpenedDataset()?.id == created.id)
     #expect(try await store.load().datasets.count == 1)
+}
+
+@Test
+func rebindMovedDatasetPreservesIdentityAndReplacesPath() async throws {
+    let fileURL = URL(fileURLWithPath: "/virtual/metadata-v1.json")
+    let access = InMemoryMetadataFileAccess()
+    let store = DatasetMetadataStore(
+        fileURL: fileURL,
+        fileAccess: access
+    )
+    let oldURL = URL(fileURLWithPath: "/tmp/Old Dataset")
+    let newURL = URL(fileURLWithPath: "/tmp/New Parent/../New Dataset")
+    let created = try await store.findOrCreateDataset(
+        forFolderURL: oldURL,
+        folderBookmark: Data([0x10]),
+        updatedAt: Date(timeIntervalSince1970: 10)
+    )
+
+    let rebound = try await store.rebindDataset(
+        id: created.id,
+        toFolderURL: newURL,
+        folderBookmark: nil,
+        updatedAt: Date(timeIntervalSince1970: 20)
+    )
+
+    #expect(rebound.id == created.id)
+    #expect(rebound.lastKnownPath == "/tmp/New Dataset")
+    #expect(rebound.folderBookmark == Data([0x10]))
+    #expect(try await store.dataset(forFolderURL: oldURL) == nil)
+    #expect(
+        try await store.dataset(forFolderURL: newURL)?.id == created.id
+    )
+    #expect(try await store.lastOpenedDataset()?.id == created.id)
+    #expect(try await store.load().datasets.count == 1)
+
+    let replacedBookmark = try await store.rebindDataset(
+        id: created.id,
+        toFolderURL: newURL,
+        folderBookmark: Data([0x20]),
+        updatedAt: Date(timeIntervalSince1970: 30)
+    )
+    #expect(replacedBookmark.id == created.id)
+    #expect(replacedBookmark.folderBookmark == Data([0x20]))
+}
+
+@Test
+func rebindUnknownDatasetFailsWithoutWriting() async throws {
+    let fileURL = URL(fileURLWithPath: "/virtual/metadata-v1.json")
+    let existing = try datasetRecord(path: "/tmp/Existing")
+    let originalData = try encodedMetadata(
+        try DatasetMetadataDocumentV1(datasets: [existing])
+    )
+    let access = InMemoryMetadataFileAccess(
+        fileURL: fileURL,
+        data: originalData
+    )
+    let store = DatasetMetadataStore(
+        fileURL: fileURL,
+        fileAccess: access
+    )
+    let missingID = UUID()
+
+    do {
+        _ = try await store.rebindDataset(
+            id: missingID,
+            toFolderURL: URL(fileURLWithPath: "/tmp/Moved")
+        )
+        Issue.record("Expected missing dataset ID to fail")
+    } catch let error as DatasetMetadataValidationError {
+        #expect(error == .datasetNotFound(missingID))
+    } catch {
+        Issue.record("Unexpected error: \(error)")
+    }
+
+    #expect(access.writeCount == 0)
+    #expect(access.data(at: fileURL) == originalData)
 }
 
 @Test

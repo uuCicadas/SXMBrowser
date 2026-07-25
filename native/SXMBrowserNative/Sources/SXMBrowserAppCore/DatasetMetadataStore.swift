@@ -225,7 +225,8 @@ public actor DatasetMetadataStore {
                 $0.lastKnownPath == path
             }) {
                 try existing.updateFolderIdentity(
-                    folderBookmark: folderBookmark,
+                    folderBookmark:
+                        folderBookmark ?? existing.folderBookmark,
                     lastKnownPath: path,
                     updatedAt: updatedAt
                 )
@@ -247,6 +248,40 @@ public actor DatasetMetadataStore {
             throw DatasetMetadataStoreError.verificationFailed(
                 fileURL: fileURL,
                 message: "The verified document omitted the opened dataset.",
+                rollbackFailure: nil
+            )
+        }
+        return dataset
+    }
+
+    @discardableResult
+    public func rebindDataset(
+        id: UUID,
+        toFolderURL folderURL: URL,
+        folderBookmark: Data? = nil,
+        updatedAt: Date = .now
+    ) throws -> DatasetRecordV1 {
+        let path = try Self.standardizedFolderPath(for: folderURL)
+        let verified = try transaction { document in
+            guard var existing = document.datasets.first(where: {
+                $0.id == id
+            }) else {
+                throw DatasetMetadataValidationError.datasetNotFound(id)
+            }
+            try existing.updateFolderIdentity(
+                folderBookmark: folderBookmark ?? existing.folderBookmark,
+                lastKnownPath: path,
+                updatedAt: updatedAt
+            )
+            try document.replaceDataset(existing)
+            try document.setLastOpenedDatasetID(id)
+        }
+        guard let dataset = verified.datasets.first(where: {
+            $0.id == id
+        }) else {
+            throw DatasetMetadataStoreError.verificationFailed(
+                fileURL: fileURL,
+                message: "The verified document omitted the rebound dataset.",
                 rollbackFailure: nil
             )
         }
