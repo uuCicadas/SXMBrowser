@@ -1,15 +1,27 @@
 import Foundation
 
-public enum SpectroscopyParserError: LocalizedError {
+public enum SpectroscopyParserError: LocalizedError, Sendable {
     case cannotRead(URL)
     case missingData(URL)
     case missingColumns(URL)
+    case insufficientValidRows(URL, validRowCount: Int, badLineCount: Int)
 
     public var errorDescription: String? {
         switch self {
         case .cannotRead(let url): "Cannot read spectroscopy file: \(url.lastPathComponent)"
         case .missingData(let url): "No [DATA] section found: \(url.lastPathComponent)"
         case .missingColumns(let url): "No plottable columns found: \(url.lastPathComponent)"
+        case .insufficientValidRows(let url, let validRowCount, let badLineCount):
+            "Only \(validRowCount) complete data row\(validRowCount == 1 ? "" : "s") found; at least 2 are required and \(badLineCount) malformed row\(badLineCount == 1 ? "" : "s") were ignored: \(url.lastPathComponent)"
+        }
+    }
+
+    var badLineCount: Int? {
+        switch self {
+        case .insufficientValidRows(_, _, let badLineCount):
+            badLineCount
+        default:
+            nil
         }
     }
 }
@@ -17,27 +29,58 @@ public enum SpectroscopyParserError: LocalizedError {
 public final class SpectroscopyParser: Sendable {
     public init() {}
 
-    public func scanFolder(_ folder: URL) throws -> [SpectroscopyFile] {
+    public func scanFolder(_ folder: URL) throws -> ScanReport<SpectroscopyFile> {
+        try Task.checkCancellation()
         let urls = try FileManager.default.contentsOfDirectory(
             at: folder,
             includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
             options: [.skipsHiddenFiles]
         )
+        let spectroscopyURLs = urls
+            .filter { $0.pathExtension.lowercased() == "dat" }
+            .sorted(by: spectroscopyScanURLOrderedBefore)
 
         var output: [SpectroscopyFile] = []
-        for url in urls where url.pathExtension.lowercased() == "dat" {
+        var issues: [ScanIssue] = []
+        for url in spectroscopyURLs {
+            try Task.checkCancellation()
             do {
-                output.append(try loadFile(url))
+                let parsed = try loadFileWithDiagnostics(url)
+                output.append(parsed.file)
+                if parsed.badLineCount > 0 {
+                    issues.append(
+                        ScanIssue(
+                            file: url,
+                            stage: .spectroscopyRows,
+                            reason: "Ignored \(parsed.badLineCount) malformed data row\(parsed.badLineCount == 1 ? "" : "s").",
+                            badLineCount: parsed.badLineCount
+                        )
+                    )
+                }
+            } catch let error as CancellationError {
+                throw error
             } catch {
-                continue
+                let badLineCount = (error as? SpectroscopyParserError)?.badLineCount
+                issues.append(
+                    ScanIssue(
+                        file: url,
+                        stage: .spectroscopyFile,
+                        reason: error.localizedDescription,
+                        badLineCount: badLineCount
+                    )
+                )
             }
         }
-        return output.sorted { lhs, rhs in
-            lhs.filename.localizedStandardCompare(rhs.filename) == .orderedAscending
-        }
+        return ScanReport(items: output, issues: issues)
     }
 
     public func loadFile(_ url: URL) throws -> SpectroscopyFile {
+        try loadFileWithDiagnostics(url).file
+    }
+
+    private func loadFileWithDiagnostics(
+        _ url: URL
+    ) throws -> (file: SpectroscopyFile, badLineCount: Int) {
         guard let data = try? Data(contentsOf: url),
               let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else {
             throw SpectroscopyParserError.cannotRead(url)
@@ -70,9 +113,11 @@ public final class SpectroscopyParser: Sendable {
         }
 
         var valuesByColumn = Dictionary(uniqueKeysWithValues: columns.map { ($0, [Double]()) })
+        var badLineCount = 0
         for line in dataLines.dropFirst() {
             let values = splitSpectroscopyLine(line)
             guard values.count >= columns.count else {
+                badLineCount += 1
                 continue
             }
             var parsedValues: [Double] = []
@@ -85,7 +130,10 @@ public final class SpectroscopyParser: Sendable {
                 }
                 parsedValues.append(value)
             }
-            guard isCompleteRow else { continue }
+            guard isCompleteRow else {
+                badLineCount += 1
+                continue
+            }
             for (index, column) in columns.enumerated() {
                 valuesByColumn[column, default: []].append(parsedValues[index])
             }
@@ -93,7 +141,11 @@ public final class SpectroscopyParser: Sendable {
         let xs = valuesByColumn[columns[xIndex]] ?? []
         let ys = valuesByColumn[columns[yIndex]] ?? []
         guard xs.count >= 2, ys.count == xs.count else {
-            throw SpectroscopyParserError.missingColumns(url)
+            throw SpectroscopyParserError.insufficientValidRows(
+                url,
+                validRowCount: min(xs.count, ys.count),
+                badLineCount: badLineCount
+            )
         }
 
         let resourceValues = try? url.resourceValues(forKeys: [.contentModificationDateKey])
@@ -109,20 +161,34 @@ public final class SpectroscopyParser: Sendable {
             y: ys
         )
 
-        return SpectroscopyFile(
-            path: url,
-            filename: url.lastPathComponent,
-            kind: kind,
-            experiment: header["Experiment"] ?? kind.label,
-            modifiedTime: modifiedTime,
-            savedTime: parseSpectroscopyDate(header["Saved Date"]),
-            position: parsePosition(header),
-            xLabel: xLabel,
-            yLabel: yLabel,
-            colorIndex: stableSpectrumColorIndex(for: url.lastPathComponent),
-            curve: curve
+        return (
+            SpectroscopyFile(
+                path: url,
+                filename: url.lastPathComponent,
+                kind: kind,
+                experiment: header["Experiment"] ?? kind.label,
+                modifiedTime: modifiedTime,
+                savedTime: parseSpectroscopyDate(header["Saved Date"]),
+                position: parsePosition(header),
+                xLabel: xLabel,
+                yLabel: yLabel,
+                colorIndex: stableSpectrumColorIndex(for: url.lastPathComponent),
+                curve: curve
+            ),
+            badLineCount
         )
     }
+}
+
+private func spectroscopyScanURLOrderedBefore(_ lhs: URL, _ rhs: URL) -> Bool {
+    let filenameOrder = lhs.lastPathComponent.localizedStandardCompare(rhs.lastPathComponent)
+    if filenameOrder != .orderedSame {
+        return filenameOrder == .orderedAscending
+    }
+    return lhs.standardizedFileURL.path.compare(
+        rhs.standardizedFileURL.path,
+        options: .literal
+    ) == .orderedAscending
 }
 
 private func parseSpectroscopyHeader(_ text: String) -> [String: String] {

@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 20 (2026-07-25): surface SXM and DAT scan diagnostics
 ## 2.0.1 - 2026-07-25
 
 - Build 19 (2026-07-25): prepare reliability and file-safety release 2.0.1

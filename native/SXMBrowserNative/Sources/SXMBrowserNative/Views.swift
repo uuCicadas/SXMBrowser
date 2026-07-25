@@ -237,6 +237,19 @@ struct SidebarView: View {
                     if model.isLoading {
                         ProgressView()
                             .controlSize(.small)
+                    } else if !model.scanIssues.isEmpty {
+                        Button {
+                            model.showScanIssues()
+                        } label: {
+                            Label(
+                                "\(model.scanIssues.count)",
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
+                            .labelStyle(.titleAndIcon)
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.orange)
+                        .help("Show scan issues")
                     }
                 }
 

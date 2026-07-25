@@ -29,11 +29,11 @@ let spectraScan = try measure {
 }
 
 print("folder=\(folder.path)")
-print(String(format: "scan_files=%d scan_ms=%.2f", scan.value.count, scan.milliseconds))
-print(String(format: "spectra_files=%d spectra_scan_ms=%.2f", spectraScan.value.count, spectraScan.milliseconds))
+print(String(format: "scan_files=%d scan_issues=%d scan_ms=%.2f", scan.value.items.count, scan.value.issues.count, scan.milliseconds))
+print(String(format: "spectra_files=%d spectra_issues=%d spectra_scan_ms=%.2f", spectraScan.value.items.count, spectraScan.value.issues.count, spectraScan.milliseconds))
 
-guard let first = scan.value.first else {
-    exit(0)
+guard let first = scan.value.items.first else {
+    fail("Benchmark failed: no SXM files were loaded from \(folder.path).")
 }
 
 let full = try measure {
@@ -55,6 +55,9 @@ let processed = measure {
 let stats = measure {
     SXMRenderer.histogram(processed.value, bins: 256)
 }
+guard let histogram = stats.value, histogram.count > 0 else {
+    fail("Benchmark failed: the first SXM file has no usable histogram statistics.")
+}
 
 let image = try measure {
     try SXMRenderer.renderProcessedImage(
@@ -64,8 +67,8 @@ let image = try measure {
             direction: direction,
             processing: processing,
             palette: defaultPalette(for: channel),
-            vmin: stats.value?.p1,
-            vmax: stats.value?.p99,
+            vmin: histogram.p1,
+            vmax: histogram.p99,
             outputSize: 260
         )
     )
@@ -74,6 +77,11 @@ let image = try measure {
 print("first_file=\(first.filename)")
 print("first_channel=\(channel) direction=\(direction.rawValue) processing=\(processing.rawValue)")
 print(String(format: "load_full_ms=%.2f process_ms=%.2f hist_ms=%.2f thumb_render_ms=%.2f", full.milliseconds, processed.milliseconds, stats.milliseconds, image.milliseconds))
+
+func fail(_ message: String) -> Never {
+    FileHandle.standardError.write(Data("\(message)\n".utf8))
+    exit(1)
+}
 
 func defaultExampleFolder() -> URL {
     let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)

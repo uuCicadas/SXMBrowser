@@ -67,23 +67,36 @@ public final class SXMParser: Sendable {
 
     public init() {}
 
-    public func scanFolder(_ folder: URL) throws -> [SXMMetadata] {
+    public func scanFolder(_ folder: URL) throws -> ScanReport<SXMMetadata> {
+        try Task.checkCancellation()
         let urls = try FileManager.default.contentsOfDirectory(
             at: folder,
             includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
             options: [.skipsHiddenFiles]
         )
+        let sxmURLs = urls
+            .filter { $0.pathExtension.lowercased() == "sxm" }
+            .sorted(by: scanURLOrderedBefore)
 
         var output: [SXMMetadata] = []
-        for url in urls where url.pathExtension.lowercased() == "sxm" {
+        var issues: [ScanIssue] = []
+        for url in sxmURLs {
+            try Task.checkCancellation()
             do {
                 output.append(try loadMetadata(url))
+            } catch let error as CancellationError {
+                throw error
             } catch {
-                // Keep folder scans resilient; malformed files simply do not enter the index.
-                continue
+                issues.append(
+                    ScanIssue(
+                        file: url,
+                        stage: .sxmMetadata,
+                        reason: error.localizedDescription
+                    )
+                )
             }
         }
-        return output
+        return ScanReport(items: output, issues: issues)
     }
 
     public func loadMetadata(_ url: URL) throws -> SXMMetadata {
@@ -318,6 +331,17 @@ public final class SXMParser: Sendable {
         }
         return output
     }
+}
+
+private func scanURLOrderedBefore(_ lhs: URL, _ rhs: URL) -> Bool {
+    let filenameOrder = lhs.lastPathComponent.localizedStandardCompare(rhs.lastPathComponent)
+    if filenameOrder != .orderedSame {
+        return filenameOrder == .orderedAscending
+    }
+    return lhs.standardizedFileURL.path.compare(
+        rhs.standardizedFileURL.path,
+        options: .literal
+    ) == .orderedAscending
 }
 
 public func parseHeader(_ headerText: String) -> [String: String] {

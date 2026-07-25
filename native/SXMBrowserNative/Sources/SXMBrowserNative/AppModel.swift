@@ -122,6 +122,7 @@ final class AppModel: ObservableObject {
     }
     @Published var isLoading = false
     @Published var status = "Choose a folder with .sxm files."
+    @Published private(set) var scanIssues: [ScanIssue] = []
 
     @Published var selectedChannel = ""
     @Published var selectedDirection: ScanDirection = .fwd
@@ -364,6 +365,29 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func showScanIssues() {
+        guard !scanIssues.isEmpty else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = scanIssues.count == 1
+            ? "1 scan issue"
+            : "\(scanIssues.count) scan issues"
+        alert.informativeText = "Usable files were loaded. Review the files that were skipped or partially read."
+        let details = scanIssues.map { issue in
+            var title = "\(issue.file.lastPathComponent) — \(issue.stage.rawValue)"
+            if let badLineCount = issue.badLineCount {
+                title += " (\(badLineCount) bad line\(badLineCount == 1 ? "" : "s"))"
+            }
+            return "\(title)\n\(issue.reason)"
+        }
+        alert.accessoryView = fileListAccessoryView(
+            details.joined(separator: "\n\n"),
+            lineCount: details.count * 2
+        )
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
     func openDroppedURL(_ url: URL) {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
@@ -386,6 +410,7 @@ final class AppModel: ObservableObject {
         status = "Scanning folder..."
         files.removeAll()
         spectra.removeAll()
+        scanIssues.removeAll()
         spectrumGroupsByFileID.removeAll()
         spectrumParentIDBySpectrumID.removeAll()
         hiddenSpectrumIDs.removeAll()
@@ -413,15 +438,15 @@ final class AppModel: ObservableObject {
                 let parser = self.parser
                 let spectroscopyParser = self.spectroscopyParser
                 let scanned = try await Task.detached(priority: .userInitiated) {
-                    let sxmFiles = try parser.scanFolder(url)
-                    let spectroscopyFiles = (try? spectroscopyParser.scanFolder(url)) ?? []
-                    return (sxmFiles, spectroscopyFiles)
+                    let sxmReport = try parser.scanFolder(url)
+                    let spectroscopyReport = try spectroscopyParser.scanFolder(url)
+                    return (sxmReport, spectroscopyReport)
                 }.value
                 guard !Task.isCancelled, folder == url else { return }
-                files = scanned.0
-                spectra = scanned.1
+                files = scanned.0.items
+                spectra = scanned.1.items
+                scanIssues = scanned.0.issues + scanned.1.issues
                 rebuildSpectrumGroups()
-                pruneTagsToCurrentFiles()
                 var opensDroppedFileInSingleMode = false
                 if let selectedPath,
                    let droppedFile = files.first(where: { $0.path.standardizedFileURL == selectedPath.standardizedFileURL }) {
@@ -433,7 +458,7 @@ final class AppModel: ObservableObject {
                 applyDefaultsFromSelection()
                 isLoading = false
                 let groupCount = spectrumGroupsByFileID.values.reduce(0) { $0 + $1.count }
-                status = "Loaded \(scanned.0.count) SXM files and \(scanned.1.count) spectra in \(groupCount) plots."
+                status = "Loaded \(scanned.0.items.count) SXM files and \(scanned.1.items.count) spectra in \(groupCount) plots. Scan issues: \(scanIssues.count)."
                 if opensDroppedFileInSingleMode {
                     setMode(.single)
                 } else if mode == .single {
