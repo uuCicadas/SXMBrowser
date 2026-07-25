@@ -3619,6 +3619,22 @@ private struct SingleImageCanvas: View {
                 * displayedTransform.scale
         )
         let activeProbe = model.probeReading(for: frame)
+        let visibleImageRect = CGRect(
+            x: displayedTransform.translation.x,
+            y: displayedTransform.translation.y,
+            width: scaledImageSize.width,
+            height: scaledImageSize.height
+        ).intersection(
+            CGRect(
+                origin: .zero,
+                size: viewportSize
+            )
+        )
+        let scaleBar = resolvedScaleBar(
+            for: file,
+            transform: displayedTransform,
+            visibleImageRect: visibleImageRect
+        )
 
         ZStack(alignment: .topLeading) {
             ZStack {
@@ -3674,6 +3690,26 @@ private struct SingleImageCanvas: View {
                 }
                 .padding(10)
                 .allowsHitTesting(false)
+            }
+
+            if let scaleBar {
+                let overlayWidth =
+                    CGFloat(scaleBar.screenLengthPoints)
+                    + 16
+                ScreenScaleBar(scaleBar: scaleBar)
+                    .frame(
+                        width: overlayWidth,
+                        height: 42
+                    )
+                    .position(
+                        x:
+                            visibleImageRect.minX
+                            + 10
+                            + overlayWidth / 2,
+                        y:
+                            visibleImageRect.maxY
+                            - 29
+                    )
             }
         }
         .frame(
@@ -3831,6 +3867,26 @@ private struct SingleImageCanvas: View {
             probeAccessibilitySummary(probe),
         ].joined(separator: ", ")
     }
+
+    private func resolvedScaleBar(
+        for file: SXMMetadata,
+        transform: ViewerTransform,
+        visibleImageRect: CGRect
+    ) -> ScaleBar? {
+        guard let scanRangeX = file.scanRange?.x,
+              !visibleImageRect.isNull,
+              visibleImageRect.width >= 76,
+              visibleImageRect.height >= 54 else {
+            return nil
+        }
+        return ScaleBar.resolve(
+            scanRangeX: scanRangeX,
+            sourcePixelWidth: file.pixels.width,
+            viewerTransform: transform,
+            availableWidth:
+                visibleImageRect.width - 28
+        )
+    }
 }
 
 private struct ViewerCanvasGeometry: Equatable {
@@ -3948,6 +4004,113 @@ private struct ProbeReadingCard: View {
         .accessibilityValue(
             probeAccessibilitySummary(reading)
         )
+    }
+}
+
+private struct ScreenScaleBar: View {
+    let scaleBar: ScaleBar
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text(scaleBar.label)
+                .font(.caption.weight(.semibold))
+                .monospacedDigit()
+
+            ScaleBarGlyph()
+                .stroke(
+                    Color.black.opacity(0.90),
+                    style: StrokeStyle(
+                        lineWidth: 5,
+                        lineCap: .square,
+                        lineJoin: .miter
+                    )
+                )
+                .overlay {
+                    ScaleBarGlyph()
+                        .stroke(
+                            Color.white,
+                            style: StrokeStyle(
+                                lineWidth: 2,
+                                lineCap: .square,
+                                lineJoin: .miter
+                            )
+                        )
+                }
+                .frame(
+                    width:
+                        CGFloat(
+                            scaleBar.screenLengthPoints
+                        ),
+                    height: 10
+                )
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 7)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(
+                    Color.primary.opacity(0.14),
+                    lineWidth: 1
+                )
+        }
+        .shadow(
+            color: Color.black.opacity(0.18),
+            radius: 4,
+            x: 0,
+            y: 2
+        )
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Scale bar")
+        .accessibilityValue(scaleBar.label)
+    }
+}
+
+private struct ScaleBarGlyph: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let centerY = rect.midY
+        path.move(
+            to: CGPoint(
+                x: rect.minX,
+                y: centerY
+            )
+        )
+        path.addLine(
+            to: CGPoint(
+                x: rect.maxX,
+                y: centerY
+            )
+        )
+        path.move(
+            to: CGPoint(
+                x: rect.minX,
+                y: rect.minY
+            )
+        )
+        path.addLine(
+            to: CGPoint(
+                x: rect.minX,
+                y: rect.maxY
+            )
+        )
+        path.move(
+            to: CGPoint(
+                x: rect.maxX,
+                y: rect.minY
+            )
+        )
+        path.addLine(
+            to: CGPoint(
+                x: rect.maxX,
+                y: rect.maxY
+            )
+        )
+        return path
     }
 }
 
