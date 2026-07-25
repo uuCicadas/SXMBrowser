@@ -58,6 +58,38 @@ swift run -c release SXMBrowserBenchmark \
 输出全部样本和中位数，并在任一中位数超过门槛时返回非零状态。性能门槛仅在
 Apple Silicon、macOS 14+ 的 Release 构建中执行。
 
+## 版本与备份检查点
+
+每个可独立测试和回退的逻辑修改使用一次检查点流程：
+
+```bash
+./scripts/version_checkpoint.command "修改摘要"
+# 运行对应测试，并精确暂存、提交本次逻辑修改
+./scripts/backup_checkpoint.command "已通过的测试摘要"
+```
+
+版本脚本会同时预生成并校验 `Info.plist` 与 `CHANGELOG.md`，确认上一提交已有
+可验证 Bundle 后才发布构建号；重复执行不会再次递增。备份脚本只接受已提交、
+非 detached HEAD、测试摘要非空且清单为标准 TSV 的状态。Bundle 会先在事务
+目录验证，再通过可恢复收据发布；异常中断后重新运行备份脚本会先完成已有事务，
+不会重复创建记录。锁只会自动回收本机上能够确认原进程已退出的记录，其他锁应
+先人工检查，不能直接删除。
+
+旧清单的字面 `\t` 分隔符只通过显式迁移处理：
+
+```bash
+./scripts/migrate_backup_manifest.command --check
+./scripts/migrate_backup_manifest.command --apply
+```
+
+`--check` 只校验并报告，不修改清单；`--apply` 会先在备份根目录永久保存一份
+按原始 SHA-256 命名的逐字节副本，再原子发布标准 TSV。正常备份不会隐式迁移
+旧清单。检查点脚本的临时仓库故障与恢复测试可单独运行：
+
+```bash
+./scripts/tests/checkpoint_workflow_test.command
+```
+
 原生源码在：
 
 ```text
