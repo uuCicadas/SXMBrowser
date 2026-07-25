@@ -1,24 +1,58 @@
 import Foundation
 
-public enum SXMParserError: LocalizedError {
+public enum SXMParserError: LocalizedError, Equatable, Sendable {
     case markerNotFound(URL)
     case missingPixels(URL)
+    case invalidPixels(URL, rawValue: String)
+    case pixelDimensionsOutOfRange(
+        URL,
+        width: Int,
+        height: Int,
+        maximumDimension: Int
+    )
+    case pixelCountOverflow(URL, width: Int, height: Int)
+    case pixelCountExceedsLimit(URL, count: Int, maximumCount: Int)
     case missingChannels(URL)
+    case duplicateChannel(URL, name: String)
+    case missingScanType(URL)
+    case unsupportedScanType(URL, rawValue: String)
+    case dataSizeOverflow(URL, pixelCount: Int, matrixCount: Int)
     case cannotOpen(URL)
-    case shortData(URL)
+    case shortData(URL, expectedBytes: UInt64, availableBytes: UInt64)
 
     public var errorDescription: String? {
         switch self {
         case .markerNotFound(let url): "SXM data marker not found: \(url.lastPathComponent)"
         case .missingPixels(let url): "SCAN_PIXELS not found: \(url.lastPathComponent)"
+        case .invalidPixels(let url, let rawValue):
+            "Invalid SCAN_PIXELS \"\(rawValue)\": \(url.lastPathComponent)"
+        case .pixelDimensionsOutOfRange(let url, let width, let height, let maximumDimension):
+            "SCAN_PIXELS \(width)×\(height) must be within 1...\(maximumDimension): \(url.lastPathComponent)"
+        case .pixelCountOverflow(let url, let width, let height):
+            "SCAN_PIXELS \(width)×\(height) overflows the supported size: \(url.lastPathComponent)"
+        case .pixelCountExceedsLimit(let url, let count, let maximumCount):
+            "SXM has \(count) pixels; maximum is \(maximumCount): \(url.lastPathComponent)"
         case .missingChannels(let url): "DATA_INFO has no channels: \(url.lastPathComponent)"
+        case .duplicateChannel(let url, let name):
+            "DATA_INFO contains duplicate channel \"\(name)\": \(url.lastPathComponent)"
+        case .missingScanType(let url):
+            "SCANIT_TYPE not found: \(url.lastPathComponent)"
+        case .unsupportedScanType(let url, let rawValue):
+            "Unsupported SCANIT_TYPE \"\(rawValue)\": \(url.lastPathComponent)"
+        case .dataSizeOverflow(let url, let pixelCount, let matrixCount):
+            "Matrix byte size overflows for \(pixelCount) pixels × \(matrixCount) matrices: \(url.lastPathComponent)"
         case .cannotOpen(let url): "Cannot open file: \(url.path)"
-        case .shortData(let url): "File ended before all matrices were read: \(url.lastPathComponent)"
+        case .shortData(let url, let expectedBytes, let availableBytes):
+            "File has \(availableBytes) matrix bytes; expected \(expectedBytes): \(url.lastPathComponent)"
         }
     }
 }
 
 private let dataMarker = Data([0x1a, 0x04])
+
+private enum SXMStorageEncoding {
+    case float32MSBFirst
+}
 
 struct ChannelSpec: Sendable {
     let name: String
@@ -27,6 +61,10 @@ struct ChannelSpec: Sendable {
 }
 
 public final class SXMParser: Sendable {
+    public static let maximumPixelDimension = 16_384
+    public static let maximumPixelCount = 64 * 1024 * 1024
+    private static let bytesPerSample = 4
+
     public init() {}
 
     public func scanFolder(_ folder: URL) throws -> [SXMMetadata] {
@@ -50,43 +88,70 @@ public final class SXMParser: Sendable {
 
     public func loadMetadata(_ url: URL) throws -> SXMMetadata {
         let headerRead = try readHeader(url)
-        let header = parseHeader(headerRead.text)
-        return try metadata(from: url, header: header, specs: parseDataInfo(header["DATA_INFO"] ?? ""))
+        return try metadata(
+            from: url,
+            header: headerRead.header,
+            specs: parseDataInfo(headerRead.header["DATA_INFO"] ?? "")
+        )
     }
 
     public func loadFullFile(_ metadata: SXMMetadata) throws -> SXMFullFile {
         let headerRead = try readHeader(metadata.path)
         let specs = parseDataInfo(headerRead.header["DATA_INFO"] ?? "")
+        let currentMetadata = try self.metadata(
+            from: metadata.path,
+            header: headerRead.header,
+            specs: specs,
+            id: metadata.id
+        )
+        let encoding = try storageEncoding(
+            headerRead.header["SCANIT_TYPE"],
+            url: metadata.path
+        )
         let matrices = try readMatrices(
             url: metadata.path,
             offset: headerRead.bodyOffset,
-            width: metadata.pixels.width,
-            height: metadata.pixels.height,
-            specs: specs
+            width: currentMetadata.pixels.width,
+            height: currentMetadata.pixels.height,
+            specs: specs,
+            encoding: encoding
         )
         let channels = channelsFromSpecs(specs, matrices: matrices)
         let refreshed = SXMMetadata(
             id: metadata.id,
             path: metadata.path,
             filename: metadata.filename,
-            header: metadata.header,
-            recordedTime: metadata.recordedTime,
-            modifiedTime: metadata.modifiedTime,
-            pixels: metadata.pixels,
-            scanRange: metadata.scanRange,
-            scanOffset: metadata.scanOffset,
-            scanAngle: metadata.scanAngle,
-            scanDir: metadata.scanDir,
-            zControllerOn: metadata.zControllerOn,
+            header: currentMetadata.header,
+            recordedTime: currentMetadata.recordedTime,
+            modifiedTime: currentMetadata.modifiedTime,
+            pixels: currentMetadata.pixels,
+            scanRange: currentMetadata.scanRange,
+            scanOffset: currentMetadata.scanOffset,
+            scanAngle: currentMetadata.scanAngle,
+            scanDir: currentMetadata.scanDir,
+            zControllerOn: currentMetadata.zControllerOn,
             channels: channels,
-            defaultChannel: chooseDefaultChannel(channels, zControllerOn: metadata.zControllerOn)
+            defaultChannel: chooseDefaultChannel(
+                channels,
+                zControllerOn: currentMetadata.zControllerOn
+            )
         )
         return SXMFullFile(metadata: refreshed, matrices: matrices)
     }
 
-    private func metadata(from url: URL, header: [String: String], specs: [ChannelSpec]) throws -> SXMMetadata {
-        guard let pixels = parsePixels(header["SCAN_PIXELS"]) else { throw SXMParserError.missingPixels(url) }
+    private func metadata(
+        from url: URL,
+        header: [String: String],
+        specs: [ChannelSpec],
+        id: UUID = UUID()
+    ) throws -> SXMMetadata {
+        let pixels = try parsePixels(header["SCAN_PIXELS"], url: url)
         guard !specs.isEmpty else { throw SXMParserError.missingChannels(url) }
+        var channelNames: Set<String> = []
+        for spec in specs where !channelNames.insert(spec.name).inserted {
+            throw SXMParserError.duplicateChannel(url, name: spec.name)
+        }
+        _ = try storageEncoding(header["SCANIT_TYPE"], url: url)
 
         let resourceValues = try? url.resourceValues(forKeys: [.contentModificationDateKey])
         let modifiedTime = resourceValues?.contentModificationDate ?? Date.distantPast
@@ -94,6 +159,7 @@ public final class SXMParser: Sendable {
         let channels = channelsFromSpecs(specs, matrices: nil)
 
         return SXMMetadata(
+            id: id,
             path: url,
             filename: url.lastPathComponent,
             header: header,
@@ -140,33 +206,96 @@ public final class SXMParser: Sendable {
         offset: UInt64,
         width: Int,
         height: Int,
-        specs: [ChannelSpec]
+        specs: [ChannelSpec],
+        encoding: SXMStorageEncoding
     ) throws -> [MatrixKey: Matrix] {
         guard let handle = try? FileHandle(forReadingFrom: url) else {
             throw SXMParserError.cannotOpen(url)
         }
         defer { try? handle.close() }
+
+        let (itemCount, pixelOverflow) = width.multipliedReportingOverflow(by: height)
+        guard !pixelOverflow else {
+            throw SXMParserError.pixelCountOverflow(
+                url,
+                width: width,
+                height: height
+            )
+        }
+        let (byteCount, matrixByteOverflow) = itemCount.multipliedReportingOverflow(
+            by: Self.bytesPerSample
+        )
+        guard !matrixByteOverflow else {
+            throw SXMParserError.dataSizeOverflow(
+                url,
+                pixelCount: itemCount,
+                matrixCount: 1
+            )
+        }
+
+        var matrixCount = 0
+        for spec in specs {
+            let (nextCount, overflowed) = matrixCount.addingReportingOverflow(
+                spec.directions.count
+            )
+            guard !overflowed else {
+                throw SXMParserError.dataSizeOverflow(
+                    url,
+                    pixelCount: itemCount,
+                    matrixCount: matrixCount
+                )
+            }
+            matrixCount = nextCount
+        }
+        let (expectedPayloadBytes, payloadOverflow) = byteCount
+            .multipliedReportingOverflow(by: matrixCount)
+        guard !payloadOverflow else {
+            throw SXMParserError.dataSizeOverflow(
+                url,
+                pixelCount: itemCount,
+                matrixCount: matrixCount
+            )
+        }
+
+        let fileLength = try handle.seekToEnd()
+        let availablePayloadBytes = fileLength >= offset ? fileLength - offset : 0
+        let expectedPayloadBytes64 = UInt64(expectedPayloadBytes)
+        guard availablePayloadBytes >= expectedPayloadBytes64 else {
+            throw SXMParserError.shortData(
+                url,
+                expectedBytes: expectedPayloadBytes64,
+                availableBytes: availablePayloadBytes
+            )
+        }
         try handle.seek(toOffset: offset)
 
-        let itemCount = width * height
-        let byteCount = itemCount * 4
         var matrices: [MatrixKey: Matrix] = [:]
+        var consumedPayloadBytes = 0
 
         for spec in specs {
             for direction in spec.directions {
-                let chunk = try handle.read(upToCount: byteCount) ?? Data()
+                let chunk = try readExactly(handle, count: byteCount)
                 if chunk.count < byteCount {
-                    throw SXMParserError.shortData(url)
+                    throw SXMParserError.shortData(
+                        url,
+                        expectedBytes: expectedPayloadBytes64,
+                        availableBytes: UInt64(consumedPayloadBytes + chunk.count)
+                    )
                 }
+                consumedPayloadBytes += chunk.count
                 var values = [Float](repeating: 0, count: itemCount)
                 chunk.withUnsafeBytes { rawBuffer in
                     guard let bytes = rawBuffer.bindMemory(to: UInt8.self).baseAddress else { return }
                     for idx in 0..<itemCount {
                         let j = idx * 4
-                        let bits = (UInt32(bytes[j]) << 24)
-                            | (UInt32(bytes[j + 1]) << 16)
-                            | (UInt32(bytes[j + 2]) << 8)
-                            | UInt32(bytes[j + 3])
+                        let bits: UInt32
+                        switch encoding {
+                        case .float32MSBFirst:
+                            bits = (UInt32(bytes[j]) << 24)
+                                | (UInt32(bytes[j + 1]) << 16)
+                                | (UInt32(bytes[j + 2]) << 8)
+                                | UInt32(bytes[j + 3])
+                        }
                         values[idx] = Float(bitPattern: bits)
                     }
                 }
@@ -177,6 +306,17 @@ public final class SXMParser: Sendable {
             }
         }
         return matrices
+    }
+
+    private func readExactly(_ handle: FileHandle, count: Int) throws -> Data {
+        var output = Data()
+        output.reserveCapacity(count)
+        while output.count < count {
+            let chunk = try handle.read(upToCount: count - output.count) ?? Data()
+            guard !chunk.isEmpty else { break }
+            output.append(chunk)
+        }
+        return output
     }
 }
 
@@ -278,11 +418,60 @@ private func directions(for value: String) -> [ScanDirection] {
     return [.fwd]
 }
 
-private func parsePixels(_ value: String?) -> (width: Int, height: Int)? {
-    guard let value else { return nil }
+private func parsePixels(
+    _ value: String?,
+    url: URL
+) throws -> (width: Int, height: Int) {
+    guard let value else { throw SXMParserError.missingPixels(url) }
     let parts = value.split(whereSeparator: \.isWhitespace)
-    guard parts.count >= 2, let w = Double(parts[0]), let h = Double(parts[1]) else { return nil }
-    return (Int(w), Int(h))
+    guard parts.count == 2,
+          let width = Int(parts[0]),
+          let height = Int(parts[1]) else {
+        throw SXMParserError.invalidPixels(url, rawValue: value)
+    }
+
+    let (pixelCount, overflowed) = width.multipliedReportingOverflow(by: height)
+    guard !overflowed else {
+        throw SXMParserError.pixelCountOverflow(
+            url,
+            width: width,
+            height: height
+        )
+    }
+    guard (1...SXMParser.maximumPixelDimension).contains(width),
+          (1...SXMParser.maximumPixelDimension).contains(height) else {
+        throw SXMParserError.pixelDimensionsOutOfRange(
+            url,
+            width: width,
+            height: height,
+            maximumDimension: SXMParser.maximumPixelDimension
+        )
+    }
+    guard pixelCount <= SXMParser.maximumPixelCount else {
+        throw SXMParserError.pixelCountExceedsLimit(
+            url,
+            count: pixelCount,
+            maximumCount: SXMParser.maximumPixelCount
+        )
+    }
+    return (width, height)
+}
+
+private func storageEncoding(
+    _ value: String?,
+    url: URL
+) throws -> SXMStorageEncoding {
+    guard let value,
+          !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        throw SXMParserError.missingScanType(url)
+    }
+    let tokens = value
+        .split(whereSeparator: \.isWhitespace)
+        .map { $0.uppercased() }
+    guard tokens == ["FLOAT", "MSBFIRST"] else {
+        throw SXMParserError.unsupportedScanType(url, rawValue: value)
+    }
+    return .float32MSBFirst
 }
 
 private func parseFloatPair(_ value: String?) -> (x: Double, y: Double)? {
