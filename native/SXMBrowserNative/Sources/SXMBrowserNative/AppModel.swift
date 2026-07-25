@@ -157,7 +157,7 @@ final class AppModel: ObservableObject {
 
     private struct DatasetMetadataPreparation {
         let record: DatasetRecordV1?
-        let warning: String?
+        let warnings: MetadataWarningCollection
     }
 
     private enum MissingActiveTagResolution {
@@ -205,7 +205,8 @@ final class AppModel: ObservableObject {
     @Published var isLoading = false
     @Published var status = "Choose a folder with .sxm files."
     @Published private(set) var scanIssues: [ScanIssue] = []
-    @Published private(set) var metadataWarning: String?
+    @Published private(set) var metadataWarnings =
+        MetadataWarningPresentationState()
     @Published private(set) var activeDatasetSession:
         ActiveDatasetSession?
     @Published private(set) var tags: [DatasetTagV1] = []
@@ -363,6 +364,33 @@ final class AppModel: ObservableObject {
             return false
         }
         return true
+    }
+
+    var metadataWarning: String? {
+        metadataWarnings.collection.isEmpty
+            ? nil
+            : metadataWarnings.collection.detailText
+    }
+
+    var shouldPresentMetadataWarning: Bool {
+        metadataWarnings.isPresented
+    }
+
+    var metadataWarningSummary: String {
+        let collection = metadataWarnings.collection
+        guard collection.count > 1 else {
+            return collection.messages.first ?? ""
+        }
+        return
+            "\(collection.count) metadata issues require attention."
+    }
+
+    var canRetryMetadataWarning: Bool {
+        folder != nil
+            && !isLoading
+            && !isMetadataMutationInFlight
+            && !isMetadataTransferInFlight
+            && canOpenFolder
     }
 
     var presentedSpectrumAxisRestoreIssues:
@@ -941,6 +969,48 @@ final class AppModel: ObservableObject {
         cancelMetadataTransfer(clearImportWorkflow: true)
     }
 
+    func dismissMetadataWarning() {
+        var next = metadataWarnings
+        next.dismiss()
+        metadataWarnings = next
+    }
+
+    func retryMetadataWarning() {
+        guard canRetryMetadataWarning,
+              let folderURL = folder else {
+            return
+        }
+        let selectedPath = selectedFile?.path
+        status = "Retrying metadata setup..."
+        openFolder(folderURL, selecting: selectedPath)
+    }
+
+    func showMetadataWarningDetails() {
+        let messages = metadataWarnings.collection.messages
+        guard !messages.isEmpty else { return }
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = messages.count == 1
+            ? "Metadata warning"
+            : "\(messages.count) metadata warnings"
+        alert.informativeText =
+            "Image browsing remains available. Some metadata features "
+            + "may be limited until these issues are resolved."
+        let details = messages.enumerated().map { index, message in
+            "\(index + 1). \(message)"
+        }
+        let lineCount = details.reduce(0) { count, detail in
+            count + max(1, detail.split(separator: "\n").count)
+        }
+        alert.accessoryView = fileListAccessoryView(
+            details.joined(separator: "\n\n"),
+            lineCount: lineCount
+        )
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
     func showScanIssues() {
         guard !scanIssues.isEmpty else { return }
         let alert = NSAlert()
@@ -998,7 +1068,8 @@ final class AppModel: ObservableObject {
         selecting selectedPath: URL? = nil,
         preferredDatasetID: UUID? = nil,
         existingBookmark: Data? = nil,
-        initialMetadataWarning: String? = nil
+        initialMetadataWarnings: MetadataWarningCollection =
+            MetadataWarningCollection()
     ) {
         scanTask?.cancel()
         cancelMetadataTransfer(clearImportWorkflow: true)
@@ -1021,7 +1092,7 @@ final class AppModel: ObservableObject {
         )
         isLoading = true
         status = "Scanning folder..."
-        metadataWarning = initialMetadataWarning
+        resetMetadataWarnings(to: initialMetadataWarnings)
         activeDatasetSession = nil
         tags = []
         activeTagID = nil
@@ -1060,7 +1131,7 @@ final class AppModel: ObservableObject {
                     for: openedURL,
                     preferredDatasetID: preferredDatasetID,
                     existingBookmark: existingBookmark,
-                    initialWarning: initialMetadataWarning
+                    initialWarnings: initialMetadataWarnings
                 )
             } catch is CancellationError {
                 return
@@ -1070,13 +1141,14 @@ final class AppModel: ObservableObject {
                 ) else {
                     return
                 }
+                var warnings = initialMetadataWarnings
+                warnings.append(
+                    "Metadata preparation failed: "
+                        + error.localizedDescription
+                )
                 metadataPreparation = DatasetMetadataPreparation(
                     record: nil,
-                    warning: Self.appendingMetadataWarning(
-                        initialMetadataWarning,
-                        "Metadata preparation failed: "
-                            + error.localizedDescription
-                    )
+                    warnings: warnings
                 )
             }
             guard !Task.isCancelled,
@@ -1085,7 +1157,7 @@ final class AppModel: ObservableObject {
                   ) else {
                 return
             }
-            metadataWarning = metadataPreparation.warning
+            mergeMetadataWarnings(metadataPreparation.warnings)
 
             do {
                 let parser = self.parser
@@ -1129,8 +1201,7 @@ final class AppModel: ObservableObject {
                         activeTagID = nil
                         expandedTagIDs = []
                         sidebarMode = .all
-                        metadataWarning = Self.appendingMetadataWarning(
-                            metadataPreparation.warning,
+                        appendMetadataWarning(
                             "Metadata session is unavailable: "
                                 + error.localizedDescription
                         )
@@ -1194,9 +1265,9 @@ final class AppModel: ObservableObject {
         for folderURL: URL,
         preferredDatasetID: UUID?,
         existingBookmark: Data?,
-        initialWarning: String?
+        initialWarnings: MetadataWarningCollection
     ) async throws -> DatasetMetadataPreparation {
-        var warning = initialWarning
+        var warnings = initialWarnings
         var bookmark = existingBookmark
 
         let migrationReport = await legacyTagMigrator.migrateIfNeeded()
@@ -1207,10 +1278,7 @@ final class AppModel: ObservableObject {
             if !migrationReport.issues.isEmpty {
                 migrationMessage += " Issues: \(migrationReport.issues.count)."
             }
-            warning = Self.appendingMetadataWarning(
-                warning,
-                migrationMessage
-            )
+            warnings.append(migrationMessage)
         }
         try Task.checkCancellation()
 
@@ -1220,8 +1288,7 @@ final class AppModel: ObservableObject {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                warning = Self.appendingMetadataWarning(
-                    warning,
+                warnings.append(
                     "Folder access could not be saved: "
                         + error.localizedDescription
                 )
@@ -1246,24 +1313,24 @@ final class AppModel: ObservableObject {
             try Task.checkCancellation()
             return DatasetMetadataPreparation(
                 record: record,
-                warning: warning
+                warnings: warnings
             )
         } catch is CancellationError {
             throw CancellationError()
         } catch {
+            warnings.append(
+                "Metadata is read-only for this folder: "
+                    + error.localizedDescription
+            )
             return DatasetMetadataPreparation(
                 record: nil,
-                warning: Self.appendingMetadataWarning(
-                    warning,
-                    "Metadata is read-only for this folder: "
-                        + error.localizedDescription
-                )
+                warnings: warnings
             )
         }
     }
 
     private func restoreStartupFolder(requestID: UUID) async {
-        var warning: String?
+        var warnings = MetadataWarningCollection()
 
         do {
             if let record = try await metadataStore.lastOpenedDataset() {
@@ -1290,27 +1357,22 @@ final class AppModel: ObservableObject {
                                             ) {
                                             bookmark = refreshed
                                         } else {
-                                            warning = Self
-                                                .appendingMetadataWarning(
-                                                    warning,
-                                                    "The stored folder "
-                                                        + "bookmark is stale "
-                                                        + "and could not be "
-                                                        + "refreshed."
-                                                )
+                                            warnings.append(
+                                                "The stored folder "
+                                                    + "bookmark is stale "
+                                                    + "and could not be "
+                                                    + "refreshed."
+                                            )
                                         }
                                     } catch is CancellationError {
                                         return
                                     } catch {
-                                        warning = Self
-                                            .appendingMetadataWarning(
-                                                warning,
-                                                "The stored folder bookmark "
-                                                    + "is stale and could not "
-                                                    + "be refreshed: "
-                                                    + error
-                                                        .localizedDescription
-                                            )
+                                        warnings.append(
+                                            "The stored folder bookmark "
+                                                + "is stale and could not "
+                                                + "be refreshed: "
+                                                + error.localizedDescription
+                                        )
                                     }
                                 }
                                 guard startupRequestIsCurrent(requestID) else {
@@ -1321,18 +1383,16 @@ final class AppModel: ObservableObject {
                                     requestID: requestID,
                                     datasetID: record.id,
                                     bookmark: bookmark,
-                                    warning: warning
+                                    warnings: warnings
                                 )
                                 return
                             }
-                            warning = Self.appendingMetadataWarning(
-                                warning,
+                            warnings.append(
                                 "The stored folder bookmark points to an "
                                     + "unavailable directory."
                             )
                         } else {
-                            warning = Self.appendingMetadataWarning(
-                                warning,
+                            warnings.append(
                                 "The stored folder bookmark could not be "
                                     + "resolved."
                             )
@@ -1340,8 +1400,7 @@ final class AppModel: ObservableObject {
                     } catch is CancellationError {
                         return
                     } catch {
-                        warning = Self.appendingMetadataWarning(
-                            warning,
+                        warnings.append(
                             "The stored folder bookmark could not be "
                                 + "resolved: "
                                 + error.localizedDescription
@@ -1364,7 +1423,7 @@ final class AppModel: ObservableObject {
                         requestID: requestID,
                         datasetID: record.id,
                         bookmark: nil,
-                        warning: warning
+                        warnings: warnings
                     )
                     return
                 }
@@ -1372,8 +1431,7 @@ final class AppModel: ObservableObject {
         } catch is CancellationError {
             return
         } catch {
-            warning = Self.appendingMetadataWarning(
-                warning,
+            warnings.append(
                 "Saved dataset metadata could not be loaded: "
                     + error.localizedDescription
             )
@@ -1391,7 +1449,7 @@ final class AppModel: ObservableObject {
             openStartupFolderCandidate(
                 savedFolder,
                 requestID: requestID,
-                warning: warning
+                warnings: warnings
             )
             return
         }
@@ -1400,14 +1458,14 @@ final class AppModel: ObservableObject {
             openStartupFolderCandidate(
                 exampleFolder,
                 requestID: requestID,
-                warning: warning
+                warnings: warnings
             )
             return
         }
 
         startupRequestID = nil
         startupTask = nil
-        metadataWarning = warning
+        resetMetadataWarnings(to: warnings)
     }
 
     private func openStartupFolderCandidate(
@@ -1415,7 +1473,7 @@ final class AppModel: ObservableObject {
         requestID: UUID,
         datasetID: UUID? = nil,
         bookmark: Data? = nil,
-        warning: String?
+        warnings: MetadataWarningCollection
     ) {
         guard startupRequestIsCurrent(requestID) else { return }
         startupRequestID = nil
@@ -1424,7 +1482,7 @@ final class AppModel: ObservableObject {
             folderURL,
             preferredDatasetID: datasetID,
             existingBookmark: bookmark,
-            initialMetadataWarning: warning
+            initialMetadataWarnings: warnings
         )
     }
 
@@ -1514,13 +1572,29 @@ final class AppModel: ObservableObject {
         self.securityScopedFolderURL = nil
     }
 
-    private static func appendingMetadataWarning(
-        _ existing: String?,
-        _ message: String
-    ) -> String {
-        guard let existing, !existing.isEmpty else { return message }
-        guard existing != message else { return existing }
-        return "\(existing)\n\(message)"
+    private func resetMetadataWarnings(
+        to collection: MetadataWarningCollection =
+            MetadataWarningCollection()
+    ) {
+        metadataWarnings = MetadataWarningPresentationState(
+            collection: collection
+        )
+    }
+
+    private func mergeMetadataWarnings(
+        _ collection: MetadataWarningCollection
+    ) {
+        var next = metadataWarnings
+        for message in collection.messages {
+            _ = next.append(message)
+        }
+        metadataWarnings = next
+    }
+
+    private func appendMetadataWarning(_ message: String?) {
+        var next = metadataWarnings
+        guard next.append(message) else { return }
+        metadataWarnings = next
     }
 
     private func metadataExportFilename(for folderURL: URL) -> String {

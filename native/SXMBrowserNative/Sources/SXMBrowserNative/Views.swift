@@ -24,50 +24,67 @@ struct ContentView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            if model.isSidebarVisible {
-                SidebarView(model: model)
-                    .frame(width: liveSidebarWidth)
-                    .clipped()
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-                SplitHandle(
-                    width: $liveSidebarWidth,
-                    range: AppModel.sidebarWidthRange,
-                    defaultWidth: AppModel.defaultSidebarWidth,
-                    edge: .leading,
-                    onEditingChanged: { isResizingSplit = $0 },
-                    onCommit: {
-                        model.sidebarWidth = liveSidebarWidth
-                        model.saveLayoutWidths()
-                    }
-                )
+        VStack(spacing: 0) {
+            if model.shouldPresentMetadataWarning {
+                MetadataWarningStrip(model: model)
+                    .transition(
+                        .move(edge: .top).combined(with: .opacity)
+                    )
             }
 
-            MainImageView(model: model)
-                .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+            HStack(spacing: 0) {
+                if model.isSidebarVisible {
+                    SidebarView(model: model)
+                        .frame(width: liveSidebarWidth)
+                        .clipped()
+                        .transition(
+                            .move(edge: .leading).combined(with: .opacity)
+                        )
+                    SplitHandle(
+                        width: $liveSidebarWidth,
+                        range: AppModel.sidebarWidthRange,
+                        defaultWidth: AppModel.defaultSidebarWidth,
+                        edge: .leading,
+                        onEditingChanged: { isResizingSplit = $0 },
+                        onCommit: {
+                            model.sidebarWidth = liveSidebarWidth
+                            model.saveLayoutWidths()
+                        }
+                    )
+                }
 
-            if model.isInspectorVisible {
-                SplitHandle(
-                    width: $liveInspectorWidth,
-                    range: AppModel.inspectorWidthRange,
-                    defaultWidth: AppModel.defaultInspectorWidth,
-                    edge: .trailing,
-                    onEditingChanged: { isResizingSplit = $0 },
-                    onCommit: {
-                        model.inspectorWidth = liveInspectorWidth
-                        model.saveLayoutWidths()
-                    }
-                )
-                InspectorView(model: model)
-                    .frame(width: liveInspectorWidth)
-                    .clipped()
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                MainImageView(model: model)
+                    .frame(
+                        minWidth: 0,
+                        maxWidth: .infinity,
+                        maxHeight: .infinity
+                    )
+
+                if model.isInspectorVisible {
+                    SplitHandle(
+                        width: $liveInspectorWidth,
+                        range: AppModel.inspectorWidthRange,
+                        defaultWidth: AppModel.defaultInspectorWidth,
+                        edge: .trailing,
+                        onEditingChanged: { isResizingSplit = $0 },
+                        onCommit: {
+                            model.inspectorWidth = liveInspectorWidth
+                            model.saveLayoutWidths()
+                        }
+                    )
+                    InspectorView(model: model)
+                        .frame(width: liveInspectorWidth)
+                        .clipped()
+                        .transition(
+                            .move(edge: .trailing).combined(with: .opacity)
+                        )
+                }
             }
-        }
-        .transaction { transaction in
-            if isResizingSplit {
-                transaction.animation = nil
-                transaction.disablesAnimations = true
+            .transaction { transaction in
+                if isResizingSplit {
+                    transaction.animation = nil
+                    transaction.disablesAnimations = true
+                }
             }
         }
         .background(AppTheme.page)
@@ -169,6 +186,96 @@ struct ContentView: View {
             }
         }
         return true
+    }
+}
+
+private struct MetadataWarningStrip: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(warningAccent)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Metadata Features Are Limited")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(model.metadataWarningSummary)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Metadata warning")
+            .accessibilityValue(model.metadataWarningSummary)
+
+            Button("Details") {
+                model.showMetadataWarningDetails()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Show every metadata warning")
+            .accessibilityHint(
+                "Opens a list of all metadata issues for this dataset."
+            )
+
+            Button("Retry") {
+                model.retryMetadataWarning()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!model.canRetryMetadataWarning)
+            .help(
+                model.canRetryMetadataWarning
+                    ? "Retry metadata setup for the current folder"
+                    : "Retry is available after the current operation finishes"
+            )
+            .accessibilityHint(
+                "Retries metadata setup without changing the selected file."
+            )
+
+            Button {
+                model.dismissMetadataWarning()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.borderless)
+            .help("Dismiss metadata warning")
+            .accessibilityLabel("Dismiss metadata warning")
+            .accessibilityHint(
+                "Hides this warning until a new metadata issue is reported."
+            )
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background(AppTheme.sidebar)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(warningAccent)
+                .frame(width: contrast == .increased ? 5 : 4)
+                .accessibilityHidden(true)
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(AppTheme.separator)
+                .frame(height: contrast == .increased ? 2 : 1)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var warningAccent: Color {
+        contrast == .increased ? .primary : .orange
     }
 }
 
