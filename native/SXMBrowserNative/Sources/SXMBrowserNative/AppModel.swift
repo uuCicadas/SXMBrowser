@@ -221,9 +221,15 @@ final class AppModel: ObservableObject {
             }
         }
     }
-    @Published var gridColumns: Int = AppModel.loadInt(Defaults.gridColumns, fallback: 3, range: 2...8) {
-        didSet { UserDefaults.standard.set(gridColumns, forKey: Defaults.gridColumns) }
+    @Published var gridDensity = AppModel.loadGridDensity() {
+        didSet {
+            UserDefaults.standard.set(
+                gridDensity.rawValue,
+                forKey: Defaults.gridDensity
+            )
+        }
     }
+    @Published private(set) var gridNavigationColumnCount = 1
     @Published var scaleLocked = false
     @Published var scaleMin: Double?
     @Published var scaleMax: Double?
@@ -598,6 +604,14 @@ final class AppModel: ObservableObject {
     func saveLayoutWidths() {
         UserDefaults.standard.set(Double(sidebarWidth), forKey: Defaults.sidebarWidth)
         UserDefaults.standard.set(Double(inspectorWidth), forKey: Defaults.inspectorWidth)
+    }
+
+    func setGridNavigationColumnCount(_ value: Int) {
+        let normalized = max(1, value)
+        guard gridNavigationColumnCount != normalized else {
+            return
+        }
+        gridNavigationColumnCount = normalized
     }
 
     func openStartupFolder() {
@@ -1953,18 +1967,25 @@ final class AppModel: ObservableObject {
                 stepSelection(1)
             }
         case .grid:
+            let gridDirection: GridNavigationDirection
             switch direction {
             case .left:
-                stepSelection(-1)
+                gridDirection = .left
             case .right:
-                stepSelection(1)
+                gridDirection = .right
             case .up:
-                stepSelection(-gridColumns)
+                gridDirection = .up
             case .down:
-                stepSelection(gridColumns)
+                gridDirection = .down
             default:
-                break
+                return
             }
+            stepSelection(
+                AdaptiveGridNavigation.selectionDelta(
+                    for: gridDirection,
+                    columnCount: gridNavigationColumnCount
+                )
+            )
         }
     }
 
@@ -3733,6 +3754,7 @@ final class AppModel: ObservableObject {
         static let inspectorVisible = "native.inspectorVisible"
         static let lastFolder = "native.lastFolder"
         static let histogramBins = "native.histogramBins"
+        static let gridDensity = "native.gridDensity"
         static let gridColumns = "native.gridColumns"
         static let expandedTagIDsByDataset =
             "native.expandedTagIDsByDataset"
@@ -3744,6 +3766,31 @@ final class AppModel: ObservableObject {
             return mode
         }
         return .name
+    }
+
+    private static func loadGridDensity() -> GridDensity {
+        if let rawValue = UserDefaults.standard.string(
+            forKey: Defaults.gridDensity
+        ),
+           let density = GridDensity(rawValue: rawValue) {
+            return density
+        }
+
+        guard UserDefaults.standard.object(
+            forKey: Defaults.gridColumns
+        ) != nil else {
+            return .comfortable
+        }
+        let density = GridDensity.migrating(
+            legacyColumnCount: UserDefaults.standard.integer(
+                forKey: Defaults.gridColumns
+            )
+        )
+        UserDefaults.standard.set(
+            density.rawValue,
+            forKey: Defaults.gridDensity
+        )
+        return density
     }
 
     private static func loadCGFloat(_ key: String, fallback: CGFloat, range: ClosedRange<CGFloat>) -> CGFloat {

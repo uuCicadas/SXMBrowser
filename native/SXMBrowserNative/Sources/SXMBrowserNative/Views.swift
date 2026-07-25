@@ -1838,26 +1838,20 @@ final class KeyboardArrowCatcherView: NSView {
 struct GridDensityControl: View {
     @ObservedObject var model: AppModel
 
-    private var columnsBinding: Binding<Double> {
-        Binding(
-            get: { Double(model.gridColumns) },
-            set: { model.gridColumns = min(8, max(2, Int($0.rounded()))) }
-        )
-    }
-
     var body: some View {
         HStack(spacing: 7) {
             Image(systemName: "square.grid.3x3")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
 
-            Slider(value: columnsBinding, in: 2...8, step: 1)
-                .frame(width: 104)
-
-            Text("\(model.gridColumns)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 18, alignment: .trailing)
+            Picker("Grid density", selection: $model.gridDensity) {
+                ForEach(GridDensity.allCases) { density in
+                    Text(density.label).tag(density)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(width: 112)
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 5)
@@ -1865,7 +1859,7 @@ struct GridDensityControl: View {
             Capsule()
                 .fill(AppTheme.subtleFill.opacity(0.9))
         )
-        .help("Images per row")
+        .help("Grid density")
     }
 }
 
@@ -1874,52 +1868,88 @@ struct GridBrowserView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        ZStack {
-            AppTheme.gridStage(for: colorScheme)
+        GeometryReader { geometry in
+            let metrics = AdaptiveGridMetrics(
+                containerWidth: Double(geometry.size.width),
+                density: model.gridDensity
+            )
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVGrid(columns: columns, spacing: 16) {
-                        ForEach(model.visibleDisplayItems) { item in
-                            switch item {
-                            case .sxm(let file):
-                                ThumbnailCard(model: model, file: file)
+            ZStack {
+                AppTheme.gridStage(for: colorScheme)
+
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVGrid(
+                            columns: columns(for: metrics),
+                            spacing: 16
+                        ) {
+                            ForEach(model.visibleDisplayItems) { item in
+                                switch item {
+                                case .sxm(let file):
+                                    ThumbnailCard(
+                                        model: model,
+                                        file: file
+                                    )
                                     .id(item.id)
-                            case .spectroscopy(let group):
-                                SpectroscopyPlotCard(model: model, group: group)
+                                case .spectroscopy(let group):
+                                    SpectroscopyPlotCard(
+                                        model: model,
+                                        group: group
+                                    )
                                     .id(item.id)
+                                }
                             }
                         }
+                        .padding(
+                            CGFloat(metrics.horizontalPadding)
+                        )
                     }
-                    .padding(18)
-                }
-                .background(AppTheme.gridStage(for: colorScheme))
-                .scrollContentBackground(.hidden)
-                .onAppear {
-                    scrollToSelection(with: proxy)
-                }
-                .onChange(of: model.selectedID) { _, _ in
-                    scrollToSelection(with: proxy)
-                }
-                .onChange(of: model.sortMode) { _, _ in
-                    scrollToSelection(with: proxy)
-                }
-                .onChange(of: model.sortAscending) { _, _ in
-                    scrollToSelection(with: proxy)
-                }
-                .onChange(of: model.gridColumns) { _, _ in
-                    scrollToSelection(with: proxy)
-                }
-                .onChange(of: model.activeTagID) { _, _ in
-                    scrollToSelection(with: proxy)
+                    .background(AppTheme.gridStage(for: colorScheme))
+                    .scrollContentBackground(.hidden)
+                    .onAppear {
+                        model.setGridNavigationColumnCount(
+                            metrics.columnCount
+                        )
+                        scrollToSelection(with: proxy)
+                    }
+                    .onChange(of: metrics.columnCount) { _, newCount in
+                        model.setGridNavigationColumnCount(newCount)
+                        scrollToSelection(with: proxy)
+                    }
+                    .onChange(of: model.selectedID) { _, _ in
+                        scrollToSelection(with: proxy)
+                    }
+                    .onChange(of: model.sortMode) { _, _ in
+                        scrollToSelection(with: proxy)
+                    }
+                    .onChange(of: model.sortAscending) { _, _ in
+                        scrollToSelection(with: proxy)
+                    }
+                    .onChange(of: model.gridDensity) { _, _ in
+                        scrollToSelection(with: proxy)
+                    }
+                    .onChange(of: model.activeTagID) { _, _ in
+                        scrollToSelection(with: proxy)
+                    }
                 }
             }
+            .background(AppTheme.gridStage(for: colorScheme))
         }
         .background(AppTheme.gridStage(for: colorScheme))
     }
 
-    private var columns: [GridItem] {
-        Array(repeating: GridItem(.flexible(minimum: 96), spacing: 14), count: model.gridColumns)
+    private func columns(
+        for metrics: AdaptiveGridMetrics
+    ) -> [GridItem] {
+        Array(
+            repeating: GridItem(
+                .flexible(
+                    minimum: CGFloat(metrics.minimumCardWidth)
+                ),
+                spacing: CGFloat(metrics.spacing)
+            ),
+            count: metrics.columnCount
+        )
     }
 
     private func scrollToSelection(with proxy: ScrollViewProxy) {
@@ -1931,6 +1961,19 @@ struct GridBrowserView: View {
             withTransaction(transaction) {
                 proxy.scrollTo(targetID, anchor: .center)
             }
+        }
+    }
+}
+
+private extension GridDensity {
+    var label: String {
+        switch self {
+        case .compact:
+            "Compact"
+        case .comfortable:
+            "Comfortable"
+        case .large:
+            "Large"
         }
     }
 }
