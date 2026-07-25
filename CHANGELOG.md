@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 50 (2026-07-25): 新增阶段二严格一键验收入口
 - Build 49 (2026-07-25): 建立可复现的 500×512 Apple Silicon 性能门禁
 - Build 48 (2026-07-25): enforce the canonical six SXM and eighteen DAT smoke contract
 - Build 47 (2026-07-25): route app rendering through the shared coordinator

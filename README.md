@@ -16,6 +16,17 @@ open "./SXM Browser.app"
 ./scripts/build_native_app.command
 ```
 
+阶段二完整验收使用单一入口：
+
+```bash
+./scripts/validate_stage2.command \
+  --sample-dir "/path/to/example-graph"
+```
+
+不传参数时只会检查仓库父目录中的 `example-graph`，不会回退到其他样例目录。
+该入口依次执行平台检查、全量测试、Debug 与 Release/App 构建、App 包检查、
+标准样例 Smoke，以及固定 500 个 512×512 文件的性能门槛；任一步失败都会返回非零状态。
+
 使用仓库外的标准样例执行可靠性 Smoke：
 
 ```bash
