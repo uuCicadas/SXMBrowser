@@ -34,6 +34,10 @@ public struct PresentedSpectroscopyGroup:
             : "\(visibleSpectra.count) curves"
     }
 
+    public var columnSummary: String {
+        group.availableColumns.joined(separator: " → ")
+    }
+
     public var renderID: String {
         group.id
             + "|"
@@ -68,5 +72,55 @@ public struct SpectroscopyPresentationProjection:
 
     public var markerSpectra: [SpectroscopyFile] {
         groups.flatMap(\.visibleSpectra)
+    }
+}
+
+public enum SingleSpectroscopyDrawerAvailability:
+    Equatable,
+    Sendable
+{
+    case noAssociatedSpectra
+    case activeGroupHasNoVisibleCurves
+    case ready
+}
+
+public struct SingleSpectroscopyDrawerPresentation:
+    Equatable,
+    Sendable
+{
+    public let groups: [PresentedSpectroscopyGroup]
+    public let activeGroup: PresentedSpectroscopyGroup?
+
+    public init(
+        groups: [PresentedSpectroscopyGroup],
+        activeGroupID: String?
+    ) {
+        self.groups = groups
+        self.activeGroup = groups.first {
+            $0.id == activeGroupID
+        } ?? groups.first
+    }
+
+    public var availability:
+        SingleSpectroscopyDrawerAvailability
+    {
+        guard let activeGroup else {
+            return .noAssociatedSpectra
+        }
+        return activeGroup.visibleSpectra.isEmpty
+            ? .activeGroupHasNoVisibleCurves
+            : .ready
+    }
+
+    public var visibleCount: Int {
+        activeGroup?.visibleSpectra.count ?? 0
+    }
+
+    public var totalCount: Int {
+        activeGroup?.allSpectra.count ?? 0
+    }
+
+    public var visibleCountText: String {
+        "\(visibleCount) of \(totalCount) visible"
     }
 }

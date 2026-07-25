@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 65 (2026-07-25): add persistent collapsible Single spectroscopy drawer
 - Build 64 (2026-07-25): add independent Single spectroscopy drawer state
 - Build 63 (2026-07-25): retain hidden spectra in canonical groups
 - Build 62 (2026-07-25): structure primary and multi-selection actions

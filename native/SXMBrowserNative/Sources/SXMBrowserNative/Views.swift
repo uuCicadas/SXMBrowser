@@ -1990,33 +1990,10 @@ struct MainImageView: View {
                 .buttonStyle(.borderedProminent)
             }
 
-        case .renderLoading:
-            BrowserStateView(
-                icon: "photo",
-                title: "Rendering Image",
-                message:
-                    "Preparing the selected channel and statistics.",
-                showsProgress: true
-            )
-
-        case .renderReady:
+        case .renderLoading,
+             .renderReady,
+             .renderFailed(_, _):
             SingleImageView(model: model)
-
-        case .renderFailed(_, let message):
-            BrowserStateView(
-                icon: "exclamationmark.octagon",
-                title: "Image Could Not Be Rendered",
-                message: message
-            ) {
-                Button("Retry") {
-                    model.retrySelectedRender()
-                }
-                .buttonStyle(.borderedProminent)
-                Button("Show in Finder") {
-                    model.revealSelectedFileInFinder()
-                }
-                .buttonStyle(.bordered)
-            }
         }
     }
 }
@@ -2313,6 +2290,13 @@ struct KeyboardArrowOverlay: NSViewRepresentable {
     func updateNSView(_ nsView: KeyboardArrowCatcherView, context: Context) {
         nsView.onArrow = onArrow
     }
+
+    static func dismantleNSView(
+        _ nsView: KeyboardArrowCatcherView,
+        coordinator: ()
+    ) {
+        nsView.stopMonitoring()
+    }
 }
 
 @MainActor
@@ -2324,7 +2308,11 @@ final class KeyboardArrowCatcherView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        installEventMonitor()
+        if window == nil {
+            stopMonitoring()
+        } else {
+            installEventMonitor()
+        }
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -2339,8 +2327,18 @@ final class KeyboardArrowCatcherView: NSView {
         }
     }
 
+    func stopMonitoring() {
+        guard let eventMonitor else { return }
+        NSEvent.removeMonitor(eventMonitor)
+        self.eventMonitor = nil
+    }
+
     private func handleKeyDown(_ event: NSEvent) -> Bool {
-        guard isEventForThisWindow(event), !isTextInputFocused, hasNoCommandModifiers(event) else { return false }
+        guard isEventForThisWindow(event),
+              !interactiveControlHasFocus,
+              hasNoCommandModifiers(event) else {
+            return false
+        }
         let direction: MoveCommandDirection?
         switch event.keyCode {
         case 123:
@@ -2362,7 +2360,10 @@ final class KeyboardArrowCatcherView: NSView {
 
     private func isEventForThisWindow(_ event: NSEvent) -> Bool {
         guard let window else { return false }
-        return event.window === window || NSApp.keyWindow === window
+        if let eventWindow = event.window {
+            return eventWindow === window
+        }
+        return NSApp.keyWindow === window
     }
 
     private func hasNoCommandModifiers(_ event: NSEvent) -> Bool {
@@ -2370,13 +2371,23 @@ final class KeyboardArrowCatcherView: NSView {
         return modifiers.isEmpty
     }
 
-    private var isTextInputFocused: Bool {
-        guard let firstResponder = window?.firstResponder else { return false }
-        if firstResponder is NSTextView {
-            return true
+    private var interactiveControlHasFocus: Bool {
+        guard let firstResponder =
+            window?.firstResponder as? NSView else {
+            return false
         }
-        if firstResponder is NSTextField {
-            return true
+        var view: NSView? = firstResponder
+        while let current = view {
+            if current is NSTextView
+                || current is NSTextField
+                || current is NSPopUpButton
+                || current is NSSegmentedControl
+                || current is NSSlider
+                || current is NSStepper
+                || current is NSComboBox {
+                return true
+            }
+            view = current.superview
         }
         return false
     }
@@ -2873,27 +2884,401 @@ func spectrumColor(_ index: Int) -> Color {
 
 struct SingleImageView: View {
     @ObservedObject var model: AppModel
+    @State private var liveDrawerHeight: CGFloat
+    @State private var isResizingDrawer = false
+
+    init(model: AppModel) {
+        self.model = model
+        _liveDrawerHeight = State(
+            initialValue: CGFloat(
+                model.singleSpectroscopyState.height
+            )
+        )
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            SingleImageCanvas(model: model)
+                .frame(
+                    maxWidth: .infinity,
+                    maxHeight: .infinity
+                )
+                .layoutPriority(1)
+
+            SingleSpectroscopyDrawer(
+                model: model,
+                liveHeight: $liveDrawerHeight,
+                isResizing: $isResizingDrawer
+            )
+        }
+        .onChange(
+            of: model.singleSpectroscopyState.height
+        ) { _, height in
+            if !isResizingDrawer {
+                liveDrawerHeight = CGFloat(height)
+            }
+        }
+        .transaction { transaction in
+            if isResizingDrawer {
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
+        }
+    }
+}
+
+private struct SingleImageCanvas: View {
+    @ObservedObject var model: AppModel
 
     var body: some View {
         GeometryReader { proxy in
             ZStack {
                 AppTheme.stage
-                if let frame = model.renderedFrame,
-                   frame.request.fileID == model.selectedID,
-                   let file = model.files.first(where: { $0.id == frame.request.fileID }) {
-                    Image(nsImage: frame.image)
-                        .resizable()
-                        .interpolation(.none)
-                        .scaledToFit()
-                        .frame(width: proxy.size.width - 36, height: proxy.size.height - 36)
-                        .overlay {
-                            SpectroscopyMarkerLayer(model: model, file: file)
+                switch model.browserContentState {
+                case .renderReady:
+                    if let frame = model.renderedFrame,
+                       frame.request.fileID == model.selectedID,
+                       let file = model.files.first(where: {
+                           $0.id == frame.request.fileID
+                       }) {
+                        Image(nsImage: frame.image)
+                            .resizable()
+                            .interpolation(.none)
+                            .scaledToFit()
+                            .frame(
+                                width: max(
+                                    0,
+                                    proxy.size.width - 36
+                                ),
+                                height: max(
+                                    0,
+                                    proxy.size.height - 36
+                                )
+                            )
+                            .overlay {
+                                SpectroscopyMarkerLayer(
+                                    model: model,
+                                    file: file
+                                )
+                            }
+                    } else {
+                        ProgressView()
+                    }
+                case .renderLoading:
+                    BrowserStateView(
+                        icon: "photo",
+                        title: "Rendering Image",
+                        message:
+                            "Preparing the selected channel "
+                            + "and statistics.",
+                        showsProgress: true
+                    )
+                case .renderFailed(_, let message):
+                    BrowserStateView(
+                        icon: "exclamationmark.octagon",
+                        title: "Image Could Not Be Rendered",
+                        message: message
+                    ) {
+                        Button("Retry") {
+                            model.retrySelectedRender()
                         }
-                } else {
+                        .buttonStyle(.borderedProminent)
+                        Button("Show in Finder") {
+                            model.revealSelectedFileInFinder()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                default:
                     ProgressView()
                 }
             }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                NSApp.keyWindow?.makeFirstResponder(nil)
+            }
         }
+    }
+}
+
+private struct SingleSpectroscopyDrawer: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject var model: AppModel
+    @Binding var liveHeight: CGFloat
+    @Binding var isResizing: Bool
+    @State private var dragStartHeight: CGFloat?
+
+    private var groups: [PresentedSpectroscopyGroup] {
+        guard let file = model.selectedFile else { return [] }
+        return model.presentedSpectrumGroups(for: file)
+    }
+
+    private var presentation:
+        SingleSpectroscopyDrawerPresentation
+    {
+        SingleSpectroscopyDrawerPresentation(
+            groups: groups,
+            activeGroupID:
+                model.singleSpectroscopyState.activeGroupID
+        )
+    }
+
+    private var isExpanded: Bool {
+        model.singleSpectroscopyState.isExpanded
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if isExpanded {
+                resizeHandle
+            }
+
+            drawerHeader
+
+            if isExpanded {
+                Divider()
+                drawerContent
+            }
+        }
+        .frame(
+            maxWidth: .infinity,
+            minHeight: isExpanded ? liveHeight : 42,
+            maxHeight: isExpanded ? liveHeight : 42
+        )
+        .background(
+            AppTheme.cardSurface(for: colorScheme)
+        )
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(AppTheme.separator.opacity(0.8))
+                .frame(height: 1)
+        }
+        .clipped()
+        .animation(
+            .easeInOut(duration: 0.18),
+            value: isExpanded
+        )
+    }
+
+    private var resizeHandle: some View {
+        Rectangle()
+            .fill(Color.clear)
+            .frame(height: 8)
+            .overlay {
+                Capsule()
+                    .fill(
+                        isResizing
+                            ? Color.accentColor.opacity(0.8)
+                            : Color.secondary.opacity(0.35)
+                    )
+                    .frame(width: 42, height: 3)
+            }
+            .contentShape(Rectangle())
+            .cursor(.resizeUpDown)
+            .onTapGesture(count: 2) {
+                let defaultHeight = CGFloat(
+                    SingleSpectroscopyState.defaultHeight
+                )
+                liveHeight = defaultHeight
+                model.setSingleSpectroscopyDrawerHeight(
+                    defaultHeight
+                )
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        if dragStartHeight == nil {
+                            dragStartHeight = liveHeight
+                            isResizing = true
+                        }
+                        let start =
+                            dragStartHeight ?? liveHeight
+                        let next = SingleSpectroscopyState
+                            .resizedHeight(
+                                startingAt: Double(start),
+                                verticalTranslation: Double(
+                                    value.translation.height
+                                )
+                            )
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            liveHeight = CGFloat(next)
+                        }
+                    }
+                    .onEnded { _ in
+                        dragStartHeight = nil
+                        isResizing = false
+                        model.setSingleSpectroscopyDrawerHeight(
+                            liveHeight
+                        )
+                    }
+            )
+            .accessibilityHidden(true)
+    }
+
+    private var drawerHeader: some View {
+        HStack(spacing: 9) {
+            Button {
+                model.setSingleSpectroscopyDrawerExpanded(
+                    !isExpanded
+                )
+            } label: {
+                Image(
+                    systemName: isExpanded
+                        ? "chevron.down"
+                        : "chevron.right"
+                )
+                .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.plain)
+            .help(
+                isExpanded
+                    ? "Collapse spectroscopy"
+                    : "Expand spectroscopy"
+            )
+            .accessibilityLabel(
+                isExpanded
+                    ? "Collapse spectroscopy drawer"
+                    : "Expand spectroscopy drawer"
+            )
+
+            Text("Spectroscopy")
+                .font(.headline)
+
+            if groups.count > 1 {
+                Picker(
+                    "Spectrum group",
+                    selection: Binding(
+                        get: {
+                            presentation.activeGroup?.id ?? ""
+                        },
+                        set: {
+                            model
+                                .activateSingleSpectroscopyGroup(
+                                    $0
+                                )
+                        }
+                    )
+                ) {
+                    ForEach(
+                        Array(groups.enumerated()),
+                        id: \.element.id
+                    ) { index, group in
+                        Text(
+                            "Group \(index + 1): "
+                                + "\(group.group.title) · "
+                                + group.columnSummary
+                        )
+                        .tag(group.id)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(maxWidth: 240)
+                .accessibilityLabel("Spectrum group")
+            } else if let activeGroup =
+                presentation.activeGroup {
+                Text(activeGroup.group.title)
+                    .font(.callout)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            if presentation.activeGroup != nil {
+                Text(presentation.visibleCountText)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule().fill(AppTheme.subtleFill)
+                    )
+                    .accessibilityLabel(
+                        presentation.visibleCountText
+                    )
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: isExpanded ? 34 : 42)
+    }
+
+    @ViewBuilder
+    private var drawerContent: some View {
+        switch presentation.availability {
+        case .noAssociatedSpectra:
+            drawerEmptyState(
+                icon: "waveform.path.ecg",
+                title: "No Associated Spectra",
+                message:
+                    "Associate DAT files in the sidebar to "
+                    + "show a spectrum here."
+            )
+        case .activeGroupHasNoVisibleCurves:
+            drawerEmptyState(
+                icon: "eye.slash",
+                title: "No Visible Curves in This Group",
+                message:
+                    "Show a spectrum in the sidebar to "
+                    + "restore the plot."
+            )
+        case .ready:
+            if let activeGroup = presentation.activeGroup {
+                let xColumn = model.spectrumXAxis(
+                    for: activeGroup.group
+                )
+                let yColumn = model.spectrumYAxis(
+                    for: activeGroup.group
+                )
+                SpectroscopyPlotView(
+                    group: activeGroup.group,
+                    spectra: activeGroup.visibleSpectra,
+                    xColumn: xColumn,
+                    yColumn: yColumn
+                )
+                .id(
+                    "\(activeGroup.renderID)|"
+                        + "\(xColumn)|\(yColumn)"
+                )
+                .clipShape(
+                    RoundedRectangle(cornerRadius: 7)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7)
+                        .stroke(
+                            AppTheme.tileBorder(
+                                for: colorScheme
+                            ),
+                            lineWidth: 1
+                        )
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
+            }
+        }
+    }
+
+    private func drawerEmptyState(
+        icon: String,
+        title: String,
+        message: String
+    ) -> some View {
+        VStack(spacing: 7) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Text(title)
+                .font(.callout.weight(.semibold))
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -3085,6 +3470,24 @@ struct InspectorView: View {
                         )
                         .toggleStyle(.switch)
                         .disabled(model.spectra.isEmpty)
+                    } else if model.mode == .single {
+                        Toggle(
+                            "Show spectroscopy drawer",
+                            isOn: Binding(
+                                get: {
+                                    model
+                                        .singleSpectroscopyState
+                                        .isExpanded
+                                },
+                                set: {
+                                    model
+                                        .setSingleSpectroscopyDrawerExpanded(
+                                            $0
+                                        )
+                                }
+                            )
+                        )
+                        .toggleStyle(.switch)
                     }
 
                     if !model.presentedSpectrumAxisRestoreIssues.isEmpty {

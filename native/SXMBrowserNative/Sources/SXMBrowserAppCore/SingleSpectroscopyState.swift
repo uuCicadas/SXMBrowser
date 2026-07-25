@@ -106,4 +106,11 @@ public struct SingleSpectroscopyState: Equatable, Sendable {
             max(heightRange.lowerBound, value)
         )
     }
+
+    public static func resizedHeight(
+        startingAt height: Double,
+        verticalTranslation: Double
+    ) -> Double {
+        clampedHeight(height - verticalTranslation)
+    }
 }

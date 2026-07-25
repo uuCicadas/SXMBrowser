@@ -126,6 +126,34 @@ func drawerUsesPersistableDefaultsAndClampsHeight() {
 }
 
 @Test
+func draggingUpGrowsDrawerAndDraggingDownShrinksIt() {
+    #expect(
+        SingleSpectroscopyState.resizedHeight(
+            startingAt: 260,
+            verticalTranslation: -40
+        ) == 300
+    )
+    #expect(
+        SingleSpectroscopyState.resizedHeight(
+            startingAt: 260,
+            verticalTranslation: 40
+        ) == 220
+    )
+    #expect(
+        SingleSpectroscopyState.resizedHeight(
+            startingAt: 400,
+            verticalTranslation: -80
+        ) == 420
+    )
+    #expect(
+        SingleSpectroscopyState.resizedHeight(
+            startingAt: 200,
+            verticalTranslation: 80
+        ) == 180
+    )
+}
+
+@Test
 func activeGroupAndFocusFallBackDeterministically() {
     let fixture = SingleStateFixture()
     var state = SingleSpectroscopyState(
