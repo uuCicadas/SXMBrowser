@@ -4,6 +4,9 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+## 2.2.0 - 2026-07-25
+
+- Build 73 (2026-07-25): Prepare SXM Browser 2.2.0 release after full automated and manual acceptance
 - Build 72 (2026-07-25): Improve keyboard navigation, focus handoff, VoiceOver semantics, and high-contrast selection states
 - Build 71 (2026-07-25): add structured Inspector file and scan metadata
 - Build 70 (2026-07-25): add adaptive 1-2-5 screen scale bar with pure PNG isolation
