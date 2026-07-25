@@ -3,6 +3,7 @@ import Foundation
 import SXMBrowserAppCore
 import SXMBrowserCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum BrowserMode: String, CaseIterable, Identifiable {
     case grid
@@ -85,6 +86,60 @@ struct RenderedFrame {
     let automaticScaleMax: Double?
 }
 
+enum MetadataImportWorkflowPhase: Equatable {
+    case loading
+    case preview
+    case applying
+    case failed(String)
+    case completed(String)
+}
+
+struct MetadataImportWorkflow: Identifiable, Equatable {
+    let id: UUID
+    let sourceURL: URL
+    let sessionIdentity: DatasetSessionIdentity
+    var inventory: DatasetMetadataImportInventory?
+    var fileSignature: DatasetInventorySignature?
+    var plan: DatasetMetadataImportPlan?
+    var phase: MetadataImportWorkflowPhase
+
+    var sourceFilename: String {
+        sourceURL.lastPathComponent
+    }
+}
+
+private enum MetadataTransferWorkflowError: LocalizedError {
+    case inventoryUnavailable
+    case sxmPathUnavailable(String)
+    case datPathUnavailable(String)
+    case automaticParentPathUnavailable(String)
+    case inventoryFileAttributesUnavailable(String)
+    case inventoryFileIsNotRegular(String)
+    case inventoryChanged
+    case sessionChanged
+
+    var errorDescription: String? {
+        switch self {
+        case .inventoryUnavailable:
+            "The current dataset inventory is unavailable. Reopen the folder and try again."
+        case .sxmPathUnavailable(let filename):
+            "The SXM file “\(filename)” has no stable dataset-relative path."
+        case .datPathUnavailable(let filename):
+            "The DAT file “\(filename)” has no stable dataset-relative path."
+        case .automaticParentPathUnavailable(let filename):
+            "The automatic SXM parent for “\(filename)” has no stable dataset-relative path."
+        case .inventoryFileAttributesUnavailable(let filename):
+            "Could not read size or modification time for “\(filename)”."
+        case .inventoryFileIsNotRegular(let filename):
+            "The dataset entry “\(filename)” is not a regular file."
+        case .inventoryChanged:
+            "Dataset files changed after the preview. Start the import again."
+        case .sessionChanged:
+            "The open dataset changed. Start the metadata operation again."
+        }
+    }
+}
+
 private struct ProcessedRenderCache {
     let key: ProcessedRenderKey<SXMMetadata.ID>
     let matrix: Matrix
@@ -156,6 +211,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var tags: [DatasetTagV1] = []
     @Published private(set) var expandedTagIDs: Set<UUID> = []
     @Published private(set) var isMetadataMutationInFlight = false
+    @Published private(set) var isMetadataTransferInFlight = false
+    @Published private(set) var metadataImportWorkflow:
+        MetadataImportWorkflow?
 
     @Published var selectedChannel = ""
     @Published var selectedDirection: ScanDirection = .fwd
@@ -202,6 +260,9 @@ final class AppModel: ObservableObject {
     private var datasetSessionGate = DatasetSessionGate()
     private var metadataMutationTask: Task<Void, Never>?
     private var metadataMutationID: UUID?
+    private var metadataTransferTask: Task<Void, Never>?
+    private var metadataTransferID: UUID?
+    private var datasetInventoryRevisionID: UUID?
     private var manualTargetPathByDATPath:
         [DatasetRelativePath: DatasetRelativePath] = [:]
     private var manualAssociationProjection:
@@ -255,32 +316,53 @@ final class AppModel: ObservableObject {
         selectedIDs.count
     }
 
+    var isMetadataBusy: Bool {
+        isLoading
+            || isMetadataMutationInFlight
+            || isMetadataTransferInFlight
+            || metadataImportWorkflow != nil
+    }
+
     var canDeleteSelection: Bool {
-        !selectedFiles.isEmpty && !isLoading && !isMetadataMutationInFlight
+        !selectedFiles.isEmpty && !isMetadataBusy
     }
 
     var canModifyTags: Bool {
         activeDatasetSession != nil
-            && !isLoading
-            && !isMetadataMutationInFlight
+            && !isMetadataBusy
     }
 
     var canAssociateSpectra: Bool {
         activeDatasetSession != nil
-            && !isLoading
-            && !isMetadataMutationInFlight
+            && !isMetadataBusy
     }
 
     var canModifySpectrumVisibility: Bool {
         activeDatasetSession != nil
-            && !isLoading
-            && !isMetadataMutationInFlight
+            && !isMetadataBusy
     }
 
     var canModifySpectrumAxes: Bool {
         activeDatasetSession != nil
-            && !isLoading
-            && !isMetadataMutationInFlight
+            && !isMetadataBusy
+    }
+
+    var canExportMetadata: Bool {
+        activeDatasetSession != nil && !isMetadataBusy
+    }
+
+    var canImportMetadata: Bool {
+        activeDatasetSession != nil && !isMetadataBusy
+    }
+
+    var canOpenFolder: Bool {
+        guard let workflow = metadataImportWorkflow else {
+            return true
+        }
+        if case .applying = workflow.phase {
+            return false
+        }
+        return true
     }
 
     var presentedSpectrumAxisRestoreIssues:
@@ -441,6 +523,12 @@ final class AppModel: ObservableObject {
     }
 
     func chooseFolder() {
+        guard canOpenFolder else {
+            status =
+                "Wait for the metadata import to finish before "
+                + "opening another folder."
+            return
+        }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -449,6 +537,408 @@ final class AppModel: ObservableObject {
         if panel.runModal() == .OK, let url = panel.url {
             openFolder(url)
         }
+    }
+
+    func exportMetadata() {
+        guard canExportMetadata,
+              let session = activeDatasetSession else {
+            return
+        }
+        let identity = session.identity
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.nameFieldStringValue = metadataExportFilename(
+            for: session.folderURL
+        )
+        panel.prompt = "Export"
+        guard panel.runModal() == .OK,
+              let destination = panel.url else {
+            return
+        }
+        guard let currentSession = activeDatasetSession,
+              currentSession.matches(identity),
+              datasetSessionGate.accepts(identity) else {
+            return
+        }
+
+        let transferID = beginMetadataTransfer()
+        let record = currentSession.verifiedRecord
+        status = "Exporting metadata..."
+        metadataTransferTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                finishMetadataTransfer(id: transferID)
+            }
+            do {
+                guard metadataTransferAccepts(
+                    id: transferID,
+                    identity: identity
+                ) else {
+                    return
+                }
+                let byteCount = try await runDetachedCancellable(
+                    priority: .userInitiated
+                ) {
+                    try Task.checkCancellation()
+                    let transfer = try DatasetMetadataTransferV1(
+                        exporting: record
+                    )
+                    let data = try DatasetMetadataTransferCodec().encode(
+                        transfer
+                    )
+                    try Task.checkCancellation()
+                    let didAccess = destination
+                        .startAccessingSecurityScopedResource()
+                    defer {
+                        if didAccess {
+                            destination
+                                .stopAccessingSecurityScopedResource()
+                        }
+                    }
+                    try data.write(to: destination, options: .atomic)
+                    return data.count
+                }
+                try Task.checkCancellation()
+                guard metadataTransferAccepts(
+                    id: transferID,
+                    identity: identity
+                ) else {
+                    return
+                }
+                status =
+                    "Exported metadata to "
+                    + "\(destination.lastPathComponent) "
+                    + "(\(byteCount) bytes)."
+            } catch is CancellationError {
+                return
+            } catch {
+                guard metadataTransferAccepts(
+                    id: transferID,
+                    identity: identity
+                ) else {
+                    return
+                }
+                status =
+                    "Metadata export failed: "
+                    + error.localizedDescription
+            }
+        }
+    }
+
+    func importMetadata() {
+        guard canImportMetadata,
+              let session = activeDatasetSession else {
+            return
+        }
+        let identity = session.identity
+
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Import"
+        guard panel.runModal() == .OK,
+              let sourceURL = panel.url else {
+            return
+        }
+        guard let currentSession = activeDatasetSession,
+              currentSession.matches(identity),
+              datasetSessionGate.accepts(identity) else {
+            return
+        }
+
+        let workflowID = UUID()
+        metadataImportWorkflow = MetadataImportWorkflow(
+            id: workflowID,
+            sourceURL: sourceURL,
+            sessionIdentity: identity,
+            inventory: nil,
+            fileSignature: nil,
+            plan: nil,
+            phase: .loading
+        )
+        let transferID = beginMetadataTransfer()
+        let baselineRecord = currentSession.verifiedRecord
+        status = "Preparing metadata import..."
+
+        metadataTransferTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                finishMetadataTransfer(id: transferID)
+            }
+            do {
+                guard metadataTransferAccepts(
+                    id: transferID,
+                    identity: identity,
+                    workflowID: workflowID
+                ) else {
+                    return
+                }
+                let inventory = try makeMetadataImportInventory(
+                    for: currentSession
+                )
+                try Task.checkCancellation()
+                guard metadataTransferAccepts(
+                    id: transferID,
+                    identity: identity,
+                    workflowID: workflowID
+                ) else {
+                    return
+                }
+
+                let fileSignature = try await runDetachedCancellable(
+                    priority: .userInitiated
+                ) {
+                    try Self.makeDatasetInventorySignature(
+                        for: currentSession.folderURL
+                    )
+                }
+                try Task.checkCancellation()
+                guard metadataTransferAccepts(
+                    id: transferID,
+                    identity: identity,
+                    workflowID: workflowID
+                ) else {
+                    return
+                }
+
+                let transfer = try await runDetachedCancellable(
+                    priority: .userInitiated
+                ) {
+                    try Task.checkCancellation()
+                    let didAccess = sourceURL
+                        .startAccessingSecurityScopedResource()
+                    defer {
+                        if didAccess {
+                            sourceURL
+                                .stopAccessingSecurityScopedResource()
+                        }
+                    }
+                    return try DatasetMetadataTransferCodec()
+                        .decode(contentsOf: sourceURL)
+                }
+                try Task.checkCancellation()
+                guard metadataTransferAccepts(
+                    id: transferID,
+                    identity: identity,
+                    workflowID: workflowID
+                ) else {
+                    return
+                }
+
+                let plan = try await runDetachedCancellable(
+                    priority: .userInitiated
+                ) {
+                    try DatasetMetadataImportPlanner().plan(
+                        transfer: transfer,
+                        into: baselineRecord,
+                        inventory: inventory,
+                        policy: .safeDefault
+                    )
+                }
+                try Task.checkCancellation()
+                guard metadataTransferAccepts(
+                    id: transferID,
+                    identity: identity,
+                    workflowID: workflowID
+                ), var workflow = metadataImportWorkflow else {
+                    return
+                }
+                workflow.inventory = inventory
+                workflow.fileSignature = fileSignature
+                workflow.plan = plan
+                workflow.phase = .preview
+                metadataImportWorkflow = workflow
+                status = plan.hasChanges
+                    ? "Metadata import is ready for review."
+                    : "Nothing to import."
+            } catch is CancellationError {
+                return
+            } catch {
+                publishMetadataImportFailure(
+                    error,
+                    transferID: transferID,
+                    identity: identity,
+                    workflowID: workflowID,
+                    prefix: "Metadata import could not be prepared"
+                )
+            }
+        }
+    }
+
+    func confirmMetadataImport() {
+        guard var workflow = metadataImportWorkflow,
+              let baselineInventory = workflow.inventory,
+              let baselineFileSignature = workflow.fileSignature,
+              let plan = workflow.plan else {
+            return
+        }
+        switch workflow.phase {
+        case .preview, .failed:
+            break
+        case .loading, .applying, .completed:
+            return
+        }
+        guard plan.canApply else {
+            workflow.phase = .failed(
+                "The preview has unresolved conflicts and cannot be applied."
+            )
+            metadataImportWorkflow = workflow
+            status = "Metadata import has unresolved conflicts."
+            return
+        }
+        guard plan.hasChanges else {
+            workflow.phase = .completed("Nothing to import.")
+            metadataImportWorkflow = workflow
+            status = "Nothing to import."
+            return
+        }
+        guard let session = activeDatasetSession,
+              session.matches(workflow.sessionIdentity),
+              datasetSessionGate.accepts(workflow.sessionIdentity) else {
+            workflow.phase = .failed(
+                MetadataTransferWorkflowError.sessionChanged
+                    .localizedDescription
+            )
+            metadataImportWorkflow = workflow
+            status = "Metadata import preview is no longer current."
+            return
+        }
+
+        let workflowID = workflow.id
+        let identity = workflow.sessionIdentity
+        let datasetID = session.datasetID
+        let transferID = beginMetadataTransfer()
+        workflow.phase = .applying
+        metadataImportWorkflow = workflow
+        status = "Applying metadata import..."
+
+        metadataTransferTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                finishMetadataTransfer(id: transferID)
+            }
+            do {
+                try Task.checkCancellation()
+                guard metadataTransferAccepts(
+                    id: transferID,
+                    identity: identity,
+                    workflowID: workflowID
+                ) else {
+                    return
+                }
+                let currentFileSignature =
+                    try await runDetachedCancellable(
+                        priority: .userInitiated
+                    ) {
+                        try Self.makeDatasetInventorySignature(
+                            for: session.folderURL
+                        )
+                    }
+                try Task.checkCancellation()
+                guard metadataTransferAccepts(
+                    id: transferID,
+                    identity: identity,
+                    workflowID: workflowID
+                ) else {
+                    return
+                }
+                guard currentFileSignature == baselineFileSignature else {
+                    throw MetadataTransferWorkflowError.inventoryChanged
+                }
+
+                let currentInventory =
+                    try makeMetadataImportInventory(for: session)
+                guard currentInventory == baselineInventory else {
+                    throw MetadataTransferWorkflowError.inventoryChanged
+                }
+                try Task.checkCancellation()
+                guard metadataTransferAccepts(
+                    id: transferID,
+                    identity: identity,
+                    workflowID: workflowID
+                ) else {
+                    return
+                }
+
+                let updatedAt = Date()
+                let verifiedRecord = try await metadataStore.updateDataset(
+                    id: datasetID,
+                    updatedAt: updatedAt
+                ) { record in
+                    record = try plan.applying(
+                        to: record,
+                        inventory: currentInventory,
+                        updatedAt: updatedAt
+                    )
+                }
+                try Task.checkCancellation()
+                guard metadataTransferAccepts(
+                    id: transferID,
+                    identity: identity,
+                    workflowID: workflowID
+                ), let currentSession = activeDatasetSession,
+                   currentSession.matches(identity) else {
+                    return
+                }
+
+                let updatedSession = try ActiveDatasetSession(
+                    sessionID: currentSession.sessionID,
+                    datasetID: currentSession.datasetID,
+                    folderURL: currentSession.folderURL,
+                    verifiedRecord: verifiedRecord,
+                    pathIndex: currentSession.pathIndex
+                )
+                guard datasetSessionGate.activate(updatedSession) else {
+                    throw MetadataTransferWorkflowError.sessionChanged
+                }
+
+                activeDatasetSession = updatedSession
+                publishUpdatedTagPresentation(
+                    tags: verifiedRecord.tags,
+                    expandingTagID: nil,
+                    activeTagResolution: .firstAvailable,
+                    datasetID: verifiedRecord.id
+                )
+                restoreManualSpectrumAssociations()
+                restoreHiddenSpectrumVisibility()
+                rebuildSpectrumGroups()
+                ensureSelectionIsVisible()
+
+                let report = metadataImportCompletionMessage(
+                    for: plan.summary
+                )
+                guard var completedWorkflow = metadataImportWorkflow,
+                      completedWorkflow.id == workflowID else {
+                    return
+                }
+                completedWorkflow.phase = .completed(report)
+                metadataImportWorkflow = completedWorkflow
+                status = report
+            } catch is CancellationError {
+                return
+            } catch {
+                publishMetadataImportFailure(
+                    error,
+                    transferID: transferID,
+                    identity: identity,
+                    workflowID: workflowID,
+                    prefix: "Metadata import failed"
+                )
+            }
+        }
+    }
+
+    func dismissMetadataImport() {
+        guard let workflow = metadataImportWorkflow else { return }
+        if case .applying = workflow.phase {
+            return
+        }
+        cancelMetadataTransfer(clearImportWorkflow: true)
     }
 
     func showScanIssues() {
@@ -475,6 +965,12 @@ final class AppModel: ObservableObject {
     }
 
     func openDroppedURL(_ url: URL) {
+        guard canOpenFolder else {
+            status =
+                "Wait for the metadata import to finish before "
+                + "opening another folder."
+            return
+        }
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
             return
@@ -487,6 +983,12 @@ final class AppModel: ObservableObject {
     }
 
     func openFolder(_ url: URL, selecting selectedPath: URL? = nil) {
+        guard canOpenFolder else {
+            status =
+                "Wait for the metadata import to finish before "
+                + "opening another folder."
+            return
+        }
         cancelStartupLookup()
         beginOpeningFolder(url, selecting: selectedPath)
     }
@@ -499,6 +1001,7 @@ final class AppModel: ObservableObject {
         initialMetadataWarning: String? = nil
     ) {
         scanTask?.cancel()
+        cancelMetadataTransfer(clearImportWorkflow: true)
         cancelMetadataMutation()
         invalidateActiveRender(clearFrame: true)
         stopSecurityScopedFolderAccess()
@@ -540,6 +1043,7 @@ final class AppModel: ObservableObject {
         filenameSearch = ""
         spectrumAxisState.clear()
         spectrumAxisRestoreIssues.removeAll()
+        datasetInventoryRevisionID = nil
         processedRenderCache = nil
         let previousMatrixCache = matrixCache
         matrixCache = MatrixLoadCache()
@@ -646,6 +1150,7 @@ final class AppModel: ObservableObject {
                 }
                 files = scanned.0.items
                 spectra = scanned.1.items
+                datasetInventoryRevisionID = UUID()
                 scanIssues = scanned.0.issues + scanned.1.issues
                 restoreManualSpectrumAssociations()
                 restoreHiddenSpectrumVisibility()
@@ -1018,6 +1523,225 @@ final class AppModel: ObservableObject {
         return "\(existing)\n\(message)"
     }
 
+    private func metadataExportFilename(for folderURL: URL) -> String {
+        let rawName = folderURL.lastPathComponent
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let folderName = rawName.isEmpty ? "dataset" : rawName
+        return "\(folderName)-sxm-metadata.json"
+    }
+
+    @discardableResult
+    private func beginMetadataTransfer(id: UUID = UUID()) -> UUID {
+        metadataTransferTask?.cancel()
+        metadataTransferID = id
+        isMetadataTransferInFlight = true
+        return id
+    }
+
+    private func finishMetadataTransfer(id: UUID) {
+        guard metadataTransferID == id else { return }
+        metadataTransferID = nil
+        metadataTransferTask = nil
+        isMetadataTransferInFlight = false
+    }
+
+    private func cancelMetadataTransfer(
+        clearImportWorkflow: Bool
+    ) {
+        metadataTransferID = nil
+        metadataTransferTask?.cancel()
+        metadataTransferTask = nil
+        isMetadataTransferInFlight = false
+        if clearImportWorkflow {
+            metadataImportWorkflow = nil
+        }
+    }
+
+    private func metadataTransferAccepts(
+        id: UUID,
+        identity: DatasetSessionIdentity,
+        workflowID: UUID? = nil
+    ) -> Bool {
+        guard metadataTransferID == id,
+              datasetSessionGate.accepts(identity),
+              let session = activeDatasetSession,
+              session.matches(identity) else {
+            return false
+        }
+        if let workflowID {
+            return metadataImportWorkflow?.id == workflowID
+        }
+        return true
+    }
+
+    private func publishMetadataImportFailure(
+        _ error: Error,
+        transferID: UUID,
+        identity: DatasetSessionIdentity,
+        workflowID: UUID,
+        prefix: String
+    ) {
+        guard metadataTransferAccepts(
+            id: transferID,
+            identity: identity,
+            workflowID: workflowID
+        ), var workflow = metadataImportWorkflow else {
+            return
+        }
+        let message = "\(prefix): \(error.localizedDescription)"
+        workflow.phase = .failed(message)
+        metadataImportWorkflow = workflow
+        status = message
+    }
+
+    private func makeMetadataImportInventory(
+        for session: ActiveDatasetSession
+    ) throws -> DatasetMetadataImportInventory {
+        guard let revisionID = datasetInventoryRevisionID else {
+            throw MetadataTransferWorkflowError.inventoryUnavailable
+        }
+
+        let sxmPaths = try files.map { file in
+            guard let path = session.pathIndex.sxmPath(for: file.id) else {
+                throw MetadataTransferWorkflowError
+                    .sxmPathUnavailable(file.filename)
+            }
+            return path
+        }
+        let sxmByTime = files.sorted { lhs, rhs in
+            if lhs.modifiedTime == rhs.modifiedTime {
+                return lhs.filename.localizedStandardCompare(rhs.filename)
+                    == .orderedAscending
+            }
+            return lhs.modifiedTime < rhs.modifiedTime
+        }
+        let sxmByName = files.sorted {
+            sxmBasename($0).count > sxmBasename($1).count
+        }
+        let datFiles = try spectra.map { spectrum in
+            guard let path = session.pathIndex.datPath(
+                for: spectrum.id
+            ) else {
+                throw MetadataTransferWorkflowError
+                    .datPathUnavailable(spectrum.filename)
+            }
+            let automaticParent = automaticSpectrumParent(
+                for: spectrum,
+                sxmFilesByTime: sxmByTime,
+                sxmFilesByDescendingBasenameLength: sxmByName
+            )
+            let automaticParentPath: DatasetRelativePath?
+            if let automaticParent {
+                guard let path = session.pathIndex.sxmPath(
+                    for: automaticParent.id
+                ) else {
+                    throw MetadataTransferWorkflowError
+                        .automaticParentPathUnavailable(
+                            spectrum.filename
+                        )
+                }
+                automaticParentPath = path
+            } else {
+                automaticParentPath = nil
+            }
+
+            return DatasetMetadataImportDATFile(
+                path: path,
+                kind: spectrum.kind,
+                schemaFingerprint:
+                    spectrum.curve.columnSchema.fingerprint,
+                columns: spectrum.curve.columns,
+                automaticParentSXMPath: automaticParentPath
+            )
+        }
+
+        return try DatasetMetadataImportInventory(
+            revisionID: revisionID,
+            sessionID: session.sessionID,
+            datasetID: session.datasetID,
+            sxmPaths: sxmPaths,
+            datFiles: datFiles
+        )
+    }
+
+    private nonisolated static func makeDatasetInventorySignature(
+        for folderURL: URL
+    ) throws -> DatasetInventorySignature {
+        let resourceKeys: Set<URLResourceKey> = [
+            .contentModificationDateKey,
+            .fileSizeKey,
+            .isRegularFileKey,
+        ]
+        let urls = try FileManager.default.contentsOfDirectory(
+            at: folderURL,
+            includingPropertiesForKeys: Array(resourceKeys),
+            options: [.skipsHiddenFiles]
+        )
+        var stamps: [DatasetInventoryFileStamp] = []
+        for url in urls {
+            try Task.checkCancellation()
+            let fileExtension = url.pathExtension.lowercased(
+                with: Locale(identifier: "en_US_POSIX")
+            )
+            let kind: DatasetFileKind
+            switch fileExtension {
+            case DatasetFileKind.sxm.fileExtension:
+                kind = .sxm
+            case DatasetFileKind.dat.fileExtension:
+                kind = .dat
+            default:
+                continue
+            }
+
+            let values = try url.resourceValues(forKeys: resourceKeys)
+            guard values.isRegularFile == true else {
+                throw MetadataTransferWorkflowError
+                    .inventoryFileIsNotRegular(url.lastPathComponent)
+            }
+            guard let byteCount = values.fileSize,
+                  byteCount >= 0,
+                  let modifiedAt = values.contentModificationDate else {
+                throw MetadataTransferWorkflowError
+                    .inventoryFileAttributesUnavailable(
+                        url.lastPathComponent
+                    )
+            }
+            let path = try DatasetRelativePath(
+                url.lastPathComponent,
+                requiring: kind
+            )
+            stamps.append(
+                try DatasetInventoryFileStamp(
+                    path: path,
+                    byteCount: UInt64(byteCount),
+                    modifiedAt: modifiedAt
+                )
+            )
+        }
+        return try DatasetInventorySignature(files: stamps)
+    }
+
+    private func metadataImportCompletionMessage(
+        for summary: DatasetMetadataImportSummary
+    ) -> String {
+        var message =
+            "Imported \(summary.actionCount) metadata change"
+            + (summary.actionCount == 1 ? "" : "s")
+            + "."
+        if summary.skippedItemCount > 0 {
+            message +=
+                " Skipped \(summary.skippedItemCount) unavailable item"
+                + (summary.skippedItemCount == 1 ? "." : "s.")
+        }
+        if summary.resolvedConflictCount > 0 {
+            message +=
+                " Kept existing values for "
+                + "\(summary.resolvedConflictCount) conflict"
+                + (summary.resolvedConflictCount == 1 ? "." : "s.")
+        }
+        return message
+    }
+
     func select(_ file: SXMMetadata, tagContext: UUID? = nil) {
         activateTagContextIfNeeded(tagContext)
         updateSelection { state, visibleIDs in
@@ -1349,8 +2073,8 @@ final class AppModel: ObservableObject {
             status = metadataUnavailableForTagChangesMessage
             return
         }
-        guard !isMetadataMutationInFlight else {
-            status = "Wait for the current metadata update to finish."
+        guard !isMetadataBusy else {
+            status = "Wait for the current metadata operation to finish."
             return
         }
         performTagMutation(successMessage: "Sorted tags A–Z.") { record in
@@ -1363,8 +2087,8 @@ final class AppModel: ObservableObject {
             status = metadataUnavailableForTagChangesMessage
             return
         }
-        guard !isMetadataMutationInFlight else {
-            status = "Wait for the current metadata update to finish."
+        guard !isMetadataBusy else {
+            status = "Wait for the current metadata operation to finish."
             return
         }
 
@@ -1454,8 +2178,8 @@ final class AppModel: ObservableObject {
 
     private func deleteFiles(_ targets: [SXMMetadata]) {
         guard !targets.isEmpty else { return }
-        guard !isMetadataMutationInFlight else {
-            status = "Wait for the current metadata update before deleting files."
+        guard !isMetadataBusy else {
+            status = "Wait for the current metadata operation before deleting files."
             return
         }
 
@@ -1495,6 +2219,7 @@ final class AppModel: ObservableObject {
 
         let oldVisibleIDs = visibleFiles.map(\.id)
         files.removeAll { trashedIDs.contains($0.id) }
+        datasetInventoryRevisionID = UUID()
         removeTags(forDeletedFiles: targets.filter { trashedIDs.contains($0.id) })
         restoreManualSpectrumAssociations()
         rebuildSpectrumGroups()
@@ -1659,8 +2384,8 @@ final class AppModel: ObservableObject {
             status = "Wait for the folder scan to finish."
             return
         }
-        guard !isMetadataMutationInFlight else {
-            status = "Wait for the current metadata update to finish."
+        guard !isMetadataBusy else {
+            status = "Wait for the current metadata operation to finish."
             return
         }
         guard let currentGroup = spectrumGroupsByFileID.values
@@ -1740,8 +2465,8 @@ final class AppModel: ObservableObject {
             status = "Wait for the folder scan to finish."
             return
         }
-        guard !isMetadataMutationInFlight else {
-            status = "Wait for the current metadata update to finish."
+        guard !isMetadataBusy else {
+            status = "Wait for the current metadata operation to finish."
             return
         }
         guard spectra.contains(where: { $0.id == spectrum.id }) else {
@@ -1840,8 +2565,8 @@ final class AppModel: ObservableObject {
             status = metadataUnavailableForSpectrumChangesMessage
             return false
         }
-        guard !isMetadataMutationInFlight else {
-            status = "Wait for the current metadata update to finish."
+        guard !isMetadataBusy else {
+            status = "Wait for the current metadata operation to finish."
             return false
         }
         let currentSpectrumIDs = Set(spectra.map(\.id))
@@ -2703,8 +3428,8 @@ final class AppModel: ObservableObject {
             status = unavailableMessage
             return
         }
-        guard !isMetadataMutationInFlight else {
-            status = "Wait for the current metadata update to finish."
+        guard !isMetadataBusy else {
+            status = "Wait for the current metadata operation to finish."
             return
         }
 
@@ -2988,12 +3713,11 @@ final class AppModel: ObservableObject {
             let parent: SXMMetadata?
             switch resolution {
             case .automaticAllowed:
-                parent =
-                    sxmMatchingFilename(for: spectrum, in: sxmByName)
-                    ?? sxmByTime.last(where: {
-                        $0.modifiedTime <= spectrum.modifiedTime
-                    })
-                    ?? nearestSXM(to: spectrum, in: sxmByTime)
+                parent = automaticSpectrumParent(
+                    for: spectrum,
+                    sxmFilesByTime: sxmByTime,
+                    sxmFilesByDescendingBasenameLength: sxmByName
+                )
             case .manual(let sxmID):
                 parent = sxmFiles.first { $0.id == sxmID }
             case .missingManualTarget:
@@ -3018,6 +3742,21 @@ final class AppModel: ObservableObject {
             )
         }
         return (output, parents, unassociated)
+    }
+
+    private func automaticSpectrumParent(
+        for spectrum: SpectroscopyFile,
+        sxmFilesByTime: [SXMMetadata],
+        sxmFilesByDescendingBasenameLength: [SXMMetadata]
+    ) -> SXMMetadata? {
+        sxmMatchingFilename(
+            for: spectrum,
+            in: sxmFilesByDescendingBasenameLength
+        )
+            ?? sxmFilesByTime.last(where: {
+                $0.modifiedTime <= spectrum.modifiedTime
+            })
+            ?? nearestSXM(to: spectrum, in: sxmFilesByTime)
     }
 
     private func sxmMatchingFilename(for spectrum: SpectroscopyFile, in sxmFilesByDescendingBasenameLength: [SXMMetadata]) -> SXMMetadata? {

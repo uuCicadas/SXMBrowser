@@ -15,6 +15,19 @@ struct SXMBrowserNativeApp: App {
                     model.chooseFolder()
                 }
                 .keyboardShortcut("o")
+                .disabled(!model.canOpenFolder)
+
+                Divider()
+
+                Button("Export Metadata…") {
+                    model.exportMetadata()
+                }
+                .disabled(!model.canExportMetadata)
+
+                Button("Import Metadata…") {
+                    model.importMetadata()
+                }
+                .disabled(!model.canImportMetadata)
             }
 
             CommandGroup(after: .pasteboard) {
