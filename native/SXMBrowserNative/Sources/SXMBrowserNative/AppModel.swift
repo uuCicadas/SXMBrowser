@@ -234,7 +234,7 @@ final class AppModel: ObservableObject {
     @Published var selectedChannel = ""
     @Published var selectedDirection: ScanDirection = .fwd
     @Published var selectedProcessing: ProcessingMode = .raw
-    @Published var selectedPalette: PaletteName = .gwyddionNet
+    @Published var selectedPalette: PaletteName = .flame
     @Published var invertPalette = false
     @Published private(set) var spectrumAxisState = SpectroscopyAxisState()
     @Published private(set) var spectrumAxisRestoreIssues:

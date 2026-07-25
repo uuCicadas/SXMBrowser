@@ -332,11 +332,13 @@ private func runSmoke() throws {
     let validPaletteCount = PaletteName.allCases.filter {
         PaletteStore.shared.stops(for: $0).count >= 2
     }.count
-    guard PaletteName.allCases.count == 8,
-          validPaletteCount == 8 else {
+    let expectedPalettes: [PaletteName] = [.gray, .flame]
+    guard PaletteName.allCases == expectedPalettes,
+          validPaletteCount == expectedPalettes.count else {
         throw SmokeFailure.contract(
             "The embedded palette catalog is incomplete; "
-                + "expected=8 actual=\(validPaletteCount)."
+                + "expected=\(expectedPalettes.count) "
+                + "actual=\(validPaletteCount)."
         )
     }
 
@@ -355,7 +357,7 @@ private func runSmoke() throws {
     }
 
     print("canonical_sample=\(folder.path)")
-    print("palettes=\(validPaletteCount)/8")
+    print("palettes=\(validPaletteCount)/\(expectedPalettes.count)")
     print(
         "sxm_files=\(sxmReport.items.count) "
             + "sxm_issues=\(sxmReport.issues.count)"

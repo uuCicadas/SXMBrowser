@@ -7,7 +7,7 @@ private let automaticConfiguration = SelectedRenderConfiguration(
     channel: "Z",
     direction: .fwd,
     processing: .lineLinear,
-    palette: .gwyddionNet,
+    palette: .flame,
     invert: false,
     histogramBins: 256,
     scale: .automatic
@@ -17,7 +17,7 @@ private func configuration(
     channel: String = "Z",
     direction: ScanDirection = .fwd,
     processing: ProcessingMode = .lineLinear,
-    palette: PaletteName = .gwyddionNet,
+    palette: PaletteName = .flame,
     invert: Bool = false,
     histogramBins: Int = 256,
     scale: RenderScaleRequest = .automatic
@@ -259,7 +259,7 @@ func histogramIdentityIgnoresImageOnlyChanges() {
         configuration: automaticConfiguration
     )
     let displayChanged = configuration(
-        palette: .inferno,
+        palette: .gray,
         invert: true,
         scale: .locked(min: 0, max: 1)
     )

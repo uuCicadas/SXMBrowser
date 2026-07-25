@@ -27,21 +27,9 @@ func bundledPaletteCatalogUsesVersionControlledStops() {
     let store = PaletteStore.shared
 
     #expect(
-        store.stops(for: .gwyddionNet) == [
+        store.stops(for: .gray) == [
             PaletteStop(0.00, 0.000, 0.000, 0.000),
-            PaletteStop(0.18, 0.075, 0.090, 0.420),
-            PaletteStop(0.36, 0.000, 0.445, 0.720),
-            PaletteStop(0.54, 0.000, 0.650, 0.360),
-            PaletteStop(0.72, 0.850, 0.720, 0.120),
             PaletteStop(1.00, 1.000, 1.000, 1.000),
-        ]
-    )
-    #expect(
-        store.stops(for: .gold) == [
-            PaletteStop(0.00, 0.000, 0.000, 0.000),
-            PaletteStop(0.35, 0.280, 0.110, 0.020),
-            PaletteStop(0.72, 0.850, 0.560, 0.160),
-            PaletteStop(1.00, 1.000, 0.950, 0.650),
         ]
     )
     #expect(
@@ -63,14 +51,14 @@ func rendererUsesBundledPaletteAndPreservesInversion() {
     let matrix = Matrix(width: 3, height: 1, values: [0, 0.5, 1])
     let normal = SXMRenderer.colorize(
         matrix: matrix,
-        palette: .viridis,
+        palette: .gray,
         vmin: 0,
         vmax: 1,
         invert: false
     )
     let inverted = SXMRenderer.colorize(
         matrix: matrix,
-        palette: .viridis,
+        palette: .gray,
         vmin: 0,
         vmax: 1,
         invert: true
@@ -78,16 +66,16 @@ func rendererUsesBundledPaletteAndPreservesInversion() {
 
     #expect(
         normal == [
-            68, 1, 84, 255,
-            33, 145, 141, 255,
-            253, 231, 37, 255,
+            0, 0, 0, 255,
+            128, 128, 128, 255,
+            255, 255, 255, 255,
         ]
     )
     #expect(
         inverted == [
-            253, 231, 37, 255,
-            33, 145, 141, 255,
-            68, 1, 84, 255,
+            255, 255, 255, 255,
+            128, 128, 128, 255,
+            0, 0, 0, 255,
         ]
     )
 }
@@ -144,7 +132,7 @@ func paletteCatalogRejectsStructuralAndRangeErrors() throws {
     duplicate["palettes"] = duplicateEntries
     #expect(
         capturedPaletteError(duplicate)
-            == .duplicatePalette(.gwyddionNet)
+            == .duplicatePalette(.gray)
     )
 
     var unordered = completePaletteCatalog()
@@ -157,7 +145,7 @@ func paletteCatalogRejectsStructuralAndRangeErrors() throws {
     unordered["palettes"] = unorderedEntries
     #expect(
         capturedPaletteError(unordered)
-            == .unorderedStops(.gwyddionNet, index: 1)
+            == .unorderedStops(.gray, index: 1)
     )
 
     var outOfRange = completePaletteCatalog()
@@ -169,7 +157,7 @@ func paletteCatalogRejectsStructuralAndRangeErrors() throws {
     outOfRange["palettes"] = rangeEntries
     #expect(
         capturedPaletteError(outOfRange)
-            == .outOfRangeStop(.gwyddionNet, index: 1)
+            == .outOfRangeStop(.gray, index: 1)
     )
 }
 

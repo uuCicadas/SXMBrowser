@@ -552,7 +552,7 @@ private func metadata(
 private func renderConfiguration(
     direction: ScanDirection = .fwd,
     processing: ProcessingMode = .raw,
-    palette: PaletteName = .gray,
+    palette: PaletteName = .flame,
     invert: Bool = false,
     bins: Int = 256,
     scale: RenderScaleRequest = .automatic
@@ -747,7 +747,7 @@ func probeRejectsStaleIdentitiesAndPendingReplacementFrame()
         datasetRevision: firstRequest.datasetRevision,
         fileID: firstRequest.fileID,
         configuration:
-            renderConfiguration(palette: .gold)
+            renderConfiguration(palette: .gray)
                 .imageConfiguration
     )
     let wrongDataset = RenderRequestIdentity(
@@ -780,7 +780,7 @@ func probeRejectsStaleIdentitiesAndPendingReplacementFrame()
 
     let secondRequest = coordinator.render(
         file: file,
-        configuration: renderConfiguration(palette: .gold)
+        configuration: renderConfiguration(palette: .gray)
     )
     let secondImage = try #require(await imageStarts.next())
     #expect(
@@ -866,7 +866,7 @@ func rapidImageChangesUseOneProcessingPipelineAndPublishNewest()
     var newestConfiguration = renderConfiguration()
     for index in 1..<100 {
         newestConfiguration = renderConfiguration(
-            palette: index.isMultiple(of: 2) ? .gold : .viridis,
+            palette: index.isMultiple(of: 2) ? .gray : .flame,
             invert: !index.isMultiple(of: 2),
             scale: .locked(
                 min: Double(index),
@@ -1117,10 +1117,10 @@ func nilStatisticsAreMemoizedAndAlwaysResolveImageBounds()
     let file = metadata()
     let configurations = [
         renderConfiguration(),
-        renderConfiguration(palette: .gold),
+        renderConfiguration(palette: .gray),
         renderConfiguration(invert: true),
         renderConfiguration(
-            palette: .viridis,
+            palette: .gray,
             scale: .locked(min: nil, max: nil)
         ),
     ]

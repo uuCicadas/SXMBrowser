@@ -24,7 +24,7 @@ func headerParserStopsAtScanEnd() {
 func defaultDisplayRulesDistinguishSTMAndAFMChannels() {
     #expect(classifyChannel("Z") == .stm)
     #expect(defaultProcessing(for: "Z") == .lineLinear)
-    #expect(defaultPalette(for: "Z") == .gwyddionNet)
+    #expect(defaultPalette(for: "Z") == .flame)
 
     #expect(classifyChannel("OC_M1_Freq._Shift") == .afm)
     #expect(defaultProcessing(for: "OC_M1_Freq._Shift") == .raw)
