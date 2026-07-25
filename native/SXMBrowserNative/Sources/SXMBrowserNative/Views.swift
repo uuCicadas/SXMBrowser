@@ -4681,10 +4681,83 @@ struct InspectorView: View {
 
     var isSingle: Bool { model.mode == .single && model.selectedFile != nil }
     var canEditScanDisplay: Bool { model.selectedFile != nil && !model.files.isEmpty }
+    private var metadataPresentation:
+        InspectorMetadataPresentation?
+    {
+        model.selectedFile.map {
+            InspectorMetadataPresentation(
+                metadata: $0,
+                selectedChannelName: model.selectedChannel
+            )
+        }
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                InspectorSection(title: "File Information") {
+                    if let file = model.selectedFile,
+                       let metadataPresentation {
+                        InspectorMetadataRow(
+                            "File",
+                            file.filename
+                        )
+                        InspectorMetadataRow(
+                            "Recorded",
+                            metadataPresentation.recordedTime.map {
+                                formattedMetadataDate($0)
+                            } ?? "Not recorded"
+                        )
+                        InspectorMetadataRow(
+                            "Modified",
+                            formattedMetadataDate(
+                                metadataPresentation.modifiedTime
+                            )
+                        )
+                        InspectorMetadataRow(
+                            "Dimensions",
+                            "\(metadataPresentation.pixelWidth)"
+                                + " × "
+                                + "\(metadataPresentation.pixelHeight)"
+                                + " px"
+                        )
+                        InspectorMetadataRow(
+                            "Scan range",
+                            formattedInspectorPair(
+                                metadataPresentation
+                                    .scanRangeMeters,
+                                separator: " × "
+                            )
+                        )
+                        InspectorMetadataRow(
+                            "Offset",
+                            formattedInspectorPair(
+                                metadataPresentation
+                                    .scanOffsetMeters,
+                                separator: " · ",
+                                includesAxisNames: true
+                            )
+                        )
+                        InspectorMetadataRow(
+                            "Angle",
+                            formattedInspectorAngle(
+                                metadataPresentation
+                                    .scanAngleDegrees
+                            )
+                        )
+                        InspectorMetadataRow(
+                            "Channel",
+                            formattedInspectorChannel(
+                                metadataPresentation
+                            )
+                        )
+                    } else {
+                        Text("No file selected.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 InspectorSection(title: "Scan Display") {
                     LabeledControl("Channel") {
                         Picker("Channel", selection: Binding(
@@ -4955,6 +5028,63 @@ struct InspectorView: View {
         }
         .background(AppTheme.sidebar)
     }
+
+    private func formattedMetadataDate(
+        _ date: Date
+    ) -> String {
+        date.formatted(
+            date: .abbreviated,
+            time: .standard
+        )
+    }
+
+    private func formattedInspectorPair(
+        _ pair: InspectorCoordinatePair?,
+        separator: String,
+        includesAxisNames: Bool = false
+    ) -> String {
+        guard let pair else { return "Unavailable" }
+        let x = formattedInspectorLength(pair.x)
+        let y = formattedInspectorLength(pair.y)
+        if includesAxisNames {
+            return "X \(x)\(separator)Y \(y)"
+        }
+        return "\(x)\(separator)\(y)"
+    }
+
+    private func formattedInspectorLength(
+        _ meters: Double
+    ) -> String {
+        if meters == 0 {
+            return "0 m"
+        }
+        return "\(compact(meters))m"
+    }
+
+    private func formattedInspectorAngle(
+        _ angle: Double?
+    ) -> String {
+        guard let angle else { return "Unavailable" }
+        return angle.formatted(
+            .number.precision(
+                .fractionLength(0...3)
+            )
+        ) + "°"
+    }
+
+    private func formattedInspectorChannel(
+        _ presentation: InspectorMetadataPresentation
+    ) -> String {
+        guard !presentation.channelName.isEmpty else {
+            return "Unavailable"
+        }
+        guard !presentation.channelUnit.isEmpty else {
+            return presentation.channelName
+        }
+        return presentation.channelName
+            + " · "
+            + presentation.channelUnit
+    }
 }
 
 struct InspectorSection<Content: View>: View {
@@ -5014,6 +5144,32 @@ struct StatLabel: View {
                 .font(.caption.monospacedDigit())
         }
         .font(.caption)
+    }
+}
+
+private struct InspectorMetadataRow: View {
+    let title: String
+    let value: String
+
+    init(_ title: String, _ value: String) {
+        self.title = title
+        self.value = value
+    }
+
+    var body: some View {
+        HStack(
+            alignment: .firstTextBaseline,
+            spacing: 10
+        ) {
+            Text(title)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
+        }
+        .font(.caption)
+        .accessibilityElement(children: .combine)
     }
 }
 
