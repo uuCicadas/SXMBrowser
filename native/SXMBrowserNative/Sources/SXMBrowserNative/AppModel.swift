@@ -15,12 +15,22 @@ enum BrowserMode: String, CaseIterable, Identifiable {
 enum SortMode: String, CaseIterable, Identifiable {
     case name
     case modifiedTime
+    case recordedTime
 
     var id: String { rawValue }
     var label: String {
         switch self {
         case .name: "File name"
         case .modifiedTime: "Modified time"
+        case .recordedTime: "Recorded time"
+        }
+    }
+
+    var sortCriterion: FileSortCriterion {
+        switch self {
+        case .name: .name
+        case .modifiedTime: .modifiedTime
+        case .recordedTime: .recordedTime
         }
     }
 }
@@ -199,14 +209,22 @@ final class AppModel: ObservableObject {
 
     var sortedFiles: [SXMMetadata] {
         files.sorted { lhs, rhs in
-            let result: Bool
-            switch sortMode {
-            case .modifiedTime:
-                result = lhs.modifiedTime < rhs.modifiedTime
-            case .name:
-                result = lhs.filename.localizedStandardCompare(rhs.filename) == .orderedAscending
-            }
-            return sortAscending ? result : !result
+            FileSortComparator.orderedBefore(
+                FileSortValue(
+                    identity: lhs.path.standardizedFileURL.path,
+                    filename: lhs.filename,
+                    modifiedTime: lhs.modifiedTime,
+                    recordedTime: lhs.recordedTime
+                ),
+                FileSortValue(
+                    identity: rhs.path.standardizedFileURL.path,
+                    filename: rhs.filename,
+                    modifiedTime: rhs.modifiedTime,
+                    recordedTime: rhs.recordedTime
+                ),
+                criterion: sortMode.sortCriterion,
+                ascending: sortAscending
+            )
         }
     }
 

@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 16 (2026-07-25): add strict Recorded Time sorting with missing values last
 - Build 15 (2026-07-25): validate SXM dimensions, byte layout, and MSB storage
 - Build 14 (2026-07-25): show exact Trash targets and reconcile partial deletion results
 - Build 13 (2026-07-25): gate rendered frames by dataset, file, request, and configuration
