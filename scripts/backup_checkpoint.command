@@ -36,6 +36,7 @@ fi
 
 ACTIVE_TRANSACTION_DIR=""
 ACTIVE_RECEIPT=""
+ACTIVE_MANIFEST_SNAPSHOT=""
 BUNDLE_NAME=""
 BUNDLE_PATH=""
 CLEANUP_RAN=0
@@ -51,6 +52,9 @@ cleanup_once() {
         && -z "${ACTIVE_RECEIPT:-}" ]]; then
         rm -f "$ACTIVE_TRANSACTION_DIR/$BUNDLE_NAME"
         rmdir "$ACTIVE_TRANSACTION_DIR" 2>/dev/null || true
+    fi
+    if [[ -n "${ACTIVE_MANIFEST_SNAPSHOT:-}" ]]; then
+        rm -f "$ACTIVE_MANIFEST_SNAPSHOT"
     fi
     sxm_release_backup_lock
 }
@@ -133,16 +137,56 @@ PADDED_BUILD="$(printf '%04d' "$((10#$BUILD))")"
 BUNDLE_NAME="sxm-browser-b${PADDED_BUILD}-${STAMP}-${SHORT_SHA}.bundle"
 BUNDLE_PATH="$BUNDLE_DIR/$BUNDLE_NAME"
 
-MANIFEST_SNAPSHOT="$(mktemp "$BACKUP_ROOT/.manifest-preflight.XXXXXX")"
-if ! sxm_make_manifest_snapshot "$MANIFEST" "$MANIFEST_SNAPSHOT" 0 1; then
-    rm -f "$MANIFEST_SNAPSHOT"
+ALLOW_MISSING_MANIFEST=0
+if [[ ! -f "$MANIFEST" ]]; then
+    setopt local_options null_glob
+    existing_artifacts=(
+        "$BUNDLE_DIR"/*.bundle
+        "$MILESTONE_DIR"/*.zip
+    )
+    pending_receipts=("$PENDING_DIR"/*.pending)
+    existing_transactions=("$TRANSACTION_ROOT"/*)
+    if (( ${#existing_artifacts} > 0 \
+        || ${#pending_receipts} > 0 \
+        || ${#existing_transactions} > 0 )); then
+        sxm_error \
+            "Backup manifest is missing while backup artifacts or transactions still exist: $MANIFEST"
+        exit 65
+    fi
+    ALLOW_MISSING_MANIFEST=1
+fi
+
+ACTIVE_MANIFEST_SNAPSHOT="$(
+    mktemp "$BACKUP_ROOT/.manifest-preflight.XXXXXX"
+)"
+if ! sxm_make_manifest_snapshot \
+    "$MANIFEST" \
+    "$ACTIVE_MANIFEST_SNAPSHOT" \
+    0 \
+    "$ALLOW_MISSING_MANIFEST"; then
+    rm -f "$ACTIVE_MANIFEST_SNAPSHOT"
+    ACTIVE_MANIFEST_SNAPSHOT=""
     sxm_error \
         "The backup manifest is not canonical. Run migrate_backup_manifest.command --check/--apply first."
     exit 65
 fi
-rm -f "$MANIFEST_SNAPSHOT"
+rm -f "$ACTIVE_MANIFEST_SNAPSHOT"
+ACTIVE_MANIFEST_SNAPSHOT=""
 
 sxm_recover_pending_receipts "$BACKUP_ROOT" "$MANIFEST"
+ACTIVE_MANIFEST_SNAPSHOT="$(
+    mktemp "$BACKUP_ROOT/.manifest-inventory.XXXXXX"
+)"
+sxm_make_manifest_snapshot \
+    "$MANIFEST" \
+    "$ACTIVE_MANIFEST_SNAPSHOT" \
+    0 \
+    "$ALLOW_MISSING_MANIFEST"
+sxm_verify_manifest_inventory \
+    "$BACKUP_ROOT" \
+    "$ACTIVE_MANIFEST_SNAPSHOT"
+rm -f "$ACTIVE_MANIFEST_SNAPSHOT"
+ACTIVE_MANIFEST_SNAPSHOT=""
 if (( SXM_RECOVERED_PENDING_COUNT > 0 )); then
     print \
         "Recovered $SXM_RECOVERED_PENDING_COUNT pending checkpoint(s); no new bundle was created."

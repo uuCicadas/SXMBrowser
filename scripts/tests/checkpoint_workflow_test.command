@@ -340,6 +340,49 @@ test_version_requires_previous_backup() {
     pass "version checkpoint verifies a previous HEAD bundle"
 }
 
+test_version_rejects_detached_head() {
+    make_fixture detached-version
+    local info_sha="$(shasum -a 256 "$FIXTURE_INFO" | awk '{print $1}')"
+    local changelog_sha="$(
+        shasum -a 256 "$FIXTURE_CHANGELOG" | awk '{print $1}'
+    )"
+    git -C "$FIXTURE_REPOSITORY" checkout -q --detach
+    expect_exit 65 \
+        run_version "$FIXTURE_REPOSITORY" "$FIXTURE_BACKUP_ROOT"
+    assert_equal \
+        "$info_sha" \
+        "$(shasum -a 256 "$FIXTURE_INFO" | awk '{print $1}')" \
+        "Detached version guard must leave Info.plist unchanged"
+    assert_equal \
+        "$changelog_sha" \
+        "$(shasum -a 256 "$FIXTURE_CHANGELOG" | awk '{print $1}')" \
+        "Detached version guard must leave Changelog unchanged"
+    pass "version checkpoint rejects detached HEAD"
+}
+
+test_backup_rejects_missing_manifest_with_history() {
+    make_fixture missing-manifest
+    prepare_committed_checkpoint \
+        "$FIXTURE_REPOSITORY" \
+        "$FIXTURE_BACKUP_ROOT"
+    local bundle_count="$(
+        find "$FIXTURE_BACKUP_ROOT/bundles" -name '*.bundle' -type f \
+            | wc -l | tr -d '[:space:]'
+    )"
+    rm "$FIXTURE_MANIFEST"
+    expect_exit 65 \
+        run_backup \
+        "$FIXTURE_REPOSITORY" \
+        "$FIXTURE_BACKUP_ROOT" \
+        "tests passed"
+    assert_equal \
+        "$bundle_count" \
+        "$(find "$FIXTURE_BACKUP_ROOT/bundles" -name '*.bundle' -type f \
+            | wc -l | tr -d '[:space:]')" \
+        "Missing-manifest guard must not create or remove artifacts"
+    pass "backup refuses to forget existing history when manifest is missing"
+}
+
 test_backup_guards_and_real_tsv() {
     make_fixture backup
     prepare_committed_checkpoint \
@@ -507,6 +550,8 @@ test_migration_rejects_orphan_transaction
 test_version_transaction_and_repeat_guard
 test_version_failure_and_recovery
 test_version_requires_previous_backup
+test_version_rejects_detached_head
+test_backup_rejects_missing_manifest_with_history
 test_backup_guards_and_real_tsv
 test_pending_receipt_recovery
 test_backup_lock

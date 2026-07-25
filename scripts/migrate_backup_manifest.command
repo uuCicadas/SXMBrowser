@@ -129,6 +129,12 @@ else
     BACKUP_TEMP=""
 fi
 
+if [[ "$(sxm_sha256 "$ORIGINAL_BACKUP")" != "$ORIGINAL_SHA" ]]; then
+    sxm_error \
+        "Permanent manifest backup failed checksum verification: $ORIGINAL_BACKUP"
+    exit 65
+fi
+
 chmod "$(sxm_file_mode "$MANIFEST")" "$CANONICAL_TEMP"
 sxm_atomic_copy_replace "$CANONICAL_TEMP" "$MANIFEST"
 MIGRATION_PUBLISHED=1

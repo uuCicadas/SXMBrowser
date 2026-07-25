@@ -48,6 +48,19 @@ version_hash() {
 
 version_remove_transaction() {
     if [[ -d "$VERSION_TRANSACTION_DIR" ]]; then
+        local entry
+        setopt local_options null_glob
+        for entry in "$VERSION_TRANSACTION_DIR"/*(DN); do
+            case "${entry:t}" in
+                (original-info.plist|original-changelog.md|new-info.plist|new-changelog.md|generated-changelog.md|metadata.tsv)
+                    ;;
+                (*)
+                    sxm_error \
+                        "Version transaction contains unexpected recovery data: $entry"
+                    return 75
+                    ;;
+            esac
+        done
         rm -f \
             "$VERSION_TRANSACTION_DIR/original-info.plist" \
             "$VERSION_TRANSACTION_DIR/original-changelog.md" \
@@ -297,6 +310,12 @@ if version_recover_if_needed; then
     :
 else
     exit $?
+fi
+
+BRANCH="$(git branch --show-current)"
+if [[ -z "$BRANCH" ]]; then
+    sxm_error "Refusing to prepare a version checkpoint on a detached HEAD."
+    exit 65
 fi
 
 HEAD_BUILD="$(
