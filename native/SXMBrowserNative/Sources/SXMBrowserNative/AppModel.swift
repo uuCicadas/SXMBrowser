@@ -167,7 +167,33 @@ final class AppModel: ObservableObject {
         [SpectroscopyFile.ID: SXMMetadata.ID] = [:]
     @Published private(set) var unassociatedSpectrumIDs:
         Set<SpectroscopyFile.ID> = []
-    @Published var areSpectraVisible = true
+    @Published private(set) var showsGridSpectroscopyCards =
+        AppModel.loadBool(
+            Defaults.showsGridSpectroscopyCards,
+            fallback: true
+        )
+    @Published private(set) var singleSpectroscopyState =
+        SingleSpectroscopyState(
+            isExpanded: AppModel.loadBool(
+                Defaults.singleSpectroscopyDrawerExpanded,
+                fallback: true
+            ),
+            height: Double(
+                AppModel.loadCGFloat(
+                    Defaults.singleSpectroscopyDrawerHeight,
+                    fallback: CGFloat(
+                        SingleSpectroscopyState.defaultHeight
+                    ),
+                    range: CGFloat(
+                        SingleSpectroscopyState.heightRange
+                            .lowerBound
+                    )...CGFloat(
+                        SingleSpectroscopyState.heightRange
+                            .upperBound
+                    )
+                )
+            )
+        )
     @Published private(set) var selection = SelectionState<SXMMetadata.ID>()
     @Published var sidebarMode: SidebarMode = .all
     @Published private(set) var activeTagID: UUID?
@@ -514,7 +540,7 @@ final class AppModel: ObservableObject {
     var visibleDisplayItems: [GridDisplayItem] {
         visibleFiles.flatMap { file -> [GridDisplayItem] in
             var items: [GridDisplayItem] = [.sxm(file)]
-            if areSpectraVisible {
+            if showsGridSpectroscopyCards {
                 items.append(
                     contentsOf: presentedSpectrumGroups(for: file)
                         .filter(\.shouldShowGridCard)
@@ -643,6 +669,10 @@ final class AppModel: ObservableObject {
         isInspectorVisible = true
         sidebarWidth = Self.defaultSidebarWidth
         inspectorWidth = Self.defaultInspectorWidth
+        setSingleSpectroscopyDrawerExpanded(true)
+        setSingleSpectroscopyDrawerHeight(
+            CGFloat(SingleSpectroscopyState.defaultHeight)
+        )
         saveLayoutWidths()
     }
 
@@ -1338,6 +1368,7 @@ final class AppModel: ObservableObject {
         clearFilenameSearch()
         spectrumAxisState.clear()
         spectrumAxisRestoreIssues.removeAll()
+        reconcileSingleSpectroscopyState()
         datasetInventoryRevisionID = nil
         thumbnailCache.removeAllObjects()
         cancelThumbnailTasks()
@@ -1452,6 +1483,7 @@ final class AppModel: ObservableObject {
                 } else if let firstID = sortedFiles.first?.id {
                     selection.selectOnly(firstID, in: visibleFiles.map(\.id))
                 }
+                reconcileSingleSpectroscopyState()
                 applyDefaultsFromSelection()
                 datasetLoadState = .ready
                 let groupCount = spectrumGroupsByFileID.values.reduce(0) { $0 + $1.count }
@@ -2789,9 +2821,48 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func toggleSpectraVisibility() {
-        areSpectraVisible.toggle()
-        status = areSpectraVisible ? "Spectra visible." : "Spectra hidden."
+    func toggleGridSpectroscopyCards() {
+        setGridSpectroscopyCardsVisible(
+            !showsGridSpectroscopyCards
+        )
+    }
+
+    func setGridSpectroscopyCardsVisible(_ value: Bool) {
+        guard showsGridSpectroscopyCards != value else { return }
+        showsGridSpectroscopyCards = value
+        UserDefaults.standard.set(
+            showsGridSpectroscopyCards,
+            forKey: Defaults.showsGridSpectroscopyCards
+        )
+        status = showsGridSpectroscopyCards
+            ? "Spectrum cards visible in Grid."
+            : "Spectrum cards hidden in Grid."
+    }
+
+    func setSingleSpectroscopyDrawerExpanded(_ value: Bool) {
+        singleSpectroscopyState.setExpanded(value)
+        UserDefaults.standard.set(
+            singleSpectroscopyState.isExpanded,
+            forKey: Defaults.singleSpectroscopyDrawerExpanded
+        )
+    }
+
+    func setSingleSpectroscopyDrawerHeight(_ value: CGFloat) {
+        singleSpectroscopyState.setHeight(Double(value))
+        UserDefaults.standard.set(
+            singleSpectroscopyState.height,
+            forKey: Defaults.singleSpectroscopyDrawerHeight
+        )
+    }
+
+    func activateSingleSpectroscopyGroup(_ id: String?) {
+        singleSpectroscopyState.activateGroup(id)
+        reconcileSingleSpectroscopyState()
+    }
+
+    func focusSingleSpectrum(_ id: SpectroscopyFile.ID?) {
+        singleSpectroscopyState.focusSpectrum(id)
+        reconcileSingleSpectroscopyState()
     }
 
     func spectrumGroups(for file: SXMMetadata) -> [SpectroscopyGroup] {
@@ -2970,6 +3041,7 @@ final class AppModel: ObservableObject {
             onVerified: { [weak self] _ in
                 guard let self else { return }
                 restoreHiddenSpectrumVisibility()
+                reconcileSingleSpectroscopyState()
             }
         )
     }
@@ -3311,6 +3383,7 @@ final class AppModel: ObservableObject {
         guard previousPrimaryID != selection.primaryID else { return }
 
         clearSelectedRender()
+        reconcileSingleSpectroscopyState()
         guard selectedID != nil else {
             status = "No file selected."
             return
@@ -3877,6 +3950,14 @@ final class AppModel: ObservableObject {
         spectrumGroupsByFileID = associated.groups
         unassociatedSpectrumIDs = associated.unassociated
         restoreSpectrumAxisPreferences()
+        reconcileSingleSpectroscopyState()
+    }
+
+    private func reconcileSingleSpectroscopyState() {
+        let groups = selectedFile.map {
+            presentedSpectrumGroups(for: $0)
+        } ?? []
+        singleSpectroscopyState.reconcile(with: groups)
     }
 
     private func restoreSpectrumAxisPreferences() {
@@ -4081,6 +4162,12 @@ final class AppModel: ObservableObject {
         static let histogramBins = "native.histogramBins"
         static let gridDensity = "native.gridDensity"
         static let gridColumns = "native.gridColumns"
+        static let showsGridSpectroscopyCards =
+            "native.showsGridSpectroscopyCards"
+        static let singleSpectroscopyDrawerExpanded =
+            "native.singleSpectroscopyDrawerExpanded"
+        static let singleSpectroscopyDrawerHeight =
+            "native.singleSpectroscopyDrawerHeight"
         static let expandedTagIDsByDataset =
             "native.expandedTagIDsByDataset"
     }
@@ -4121,6 +4208,7 @@ final class AppModel: ObservableObject {
     private static func loadCGFloat(_ key: String, fallback: CGFloat, range: ClosedRange<CGFloat>) -> CGFloat {
         guard UserDefaults.standard.object(forKey: key) != nil else { return fallback }
         let value = CGFloat(UserDefaults.standard.double(forKey: key))
+        guard value.isFinite else { return fallback }
         return min(range.upperBound, max(range.lowerBound, value))
     }
 

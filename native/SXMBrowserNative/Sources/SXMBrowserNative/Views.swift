@@ -2095,10 +2095,10 @@ private struct BrowserToolbar: View {
                     }
 
                     Button {
-                        model.toggleSpectraVisibility()
+                        model.toggleGridSpectroscopyCards()
                     } label: {
                         Label(
-                            model.areSpectraVisible
+                            model.showsGridSpectroscopyCards
                                 ? "Hide Spectrum Cards in Grid"
                                 : "Show Spectrum Cards in Grid",
                             systemImage:
@@ -3068,12 +3068,24 @@ struct InspectorView: View {
                 .disabled(!isSingle || model.selectedImage == nil)
 
                 InspectorSection(title: "Spectroscopy") {
-                    Toggle("Show plots", isOn: Binding(
-                        get: { model.areSpectraVisible },
-                        set: { _ in model.toggleSpectraVisibility() }
-                    ))
-                    .toggleStyle(.switch)
-                    .disabled(model.spectra.isEmpty)
+                    if model.mode == .grid {
+                        Toggle(
+                            "Show spectrum cards in Grid",
+                            isOn: Binding(
+                                get: {
+                                    model.showsGridSpectroscopyCards
+                                },
+                                set: { value in
+                                    model
+                                        .setGridSpectroscopyCardsVisible(
+                                            value
+                                        )
+                                }
+                            )
+                        )
+                        .toggleStyle(.switch)
+                        .disabled(model.spectra.isEmpty)
+                    }
 
                     if !model.presentedSpectrumAxisRestoreIssues.isEmpty {
                         Label(
