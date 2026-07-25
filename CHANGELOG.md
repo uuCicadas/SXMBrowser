@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 55 (2026-07-25): 从精确标签 Bundle 恢复验收并事务发布里程碑源码包
 - Build 54 (2026-07-25): 自动复现 Au1110419 到 Au1110420 的迟到渲染回归
 - Build 53 (2026-07-25): 按实验类型和标准化列结构隔离谱图与轴偏好
 - Build 52 (2026-07-25): 收紧缺失清单、分离头与恢复副本校验边界

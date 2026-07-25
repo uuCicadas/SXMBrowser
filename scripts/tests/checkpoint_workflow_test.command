@@ -73,7 +73,44 @@ copy_checkpoint_scripts() {
         "$repository/scripts/backup_checkpoint.command"
     cp "$SOURCE_ROOT/scripts/migrate_backup_manifest.command" \
         "$repository/scripts/migrate_backup_manifest.command"
+    cp "$SOURCE_ROOT/scripts/milestone_checkpoint.command" \
+        "$repository/scripts/milestone_checkpoint.command"
     chmod +x "$repository/scripts/"*.command
+}
+
+make_milestone_validation_stub() {
+    local stub_path="$1"
+
+    {
+        print -r -- '#!/bin/zsh'
+        print -r -- 'set -euo pipefail'
+        print -r -- 'if [[ $# -ne 2 || "$1" != "--sample-dir" || ! -d "$2" ]]; then'
+        print -r -- '    exit 64'
+        print -r -- 'fi'
+        print -r -- 'repository="$(git rev-parse --show-toplevel)"'
+        print -r -- 'if [[ "$repository" != "$SXM_MILESTONE_RESTORE_REPOSITORY" \'
+        print -r -- '    || "$repository" == "$SXM_MILESTONE_ORIGINAL_REPOSITORY" ]]; then'
+        print -r -- '    exit 65'
+        print -r -- 'fi'
+        print -r -- 'if [[ "$(git rev-parse refs/tags/v2.0.0)" \'
+        print -r -- '    != "$SXM_MILESTONE_EXPECTED_TAG_OBJECT" ]]; then'
+        print -r -- '    exit 65'
+        print -r -- 'fi'
+        print -r -- 'print -r -- "$repository" > "$SXM_MILESTONE_TEST_MARKER"'
+        print -r -- 'mkdir -p \'
+        print -r -- '    "$repository/native/SXMBrowserNative/.build-test-output" \'
+        print -r -- '    "$repository/native/SXMBrowserNative/.build-cache-test-output" \'
+        print -r -- '    "$repository/SXM Browser.app/Contents" \'
+        print -r -- '    "$repository/dist" \'
+        print -r -- '    "$repository/backups" \'
+        print -r -- '    "$repository/example-graph"'
+        print -r -- 'print -r -- generated \'
+        print -r -- '    > "$repository/native/SXMBrowserNative/.build-test-output/generated.txt"'
+        print -r -- 'print -r -- generated \'
+        print -r -- '    > "$repository/SXM Browser.app/Contents/generated.txt"'
+        print -r -- 'exit "${SXM_MILESTONE_TEST_VALIDATION_EXIT:-0}"'
+    } > "$stub_path"
+    chmod +x "$stub_path"
 }
 
 make_fixture() {
@@ -83,6 +120,9 @@ make_fixture() {
     local info="$repository/native/SXMBrowserNative/Bundle/Info.plist"
     local changelog="$repository/CHANGELOG.md"
     local manifest="$backup_root/manifest.tsv"
+    local sample_dir="$TEST_ROOT/$name/example-graph"
+    local validation_stub="$TEST_ROOT/$name/milestone-validation.command"
+    local validation_marker="$TEST_ROOT/$name/milestone-validation.marker"
     local bundle_name="sxm-browser-b0007-20260101-000000-baseline.bundle"
     local bundle_path="$backup_root/bundles/$bundle_name"
     local commit
@@ -91,8 +131,11 @@ make_fixture() {
     mkdir -p \
         "${info:h}" \
         "$backup_root/bundles" \
-        "$backup_root/milestones"
+        "$backup_root/milestones" \
+        "$sample_dir"
     copy_checkpoint_scripts "$repository"
+    make_milestone_validation_stub "$validation_stub"
+    print -r -- "canonical sample" > "$sample_dir/sample.txt"
     cp "$SOURCE_ROOT/native/SXMBrowserNative/Bundle/Info.plist" "$info"
     plutil -replace CFBundleVersion -string 7 "$info"
     plutil -replace CFBundleShortVersionString -string 2.0.0 "$info"
@@ -127,6 +170,9 @@ make_fixture() {
     FIXTURE_MANIFEST="$manifest"
     FIXTURE_INFO="$info"
     FIXTURE_CHANGELOG="$changelog"
+    FIXTURE_SAMPLE_DIR="$sample_dir"
+    FIXTURE_VALIDATION_COMMAND="$validation_stub"
+    FIXTURE_VALIDATION_MARKER="$validation_marker"
 }
 
 run_version() {
@@ -165,6 +211,115 @@ run_backup() {
             "$@" \
             zsh scripts/backup_checkpoint.command "$summary"
     )
+}
+
+run_milestone() {
+    local repository="$1"
+    local backup_root="$2"
+    local tag="$3"
+    local sample_dir="$4"
+    local validation_command="$5"
+    local validation_marker="$6"
+    local expected_tag_object="$7"
+    shift 7
+    (
+        cd "$repository"
+        env \
+            SXM_BROWSER_BACKUP_ROOT="$backup_root" \
+            SXM_CHECKPOINT_TESTING=1 \
+            SXM_MILESTONE_TEST_VALIDATION_COMMAND="$validation_command" \
+            SXM_MILESTONE_TEST_MARKER="$validation_marker" \
+            SXM_MILESTONE_EXPECTED_TAG_OBJECT="$expected_tag_object" \
+            SXM_MILESTONE_ORIGINAL_REPOSITORY="$repository" \
+            "$@" \
+            zsh scripts/milestone_checkpoint.command \
+                "$tag" \
+                --sample-dir \
+                "$sample_dir"
+    )
+}
+
+append_bundle_manifest_row() {
+    local manifest="$1"
+    local bundle_path="$2"
+    local commit="$3"
+    local timestamp="$4"
+    local checksum
+
+    checksum="$(shasum -a 256 "$bundle_path" | awk '{print $1}')"
+    printf '%s\t7\t2.0.0\ttest-branch\t%s\t%s\t%s\tmilestone-fixture\n' \
+        "$timestamp" \
+        "$commit" \
+        "${bundle_path:t}" \
+        "$checksum" \
+        >> "$manifest"
+}
+
+prepare_milestone_fixture() {
+    local name="$1"
+    local mode="${2:-multiple}"
+    local commit
+    local exact_first_name="sxm-browser-b0007-20260101-010000-exactfirst.bundle"
+    local exact_latest_name="sxm-browser-b0007-20260101-020000-exactlatest.bundle"
+    local wrong_name="sxm-browser-b0007-20260101-030000-wrongtag.bundle"
+    local wrong_repository="$TEST_ROOT/$name/wrong-tag-repository"
+
+    make_fixture "$name"
+    run_migration \
+        "$FIXTURE_REPOSITORY" \
+        "$FIXTURE_BACKUP_ROOT" \
+        --apply >/dev/null
+    commit="$(git -C "$FIXTURE_REPOSITORY" rev-parse HEAD)"
+    git -C "$FIXTURE_REPOSITORY" tag \
+        -a v2.0.0 \
+        -m "exact milestone tag"
+    FIXTURE_TAG_OBJECT="$(
+        git -C "$FIXTURE_REPOSITORY" rev-parse refs/tags/v2.0.0
+    )"
+
+    if [[ "$mode" == "multiple" ]]; then
+        git -C "$FIXTURE_REPOSITORY" bundle create \
+            "$FIXTURE_BACKUP_ROOT/bundles/$exact_first_name" \
+            --all
+        append_bundle_manifest_row \
+            "$FIXTURE_MANIFEST" \
+            "$FIXTURE_BACKUP_ROOT/bundles/$exact_first_name" \
+            "$commit" \
+            "2026-01-01T01:00:00+0000"
+
+        git -C "$FIXTURE_REPOSITORY" bundle create \
+            "$FIXTURE_BACKUP_ROOT/bundles/$exact_latest_name" \
+            --all
+        append_bundle_manifest_row \
+            "$FIXTURE_MANIFEST" \
+            "$FIXTURE_BACKUP_ROOT/bundles/$exact_latest_name" \
+            "$commit" \
+            "2026-01-01T02:00:00+0000"
+        FIXTURE_EXPECTED_BUNDLE="$exact_latest_name"
+    else
+        FIXTURE_EXPECTED_BUNDLE=""
+    fi
+
+    git clone -q "$FIXTURE_REPOSITORY" "$wrong_repository"
+    git -C "$wrong_repository" config user.name "Wrong Tag Fixture"
+    git -C "$wrong_repository" config user.email "wrong-tag@example.invalid"
+    git -C "$wrong_repository" tag -d v2.0.0 >/dev/null
+    git -C "$wrong_repository" tag \
+        -a v2.0.0 \
+        -m "different annotated tag object" \
+        "$commit"
+    if [[ "$(git -C "$wrong_repository" rev-parse refs/tags/v2.0.0)" \
+        == "$FIXTURE_TAG_OBJECT" ]]; then
+        fail "Wrong-tag fixture unexpectedly reproduced the exact tag object."
+    fi
+    git -C "$wrong_repository" bundle create \
+        "$FIXTURE_BACKUP_ROOT/bundles/$wrong_name" \
+        --all
+    append_bundle_manifest_row \
+        "$FIXTURE_MANIFEST" \
+        "$FIXTURE_BACKUP_ROOT/bundles/$wrong_name" \
+        "$commit" \
+        "2026-01-01T03:00:00+0000"
 }
 
 prepare_committed_checkpoint() {
@@ -486,6 +641,235 @@ test_pending_receipt_recovery() {
     pass "pending receipt repairs final-artifact/old-manifest crash window"
 }
 
+test_milestone_exact_tag_restore_and_source_archive() {
+    prepare_milestone_fixture milestone-success multiple
+    local output
+    local archive="$FIXTURE_BACKUP_ROOT/milestones/sxm-browser-v2.0.0-source.zip"
+    local restored_repository
+    local final_row
+    local timestamp build version branch commit artifact checksum tests
+
+    output="$(
+        run_milestone \
+            "$FIXTURE_REPOSITORY" \
+            "$FIXTURE_BACKUP_ROOT" \
+            v2.0.0 \
+            "$FIXTURE_SAMPLE_DIR" \
+            "$FIXTURE_VALIDATION_COMMAND" \
+            "$FIXTURE_VALIDATION_MARKER" \
+            "$FIXTURE_TAG_OBJECT"
+    )"
+    [[ "$output" == *"$FIXTURE_EXPECTED_BUNDLE"* ]] \
+        || fail "Milestone did not select the latest exact-tag Bundle."
+    assert_file "$archive"
+    assert_file "$FIXTURE_VALIDATION_MARKER"
+    restored_repository="$(< "$FIXTURE_VALIDATION_MARKER")"
+    [[ "$restored_repository" != "$FIXTURE_REPOSITORY" ]] \
+        || fail "Milestone validation ran in the source repository."
+    assert_no_file "$restored_repository"
+
+    final_row="$(tail -n 1 "$FIXTURE_MANIFEST")"
+    IFS=$'\t' read -r \
+        timestamp build version branch commit artifact checksum tests \
+        <<< "$final_row"
+    assert_equal "8" "$(
+        printf '%s\n' "$final_row" \
+            | awk -F '\t' '{ print NF }'
+    )" "Milestone manifest row must be canonical TSV"
+    assert_equal "7" "$build" "Milestone build must come from the restored tag"
+    assert_equal "2.0.0" "$version" \
+        "Milestone version must come from the restored tag"
+    assert_equal \
+        "$(git -C "$FIXTURE_REPOSITORY" rev-parse v2.0.0^{commit})" \
+        "$commit" \
+        "Milestone manifest must record the peeled tag commit"
+    assert_equal "sxm-browser-v2.0.0-source.zip" "$artifact" \
+        "Milestone manifest must index the source archive"
+    [[ "$tests" == *"restore=${FIXTURE_EXPECTED_BUNDLE}"* ]] \
+        || fail "Milestone manifest did not record the selected Bundle."
+
+    if unzip -Z1 "$archive" \
+        | awk '
+            {
+                count = split($0, components, "/")
+                for (indexValue = 1; indexValue <= count; indexValue++) {
+                    component = components[indexValue]
+                    if (component ~ /^\.build/ \
+                        || component == ".swiftpm" \
+                        || component == "DerivedData" \
+                        || component ~ /\.app$/ \
+                        || component == "dist" \
+                        || component == "backups" \
+                        || component == "example-graph" \
+                        || component == ".DS_Store" \
+                        || component == "__MACOSX") {
+                        found = 1
+                    }
+                }
+            }
+            END { exit(found ? 0 : 1) }
+        ' >/dev/null; then
+        fail "Milestone source ZIP contains generated or excluded content."
+    fi
+    assert_equal \
+        "fixture" \
+        "$(unzip -p "$archive" 'sxm-browser-v2.0.0/fixture.txt')" \
+        "Milestone source ZIP must come from the restored tagged tree"
+    assert_equal \
+        "0" \
+        "$(find "$FIXTURE_BACKUP_ROOT/.pending" -name '*.pending' -type f \
+            | wc -l | tr -d '[:space:]')" \
+        "Successful milestone must consume its receipt"
+    pass "milestone restores the latest exact tag object and emits a clean source ZIP"
+}
+
+test_milestone_rejects_wrong_annotated_tag_object() {
+    prepare_milestone_fixture milestone-wrong-tag wrong-only
+    local manifest_sha="$(
+        shasum -a 256 "$FIXTURE_MANIFEST" | awk '{ print $1 }'
+    )"
+
+    expect_exit 65 \
+        run_milestone \
+        "$FIXTURE_REPOSITORY" \
+        "$FIXTURE_BACKUP_ROOT" \
+        v2.0.0 \
+        "$FIXTURE_SAMPLE_DIR" \
+        "$FIXTURE_VALIDATION_COMMAND" \
+        "$FIXTURE_VALIDATION_MARKER" \
+        "$FIXTURE_TAG_OBJECT"
+    assert_no_file "$FIXTURE_VALIDATION_MARKER"
+    assert_equal \
+        "$manifest_sha" \
+        "$(shasum -a 256 "$FIXTURE_MANIFEST" | awk '{ print $1 }')" \
+        "Wrong tag-object rejection must not change the manifest"
+    assert_equal \
+        "0" \
+        "$(find "$FIXTURE_BACKUP_ROOT/milestones" -name '*.zip' -type f \
+            | wc -l | tr -d '[:space:]')" \
+        "Wrong tag-object rejection must not create an archive"
+    pass "milestone requires the exact annotated tag object"
+}
+
+test_milestone_validation_failure_has_no_artifacts() {
+    prepare_milestone_fixture milestone-validation-failure multiple
+    local manifest_sha="$(
+        shasum -a 256 "$FIXTURE_MANIFEST" | awk '{ print $1 }'
+    )"
+    local restored_repository
+
+    expect_exit 42 \
+        run_milestone \
+        "$FIXTURE_REPOSITORY" \
+        "$FIXTURE_BACKUP_ROOT" \
+        v2.0.0 \
+        "$FIXTURE_SAMPLE_DIR" \
+        "$FIXTURE_VALIDATION_COMMAND" \
+        "$FIXTURE_VALIDATION_MARKER" \
+        "$FIXTURE_TAG_OBJECT" \
+        SXM_MILESTONE_TEST_VALIDATION_EXIT=42
+    assert_file "$FIXTURE_VALIDATION_MARKER"
+    restored_repository="$(< "$FIXTURE_VALIDATION_MARKER")"
+    assert_no_file "$restored_repository"
+    assert_equal \
+        "$manifest_sha" \
+        "$(shasum -a 256 "$FIXTURE_MANIFEST" | awk '{ print $1 }')" \
+        "Failed restored validation must not change the manifest"
+    assert_equal \
+        "0" \
+        "$(find "$FIXTURE_BACKUP_ROOT/milestones" -name '*.zip' -type f \
+            | wc -l | tr -d '[:space:]')" \
+        "Failed restored validation must not publish an archive"
+    assert_equal \
+        "0" \
+        "$(find "$FIXTURE_BACKUP_ROOT/.pending" -name '*.pending' -type f \
+            | wc -l | tr -d '[:space:]')" \
+        "Failed restored validation must not leave a receipt"
+    assert_equal \
+        "0" \
+        "$(find "$FIXTURE_BACKUP_ROOT/.transactions" -mindepth 1 \
+            -maxdepth 1 -type d | wc -l | tr -d '[:space:]')" \
+        "Failed restored validation must not leave a transaction"
+    pass "failed validation in the restored clone publishes nothing"
+}
+
+test_milestone_fault_recovery_is_idempotent() {
+    local stage
+    for stage in \
+        after_receipt \
+        after_artifact_publish \
+        after_manifest_publish; do
+        prepare_milestone_fixture "milestone-fault-$stage" multiple
+        local initial_lines="$(
+            wc -l < "$FIXTURE_MANIFEST" | tr -d '[:space:]'
+        )"
+        local archive="$FIXTURE_BACKUP_ROOT/milestones/sxm-browser-v2.0.0-source.zip"
+
+        expect_exit 99 \
+            run_milestone \
+            "$FIXTURE_REPOSITORY" \
+            "$FIXTURE_BACKUP_ROOT" \
+            v2.0.0 \
+            "$FIXTURE_SAMPLE_DIR" \
+            "$FIXTURE_VALIDATION_COMMAND" \
+            "$FIXTURE_VALIDATION_MARKER" \
+            "$FIXTURE_TAG_OBJECT" \
+            SXM_CHECKPOINT_TEST_FAIL_AT="$stage"
+        assert_equal \
+            "1" \
+            "$(find "$FIXTURE_BACKUP_ROOT/.pending" -name '*.pending' -type f \
+                | wc -l | tr -d '[:space:]')" \
+            "Milestone fault $stage must leave one recoverable receipt"
+
+        run_milestone \
+            "$FIXTURE_REPOSITORY" \
+            "$FIXTURE_BACKUP_ROOT" \
+            v2.0.0 \
+            "$FIXTURE_SAMPLE_DIR" \
+            "$FIXTURE_VALIDATION_COMMAND" \
+            "$FIXTURE_VALIDATION_MARKER" \
+            "$FIXTURE_TAG_OBJECT" >/dev/null
+        assert_file "$archive"
+        assert_equal \
+            "0" \
+            "$(find "$FIXTURE_BACKUP_ROOT/.pending" -name '*.pending' -type f \
+                | wc -l | tr -d '[:space:]')" \
+            "Milestone recovery $stage must consume its receipt"
+        assert_equal \
+            "0" \
+            "$(find "$FIXTURE_BACKUP_ROOT/.transactions" -mindepth 1 \
+                -maxdepth 1 -type d | wc -l | tr -d '[:space:]')" \
+            "Milestone recovery $stage must consume its transaction"
+        assert_equal \
+            "$((initial_lines + 1))" \
+            "$(wc -l < "$FIXTURE_MANIFEST" | tr -d '[:space:]')" \
+            "Milestone recovery $stage must append exactly one row"
+        assert_equal \
+            "1" \
+            "$(awk -F '\t' \
+                '$6 == "sxm-browser-v2.0.0-source.zip" { count++ } \
+                END { print count + 0 }' \
+                "$FIXTURE_MANIFEST")" \
+            "Milestone recovery $stage must not duplicate its manifest row"
+
+        expect_exit 73 \
+            run_milestone \
+            "$FIXTURE_REPOSITORY" \
+            "$FIXTURE_BACKUP_ROOT" \
+            v2.0.0 \
+            "$FIXTURE_SAMPLE_DIR" \
+            "$FIXTURE_VALIDATION_COMMAND" \
+            "$FIXTURE_VALIDATION_MARKER" \
+            "$FIXTURE_TAG_OBJECT"
+        assert_equal \
+            "1" \
+            "$(find "$FIXTURE_BACKUP_ROOT/milestones" -name '*.zip' -type f \
+                | wc -l | tr -d '[:space:]')" \
+            "Repeated milestone $stage must not create another archive"
+    done
+    pass "milestone receipt recovery is idempotent across all publish windows"
+}
+
 test_backup_lock() {
     make_fixture lock
     prepare_committed_checkpoint \
@@ -541,7 +925,8 @@ zsh -n \
     "$SOURCE_ROOT/scripts/lib/checkpoint_common.zsh" \
     "$SOURCE_ROOT/scripts/migrate_backup_manifest.command" \
     "$SOURCE_ROOT/scripts/version_checkpoint.command" \
-    "$SOURCE_ROOT/scripts/backup_checkpoint.command"
+    "$SOURCE_ROOT/scripts/backup_checkpoint.command" \
+    "$SOURCE_ROOT/scripts/milestone_checkpoint.command"
 pass "zsh syntax validation"
 
 test_manifest_migration
@@ -554,6 +939,10 @@ test_version_rejects_detached_head
 test_backup_rejects_missing_manifest_with_history
 test_backup_guards_and_real_tsv
 test_pending_receipt_recovery
+test_milestone_exact_tag_restore_and_source_archive
+test_milestone_rejects_wrong_annotated_tag_object
+test_milestone_validation_failure_has_no_artifacts
+test_milestone_fault_recovery_is_idempotent
 test_backup_lock
 test_stale_backup_lock_recovery
 

@@ -90,6 +90,20 @@ Apple Silicon、macOS 14+ 的 Release 构建中执行。
 ./scripts/tests/checkpoint_workflow_test.command
 ```
 
+语义版本 annotated tag、包含该精确 tag object 的 Bundle 和标准样例都准备好后，
+使用恢复演练生成里程碑源码包：
+
+```bash
+./scripts/milestone_checkpoint.command \
+  v2.1.0 \
+  --sample-dir "/path/to/example-graph"
+```
+
+脚本会从标准清单自动选择最后一个包含相同 annotated tag object 的 Bundle，
+克隆后执行完整文件系统检查、tag checkout 和阶段二验收，再从恢复仓库的 tag
+生成不含构建物、App、缓存、样例或旧备份的源码 ZIP。ZIP 和清单使用同一套
+可恢复事务发布；中断后重新执行会先完成原事务，不会生成重复记录。
+
 原生源码在：
 
 ```text

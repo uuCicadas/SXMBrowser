@@ -424,6 +424,80 @@ sxm_find_verified_bundle_for_commit() {
     REPLY="$artifact_path"
 }
 
+sxm_find_latest_verified_bundle_for_tag_object() {
+    local backup_root="$1"
+    local manifest="$2"
+    local wanted_ref="$3"
+    local wanted_tag_object="$4"
+    local timestamp build version branch commit artifact checksum tests
+    local artifact_path
+    local advertised_object
+    local candidate_artifact=""
+    local candidate_checksum=""
+
+    while IFS=$'\t' read -r \
+        timestamp build version branch commit artifact checksum tests; do
+        if [[ "$artifact" != *.bundle ]]; then
+            continue
+        fi
+        sxm_manifest_artifact_path "$backup_root" "$artifact" || return $?
+        artifact_path="$REPLY"
+        advertised_object="$(
+            git bundle list-heads "$artifact_path" "$wanted_ref" \
+                | awk -v wantedRef="$wanted_ref" '
+                    $2 == wantedRef {
+                        matches++
+                        object = $1
+                    }
+                    END {
+                        if (matches > 1) {
+                            exit 65
+                        }
+                        if (matches == 1) {
+                            print object
+                        }
+                    }
+                '
+        )" || return $?
+        if [[ "$advertised_object" == "$wanted_tag_object" ]]; then
+            candidate_artifact="$artifact"
+            candidate_checksum="$checksum"
+        fi
+    done < <(tail -n +2 "$manifest")
+
+    if [[ -z "$candidate_artifact" ]]; then
+        sxm_error \
+            "No manifest Bundle advertises $wanted_ref at annotated tag object $wanted_tag_object."
+        return 65
+    fi
+
+    sxm_manifest_artifact_path "$backup_root" "$candidate_artifact" \
+        || return $?
+    artifact_path="$REPLY"
+    sxm_verify_artifact "$artifact_path" "$candidate_checksum" || return $?
+    advertised_object="$(
+        git bundle list-heads "$artifact_path" "$wanted_ref" \
+            | awk -v wantedRef="$wanted_ref" '
+                $2 == wantedRef {
+                    matches++
+                    object = $1
+                }
+                END {
+                    if (matches != 1) {
+                        exit 65
+                    }
+                    print object
+                }
+            '
+    )" || return $?
+    if [[ "$advertised_object" != "$wanted_tag_object" ]]; then
+        sxm_error \
+            "Selected Bundle no longer advertises the expected annotated tag object: $artifact_path"
+        return 65
+    fi
+    REPLY="$artifact_path"
+}
+
 sxm_manifest_row_for_artifact() {
     local manifest="$1"
     local artifact_name="$2"
