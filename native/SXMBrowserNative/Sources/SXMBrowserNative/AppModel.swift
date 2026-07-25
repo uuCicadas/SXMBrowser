@@ -163,6 +163,8 @@ final class AppModel: ObservableObject {
     @Published var selectedPalette: PaletteName = .gwyddionNet
     @Published var invertPalette = false
     @Published private(set) var spectrumAxisState = SpectroscopyAxisState()
+    @Published private(set) var spectrumAxisRestoreIssues:
+        [SpectrumAxisPreferenceRestoreIssue] = []
 
     @Published private(set) var renderedFrame: RenderedFrame?
     @Published var scalePreset: ScalePreset = .percentile
@@ -273,6 +275,24 @@ final class AppModel: ObservableObject {
         activeDatasetSession != nil
             && !isLoading
             && !isMetadataMutationInFlight
+    }
+
+    var canModifySpectrumAxes: Bool {
+        activeDatasetSession != nil
+            && !isLoading
+            && !isMetadataMutationInFlight
+    }
+
+    var presentedSpectrumAxisRestoreIssues:
+        [SpectrumAxisPreferenceRestoreIssue] {
+        spectrumAxisRestoreIssues.filter { issue in
+            switch issue.reason {
+            case .incompatibleSchema, .missingColumn, .ambiguousColumn:
+                true
+            case .missingSXMPath, .groupUnavailable:
+                false
+            }
+        }
     }
 
     var visibleUnassociatedSpectra: [SpectroscopyFile] {
@@ -519,6 +539,7 @@ final class AppModel: ObservableObject {
         sidebarMode = .all
         filenameSearch = ""
         spectrumAxisState.clear()
+        spectrumAxisRestoreIssues.removeAll()
         processedRenderCache = nil
         let previousMatrixCache = matrixCache
         matrixCache = MatrixLoadCache()
@@ -640,7 +661,12 @@ final class AppModel: ObservableObject {
                 applyDefaultsFromSelection()
                 isLoading = false
                 let groupCount = spectrumGroupsByFileID.values.reduce(0) { $0 + $1.count }
-                status = "Loaded \(scanned.0.items.count) SXM files and \(scanned.1.items.count) spectra in \(groupCount) plots. Scan issues: \(scanIssues.count)."
+                let axisIssueText =
+                    presentedSpectrumAxisRestoreIssues.isEmpty
+                    ? ""
+                    : " Axis preference issues: "
+                        + "\(presentedSpectrumAxisRestoreIssues.count)."
+                status = "Loaded \(scanned.0.items.count) SXM files and \(scanned.1.items.count) spectra in \(groupCount) plots. Scan issues: \(scanIssues.count).\(axisIssueText)"
                 if opensDroppedFileInSingleMode {
                     setMode(.single)
                 } else if mode == .single {
@@ -1565,28 +1591,6 @@ final class AppModel: ObservableObject {
         scaleMin = nil
         scaleMax = nil
         processedRenderCache = nil
-        syncSpectrumAxesWithSelection()
-    }
-
-    func syncSpectrumAxesWithSelection(preferredSpectrum: SpectroscopyFile? = nil) {
-        guard let file = selectedFile else { return }
-        var updatedState = spectrumAxisState
-        for group in spectrumGroups(for: file) {
-            let preferredInGroup = preferredSpectrum.flatMap { spectrum in
-                group.spectra.contains(where: { $0.id == spectrum.id })
-                    ? spectrum
-                    : nil
-            }
-            updatedState.ensureSelection(
-                forGroupID: group.id,
-                availableColumns: group.availableColumns,
-                preferredX: preferredInGroup?.xLabel ?? group.xLabel,
-                preferredY: preferredInGroup?.yLabel ?? group.yLabel
-            )
-        }
-        if updatedState != spectrumAxisState {
-            spectrumAxisState = updatedState
-        }
     }
 
     func setMode(_ newMode: BrowserMode) {
@@ -1635,35 +1639,82 @@ final class AppModel: ObservableObject {
     }
 
     func setSpectrumXAxis(_ column: String, for group: SpectroscopyGroup) {
-        var updatedState = spectrumAxisState
-        guard updatedState.setXColumn(
-            column,
-            forGroupID: group.id,
-            availableColumns: group.availableColumns,
-            preferredX: group.xLabel,
-            preferredY: group.yLabel
-        ) else {
-            status = "\(column) is not compatible with \(group.title)."
-            return
-        }
-        spectrumAxisState = updatedState
-        status = "Using \(spectrumXAxis(for: group)) vs \(spectrumYAxis(for: group)) for \(group.title)."
+        setSpectrumAxis(.x, to: column, for: group)
     }
 
     func setSpectrumYAxis(_ column: String, for group: SpectroscopyGroup) {
-        var updatedState = spectrumAxisState
-        guard updatedState.setYColumn(
-            column,
-            forGroupID: group.id,
-            availableColumns: group.availableColumns,
-            preferredX: group.xLabel,
-            preferredY: group.yLabel
-        ) else {
-            status = "\(column) is not compatible with \(group.title)."
+        setSpectrumAxis(.y, to: column, for: group)
+    }
+
+    private func setSpectrumAxis(
+        _ axis: SpectrumAxis,
+        to column: String,
+        for group: SpectroscopyGroup
+    ) {
+        guard let session = activeDatasetSession else {
+            status = metadataUnavailableForSpectrumAxesMessage
             return
         }
-        spectrumAxisState = updatedState
-        status = "Using \(spectrumXAxis(for: group)) vs \(spectrumYAxis(for: group)) for \(group.title)."
+        guard !isLoading else {
+            status = "Wait for the folder scan to finish."
+            return
+        }
+        guard !isMetadataMutationInFlight else {
+            status = "Wait for the current metadata update to finish."
+            return
+        }
+        guard let currentGroup = spectrumGroupsByFileID.values
+            .flatMap({ $0 })
+            .first(where: { $0.id == group.id }) else {
+            status = "The spectroscopy group is no longer available."
+            return
+        }
+
+        let currentSelection = AxisSelection(
+            xColumn: spectrumXAxis(for: currentGroup),
+            yColumn: spectrumYAxis(for: currentGroup)
+        )
+        let currentColumn = axis == .x
+            ? currentSelection.xColumn
+            : currentSelection.yColumn
+        guard column != currentColumn else { return }
+
+        let plan: SpectrumAxisPreferenceUpdatePlan
+        do {
+            plan = try SpectrumAxisPreferenceUpdatePlan(
+                group: SpectrumAxisRuntimeGroup(currentGroup),
+                changing: axis,
+                to: column,
+                currentSelection: currentSelection,
+                pathIndex: session.pathIndex
+            )
+        } catch {
+            status = "Spectrum axes could not be updated: "
+                + error.localizedDescription
+            return
+        }
+
+        let updatedAt = Date()
+        let successMessage =
+            "Using \(plan.selection.xColumn) vs "
+            + "\(plan.selection.yColumn) for \(currentGroup.title)."
+        performMetadataMutation(
+            unavailableMessage: metadataUnavailableForSpectrumAxesMessage,
+            successMessage: successMessage,
+            failurePrefix: "Spectrum axes could not be updated",
+            mutation: { record in
+                let updated = try plan.applying(
+                    to: record.spectrumAxisPreferences
+                )
+                try record.replaceSpectrumAxisPreferences(
+                    with: updated,
+                    updatedAt: updatedAt
+                )
+            },
+            onVerified: { [weak self] _ in
+                self?.restoreSpectrumAxisPreferences()
+            }
+        )
     }
 
     func spectra(for file: SXMMetadata) -> [SpectroscopyFile] {
@@ -1763,7 +1814,6 @@ final class AppModel: ObservableObject {
             if selectedID != parent.id {
                 select(parent, tagContext: tagContext)
             }
-            syncSpectrumAxesWithSelection(preferredSpectrum: spectrum)
         }
     }
 
@@ -1841,7 +1891,6 @@ final class AppModel: ObservableObject {
                 updateSelection { state, visibleIDs in
                     state.selectOnly(file.id, in: visibleIDs)
                 }
-                syncSpectrumAxesWithSelection()
             }
         )
         return true
@@ -2816,6 +2865,11 @@ final class AppModel: ObservableObject {
             + "Reopen the folder to retry."
     }
 
+    private var metadataUnavailableForSpectrumAxesMessage: String {
+        "Spectrum axis metadata is unavailable for this folder. "
+            + "Reopen the folder to retry."
+    }
+
     private func restoreManualSpectrumAssociations() {
         guard let session = activeDatasetSession else {
             manualTargetPathByDATPath = [:]
@@ -2851,9 +2905,7 @@ final class AppModel: ObservableObject {
         spectrumParentIDBySpectrumID = associated.parents
         spectrumGroupsByFileID = associated.groups
         unassociatedSpectrumIDs = associated.unassociated
-        ensureSpectrumAxisSelections(
-            for: associated.groups.values.flatMap { $0 }
-        )
+        restoreSpectrumAxisPreferences()
     }
 
     private func rebuildSpectrumGroups(for parentIDs: Set<SXMMetadata.ID>) {
@@ -2878,26 +2930,29 @@ final class AppModel: ObservableObject {
             }
         }
         spectrumGroupsByFileID = updatedGroups
-        ensureSpectrumAxisSelections(
-            for: parentIDs.flatMap { updatedGroups[$0] ?? [] }
-        )
+        restoreSpectrumAxisPreferences()
     }
 
-    private func ensureSpectrumAxisSelections(
-        for groups: [SpectroscopyGroup]
-    ) {
-        var updatedState = spectrumAxisState
-        for group in groups {
-            updatedState.ensureSelection(
-                forGroupID: group.id,
-                availableColumns: group.availableColumns,
-                preferredX: group.xLabel,
-                preferredY: group.yLabel
-            )
+    private func restoreSpectrumAxisPreferences() {
+        let groups = spectrumGroupsByFileID.values
+            .flatMap { $0 }
+            .map(SpectrumAxisRuntimeGroup.init)
+        guard let session = activeDatasetSession else {
+            spectrumAxisState =
+                SpectrumAxisPreferenceProjection.safeDefaults(
+                    for: groups
+                )
+            spectrumAxisRestoreIssues = []
+            return
         }
-        if updatedState != spectrumAxisState {
-            spectrumAxisState = updatedState
-        }
+        let projection = SpectrumAxisPreferenceProjection(
+            preferences:
+                session.verifiedRecord.spectrumAxisPreferences,
+            groups: groups,
+            pathIndex: session.pathIndex
+        )
+        spectrumAxisState = projection.axisState
+        spectrumAxisRestoreIssues = projection.issues
     }
 
     private func associateSpectra(

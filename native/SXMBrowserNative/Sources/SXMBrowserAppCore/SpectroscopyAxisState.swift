@@ -17,6 +17,10 @@ public struct SpectroscopyAxisState: Equatable, Sendable {
         selectionsByGroupID = [:]
     }
 
+    init(selectionsByGroupID: [String: AxisSelection]) {
+        self.selectionsByGroupID = selectionsByGroupID
+    }
+
     public func selection(forGroupID groupID: String) -> AxisSelection? {
         selectionsByGroupID[groupID]
     }

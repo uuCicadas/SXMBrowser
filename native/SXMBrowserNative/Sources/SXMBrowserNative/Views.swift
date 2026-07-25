@@ -1730,6 +1730,27 @@ struct InspectorView: View {
                     .toggleStyle(.switch)
                     .disabled(model.spectra.isEmpty)
 
+                    if !model.presentedSpectrumAxisRestoreIssues.isEmpty {
+                        Label(
+                            "\(model.presentedSpectrumAxisRestoreIssues.count) "
+                                + "saved "
+                                + "axis preference"
+                                + (model.presentedSpectrumAxisRestoreIssues
+                                    .count == 1
+                                    ? "" : "s")
+                                + " could not be restored; safe defaults "
+                                + "are in use.",
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .help(
+                            model.presentedSpectrumAxisRestoreIssues
+                                .compactMap(\.errorDescription)
+                                .joined(separator: "\n")
+                        )
+                    }
+
                     if let file = model.selectedFile {
                         let groups = model.spectrumGroups(for: file)
                         ForEach(groups) { group in
@@ -1749,6 +1770,7 @@ struct InspectorView: View {
                                     }
                                     .labelsHidden()
                                     .pickerStyle(.menu)
+                                    .disabled(!model.canModifySpectrumAxes)
                                 }
 
                                 LabeledControl("Y Channel") {
@@ -1762,6 +1784,7 @@ struct InspectorView: View {
                                     }
                                     .labelsHidden()
                                     .pickerStyle(.menu)
+                                    .disabled(!model.canModifySpectrumAxes)
                                 }
                             }
                         }
