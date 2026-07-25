@@ -4,9 +4,10 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
-- Build 74 (2026-07-25): Remove legacy palettes and make Flame the STM default
 ## 2.2.0 - 2026-07-25
 
+- Build 75 (2026-07-25): Finalize the v2.2.0 palette replacement release
+- Build 74 (2026-07-25): Remove legacy palettes and make Flame the STM default
 - Build 73 (2026-07-25): Prepare SXM Browser 2.2.0 release after full automated and manual acceptance
 - Build 72 (2026-07-25): Improve keyboard navigation, focus handoff, VoiceOver semantics, and high-contrast selection states
 - Build 71 (2026-07-25): add structured Inspector file and scan metadata
