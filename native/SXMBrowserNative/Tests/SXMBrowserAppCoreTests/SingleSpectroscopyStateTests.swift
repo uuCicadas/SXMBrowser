@@ -268,3 +268,22 @@ func expandedPreferenceDoesNotChangeHeightGroupOrFocus() {
     #expect(state.activeGroupID == groupID)
     #expect(state.focusedSpectrumID == spectrumID)
 }
+
+@Test
+func activatingAndFocusingAnotherGroupPreservesDrawerLayout() {
+    let fixture = SingleStateFixture()
+    var state = SingleSpectroscopyState(
+        isExpanded: false,
+        height: 333
+    )
+    state.reconcile(with: fixture.presentations())
+
+    state.activateGroup(fixture.secondGroup.id)
+    state.focusSpectrum(fixture.third.id)
+    state.reconcile(with: fixture.presentations())
+
+    #expect(!state.isExpanded)
+    #expect(state.height == 333)
+    #expect(state.activeGroupID == fixture.secondGroup.id)
+    #expect(state.focusedSpectrumID == fixture.third.id)
+}

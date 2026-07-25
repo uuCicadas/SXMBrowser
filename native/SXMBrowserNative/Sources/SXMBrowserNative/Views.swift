@@ -1569,6 +1569,7 @@ struct SXMFileSidebarItem: View {
                     modifiers: NSEvent.modifierFlags,
                     tagContext: tagContext
                 )
+                NSApp.keyWindow?.makeFirstResponder(nil)
             } label: {
                 FileRow(
                     file: file,
@@ -1636,25 +1637,64 @@ struct SpectroscopySidebarRow: View {
 
     var body: some View {
         HStack(spacing: 7) {
-            Toggle("", isOn: Binding(
-                get: { model.isSpectrumVisible(spectrum) },
-                set: { model.setSpectrum(spectrum, visible: $0) }
-            ))
+            Toggle(
+                "Show \(spectrum.filename)",
+                isOn: Binding(
+                    get: {
+                        model.isSpectrumVisible(spectrum)
+                    },
+                    set: {
+                        model.setSpectrum(
+                            spectrum,
+                            visible: $0
+                        )
+                    }
+                )
+            )
             .labelsHidden()
             .controlSize(.mini)
             .frame(width: 16)
             .disabled(!model.canModifySpectrumVisibility)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(spectrum.filename)
-                    .font(.system(size: 11.5, weight: .medium))
-                    .lineLimit(1)
-                Text(spectrum.kind.label)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
+            Button {
+                model.selectSpectrumRow(
+                    spectrum,
+                    modifiers: NSEvent.modifierFlags,
+                    tagContext: tagContext
+                )
+            } label: {
+                HStack(spacing: 7) {
+                    SpectrumStyleGlyph(spectrum: spectrum)
 
-            Spacer(minLength: 0)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(spectrum.filename)
+                            .font(
+                                .system(
+                                    size: 11.5,
+                                    weight: .medium
+                                )
+                            )
+                            .lineLimit(1)
+                        Text(spectrum.kind.label)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    if isFocused {
+                        Image(systemName: "scope")
+                            .font(.caption)
+                            .foregroundStyle(Color.accentColor)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(spectrum.filename)
+            .accessibilityValue(
+                isFocused ? "Focused spectrum" : "Spectrum"
+            )
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -1663,18 +1703,41 @@ struct SpectroscopySidebarRow: View {
             RoundedRectangle(cornerRadius: 5)
                 .fill(model.sidebarSelectedSpectrumIDs.contains(spectrum.id) ? Color.accentColor.opacity(0.18) : Color.clear)
         )
-        .contentShape(Rectangle())
-        .onTapGesture {
-            model.selectSpectrumRow(
-                spectrum,
-                modifiers: NSEvent.modifierFlags,
-                tagContext: tagContext
-            )
+        .overlay(alignment: .leading) {
+            if isFocused {
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(width: 3)
+                    .padding(.vertical, 4)
+            }
         }
         .onDrag {
             NSItemProvider(object: model.dragToken(for: spectrum) as NSString)
         }
         .help("\(spectrum.filename) — Drag to associate with an SXM file")
+    }
+
+    private var isFocused: Bool {
+        model.singleSpectroscopyState.focusedSpectrumID
+            == spectrum.id
+    }
+}
+
+private struct SpectrumStyleGlyph: View {
+    let spectrum: SpectroscopyFile
+
+    var body: some View {
+        Capsule()
+            .fill(spectrumColor(for: spectrum))
+            .frame(width: 20, height: 3)
+            .overlay {
+                Capsule()
+                    .stroke(
+                        Color.primary.opacity(0.16),
+                        lineWidth: 0.5
+                    )
+            }
+            .accessibilityHidden(true)
     }
 }
 
@@ -1889,9 +1952,6 @@ struct MainImageView: View {
             KeyboardArrowOverlay { direction in
                 model.moveSelectionForArrow(direction)
             }
-        }
-        .onMoveCommand { direction in
-            model.moveSelectionForArrow(direction)
         }
     }
 
@@ -2379,12 +2439,7 @@ final class KeyboardArrowCatcherView: NSView {
         var view: NSView? = firstResponder
         while let current = view {
             if current is NSTextView
-                || current is NSTextField
-                || current is NSPopUpButton
-                || current is NSSegmentedControl
-                || current is NSSlider
-                || current is NSStepper
-                || current is NSComboBox {
+                || current is NSControl {
                 return true
             }
             view = current.superview
@@ -2613,6 +2668,7 @@ struct ThumbnailCard: View {
 struct SpectroscopyMarkerLayer: View {
     @ObservedObject var model: AppModel
     let file: SXMMetadata
+    var isInteractive = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -2623,12 +2679,50 @@ struct SpectroscopyMarkerLayer: View {
                         x: rect.minX + point.x * rect.width,
                         y: rect.minY + point.y * rect.height
                     )
-                    MeasurementMarker(color: spectrumColor(for: spectrum))
+                    if isInteractive {
+                        Button {
+                            model.focusSingleSpectrum(spectrum)
+                        } label: {
+                            MeasurementMarker(
+                                color: spectrumColor(for: spectrum),
+                                isFocused:
+                                    model.singleSpectroscopyState
+                                        .focusedSpectrumID
+                                        == spectrum.id
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Circle())
                         .position(center)
+                        .help(spectrum.filename)
+                        .accessibilityLabel(
+                            "Focus \(spectrum.filename)"
+                        )
+                        .accessibilityValue(
+                            model.singleSpectroscopyState
+                                .focusedSpectrumID
+                                == spectrum.id
+                                ? "Focused spectrum"
+                                : "Spectrum marker"
+                        )
+                        .accessibilityAddTraits(
+                            model.singleSpectroscopyState
+                                .focusedSpectrumID
+                                == spectrum.id
+                                ? .isSelected
+                                : []
+                        )
+                    } else {
+                        MeasurementMarker(
+                            color: spectrumColor(for: spectrum)
+                        )
+                        .position(center)
+                    }
                 }
             }
         }
-        .allowsHitTesting(false)
+        .allowsHitTesting(isInteractive)
     }
 
     private func imageRect(in size: CGSize) -> CGRect {
@@ -2654,18 +2748,33 @@ struct SpectroscopyMarkerLayer: View {
 
 struct MeasurementMarker: View {
     let color: Color
+    var isFocused = false
 
     var body: some View {
         ZStack {
             Circle()
                 .fill(color.opacity(0.92))
-                .frame(width: 8, height: 8)
+                .frame(
+                    width: isFocused ? 10 : 8,
+                    height: isFocused ? 10 : 8
+                )
             Circle()
                 .stroke(Color.white.opacity(0.95), lineWidth: 1.2)
-                .frame(width: 11, height: 11)
+                .frame(
+                    width: isFocused ? 14 : 11,
+                    height: isFocused ? 14 : 11
+                )
             Circle()
-                .stroke(Color.black.opacity(0.55), lineWidth: 0.8)
-                .frame(width: 13, height: 13)
+                .stroke(
+                    isFocused
+                        ? Color.accentColor
+                        : Color.black.opacity(0.55),
+                    lineWidth: isFocused ? 2 : 0.8
+                )
+                .frame(
+                    width: isFocused ? 18 : 13,
+                    height: isFocused ? 18 : 13
+                )
         }
         .shadow(color: .black.opacity(0.35), radius: 1.5, x: 0, y: 1)
     }
@@ -2728,6 +2837,7 @@ struct SpectroscopyPlotView: View {
     let spectra: [SpectroscopyFile]
     let xColumn: String
     let yColumn: String
+    var focusedSpectrumID: SpectroscopyFile.ID? = nil
 
     private let inset = EdgeInsets(top: 20, leading: 50, bottom: 36, trailing: 14)
 
@@ -2736,6 +2846,11 @@ struct SpectroscopyPlotView: View {
             drawPlot(context: &context, size: size)
         }
         .background(Color.white)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            "\(group.title) spectroscopy plot"
+        )
+        .accessibilityValue(plotAccessibilityValue)
     }
 
     private func drawPlot(context: inout GraphicsContext, size: CGSize) {
@@ -2813,7 +2928,15 @@ struct SpectroscopyPlotView: View {
     }
 
     private func drawCurves(context: inout GraphicsContext, plot: CGRect, ranges: (xMin: Double, xMax: Double, yMin: Double, yMax: Double)) {
-        for spectrum in spectra {
+        let hasFocusedCurve = spectra.contains {
+            $0.id == focusedSpectrumID
+        }
+        let orderedSpectra = spectra.filter {
+            $0.id != focusedSpectrumID
+        } + spectra.filter {
+            $0.id == focusedSpectrumID
+        }
+        for spectrum in orderedSpectra {
             guard let points = group.points(
                 for: spectrum,
                 xColumn: xColumn,
@@ -2836,8 +2959,42 @@ struct SpectroscopyPlotView: View {
                     didMove = true
                 }
             }
-            context.stroke(path, with: .color(spectrumColor(for: spectrum)), lineWidth: 1.35)
+            let isFocused = spectrum.id == focusedSpectrumID
+            if isFocused {
+                context.stroke(
+                    path,
+                    with: .color(.white.opacity(0.92)),
+                    lineWidth: 4.8
+                )
+            }
+            context.stroke(
+                path,
+                with: .color(
+                    spectrumColor(for: spectrum).opacity(
+                        hasFocusedCurve && !isFocused
+                            ? 0.34
+                            : 1
+                    )
+                ),
+                lineWidth: isFocused ? 2.6 : 1.35
+            )
         }
+    }
+
+    private var plotAccessibilityValue: String {
+        let curveText = spectra.count == 1
+            ? "1 visible curve"
+            : "\(spectra.count) visible curves"
+        let focusedText: String
+        if let focusedSpectrum = spectra.first(where: {
+            $0.id == focusedSpectrumID
+        }) {
+            focusedText = ", focused \(focusedSpectrum.filename)"
+        } else {
+            focusedText = ""
+        }
+        return "X axis \(xColumn), Y axis \(yColumn), "
+            + curveText + focusedText
     }
 
     private func dataRanges() -> (xMin: Double, xMax: Double, yMin: Double, yMax: Double) {
@@ -2958,7 +3115,8 @@ private struct SingleImageCanvas: View {
                             .overlay {
                                 SpectroscopyMarkerLayer(
                                     model: model,
-                                    file: file
+                                    file: file,
+                                    isInteractive: true
                                 )
                             }
                     } else {
@@ -3006,6 +3164,7 @@ private struct SingleSpectroscopyDrawer: View {
     @Binding var liveHeight: CGFloat
     @Binding var isResizing: Bool
     @State private var dragStartHeight: CGFloat?
+    @State private var isLegendPopoverPresented = false
 
     private var groups: [PresentedSpectroscopyGroup] {
         guard let file = model.selectedFile else { return [] }
@@ -3113,10 +3272,43 @@ private struct SingleSpectroscopyDrawer: View {
                         )
                     }
             )
-            .accessibilityHidden(true)
+            .accessibilityElement()
+            .accessibilityLabel(
+                "Spectroscopy drawer height"
+            )
+            .accessibilityValue(
+                "\(Int(liveHeight.rounded())) points"
+            )
+            .accessibilityAdjustableAction { direction in
+                let delta: Double
+                switch direction {
+                case .increment:
+                    delta = 20
+                case .decrement:
+                    delta = -20
+                @unknown default:
+                    return
+                }
+                let next = SingleSpectroscopyState.clampedHeight(
+                    Double(liveHeight) + delta
+                )
+                liveHeight = CGFloat(next)
+                model.setSingleSpectroscopyDrawerHeight(
+                    liveHeight
+                )
+            }
     }
 
     private var drawerHeader: some View {
+        GeometryReader { proxy in
+            drawerHeaderRow(compact: proxy.size.width < 430)
+        }
+        .frame(height: isExpanded ? 34 : 42)
+    }
+
+    private func drawerHeaderRow(
+        compact: Bool
+    ) -> some View {
         HStack(spacing: 9) {
             Button {
                 model.setSingleSpectroscopyDrawerExpanded(
@@ -3142,8 +3334,10 @@ private struct SingleSpectroscopyDrawer: View {
                     : "Expand spectroscopy drawer"
             )
 
-            Text("Spectroscopy")
-                .font(.headline)
+            if !compact {
+                Text("Spectroscopy")
+                    .font(.headline)
+            }
 
             if groups.count > 1 {
                 Picker(
@@ -3174,7 +3368,7 @@ private struct SingleSpectroscopyDrawer: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
-                .frame(maxWidth: 240)
+                .frame(maxWidth: compact ? 145 : 240)
                 .accessibilityLabel("Spectrum group")
             } else if let activeGroup =
                 presentation.activeGroup {
@@ -3183,12 +3377,21 @@ private struct SingleSpectroscopyDrawer: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: compact ? 155 : nil)
+            } else if compact {
+                Text("Spectroscopy")
+                    .font(.headline)
             }
 
             Spacer(minLength: 8)
 
             if presentation.activeGroup != nil {
-                Text(presentation.visibleCountText)
+                Text(
+                    compact
+                        ? "\(presentation.visibleCount)"
+                            + "/\(presentation.totalCount)"
+                        : presentation.visibleCountText
+                )
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 8)
@@ -3202,7 +3405,7 @@ private struct SingleSpectroscopyDrawer: View {
             }
         }
         .padding(.horizontal, 12)
-        .frame(height: isExpanded ? 34 : 42)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
@@ -3216,46 +3419,128 @@ private struct SingleSpectroscopyDrawer: View {
                     "Associate DAT files in the sidebar to "
                     + "show a spectrum here."
             )
-        case .activeGroupHasNoVisibleCurves:
+        case .activeGroupHasNoVisibleCurves, .ready:
+            if let activeGroup = presentation.activeGroup {
+                drawerGroupContent(activeGroup)
+            }
+        }
+    }
+
+    private func drawerGroupContent(
+        _ activeGroup: PresentedSpectroscopyGroup
+    ) -> some View {
+        GeometryReader { proxy in
+            if proxy.size.width >= 560 {
+                let legendWidth = min(
+                    CGFloat(220),
+                    max(CGFloat(190), proxy.size.width * 0.28)
+                )
+                HStack(spacing: 10) {
+                    drawerPlot(activeGroup)
+                        .frame(
+                            maxWidth: .infinity,
+                            maxHeight: .infinity
+                        )
+
+                    SpectroscopyLegend(
+                        model: model,
+                        presentation: activeGroup
+                    )
+                    .frame(width: legendWidth)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
+            } else {
+                ZStack(alignment: .topTrailing) {
+                    drawerPlot(activeGroup)
+                        .frame(
+                            maxWidth: .infinity,
+                            maxHeight: .infinity
+                        )
+
+                    Button {
+                        isLegendPopoverPresented.toggle()
+                    } label: {
+                        Label(
+                            "Curves \(activeGroup.visibleSpectra.count)"
+                                + "/\(activeGroup.allSpectra.count)",
+                            systemImage: "list.bullet"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .padding(8)
+                    .popover(
+                        isPresented:
+                            $isLegendPopoverPresented,
+                        arrowEdge: .bottom
+                    ) {
+                        SpectroscopyLegend(
+                            model: model,
+                            presentation: activeGroup
+                        )
+                        .frame(width: 310, height: 320)
+                    }
+                    .accessibilityLabel(
+                        "Show spectrum curve legend"
+                    )
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func drawerPlot(
+        _ activeGroup: PresentedSpectroscopyGroup
+    ) -> some View {
+        if activeGroup.visibleSpectra.isEmpty {
             drawerEmptyState(
                 icon: "eye.slash",
                 title: "No Visible Curves in This Group",
                 message:
-                    "Show a spectrum in the sidebar to "
-                    + "restore the plot."
+                    "Use the curve legend to show a spectrum "
+                    + "and restore the plot."
             )
-        case .ready:
-            if let activeGroup = presentation.activeGroup {
-                let xColumn = model.spectrumXAxis(
-                    for: activeGroup.group
-                )
-                let yColumn = model.spectrumYAxis(
-                    for: activeGroup.group
-                )
-                SpectroscopyPlotView(
-                    group: activeGroup.group,
-                    spectra: activeGroup.visibleSpectra,
-                    xColumn: xColumn,
-                    yColumn: yColumn
-                )
-                .id(
-                    "\(activeGroup.renderID)|"
-                        + "\(xColumn)|\(yColumn)"
-                )
-                .clipShape(
-                    RoundedRectangle(cornerRadius: 7)
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 7)
-                        .stroke(
-                            AppTheme.tileBorder(
-                                for: colorScheme
-                            ),
-                            lineWidth: 1
-                        )
-                }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 12)
+            .background(
+                AppTheme.imageWell(for: colorScheme)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(
+                        AppTheme.tileBorder(for: colorScheme),
+                        lineWidth: 1
+                    )
+            }
+        } else {
+            let xColumn = model.spectrumXAxis(
+                for: activeGroup.group
+            )
+            let yColumn = model.spectrumYAxis(
+                for: activeGroup.group
+            )
+            SpectroscopyPlotView(
+                group: activeGroup.group,
+                spectra: activeGroup.visibleSpectra,
+                xColumn: xColumn,
+                yColumn: yColumn,
+                focusedSpectrumID:
+                    model.singleSpectroscopyState
+                        .focusedSpectrumID
+            )
+            .id(
+                "\(activeGroup.renderID)|"
+                    + "\(xColumn)|\(yColumn)"
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(
+                        AppTheme.tileBorder(for: colorScheme),
+                        lineWidth: 1
+                    )
             }
         }
     }
@@ -3279,6 +3564,144 @@ private struct SingleSpectroscopyDrawer: View {
         .padding(18)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
+    }
+}
+
+private struct SpectroscopyLegend: View {
+    @ObservedObject var model: AppModel
+    let presentation: PresentedSpectroscopyGroup
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text("Curves")
+                    .font(.callout.weight(.semibold))
+                Spacer()
+                Text(
+                    "\(presentation.visibleSpectra.count)"
+                        + "/\(presentation.allSpectra.count)"
+                )
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+
+            ScrollView {
+                LazyVStack(spacing: 3) {
+                    ForEach(presentation.allSpectra) {
+                        spectrum in
+                        SpectroscopyLegendRow(
+                            model: model,
+                            spectrum: spectrum
+                        )
+                    }
+                }
+            }
+        }
+        .padding(9)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(AppTheme.subtleFill)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(
+                    Color.secondary.opacity(0.18),
+                    lineWidth: 1
+                )
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Spectrum curve legend")
+    }
+}
+
+private struct SpectroscopyLegendRow: View {
+    @ObservedObject var model: AppModel
+    let spectrum: SpectroscopyFile
+
+    private var isVisible: Bool {
+        model.isSpectrumVisible(spectrum)
+    }
+
+    private var isFocused: Bool {
+        model.singleSpectroscopyState.focusedSpectrumID
+            == spectrum.id
+    }
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Toggle(
+                "Show \(spectrum.filename)",
+                isOn: Binding(
+                    get: { isVisible },
+                    set: {
+                        model.setSpectrum(
+                            spectrum,
+                            visible: $0
+                        )
+                    }
+                )
+            )
+            .labelsHidden()
+            .controlSize(.mini)
+            .frame(width: 16)
+            .disabled(!model.canModifySpectrumVisibility)
+
+            Button {
+                model.focusSingleSpectrum(spectrum)
+            } label: {
+                HStack(spacing: 7) {
+                    SpectrumStyleGlyph(spectrum: spectrum)
+
+                    Text(spectrum.filename)
+                        .font(.system(size: 11))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+
+                    Spacer(minLength: 0)
+
+                    if isFocused {
+                        Image(systemName: "scope")
+                            .font(.caption)
+                            .foregroundStyle(Color.accentColor)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!isVisible)
+            .opacity(isVisible ? 1 : 0.48)
+            .accessibilityLabel(spectrum.filename)
+            .accessibilityValue(
+                [
+                    isVisible ? "Visible" : "Hidden",
+                    isFocused ? "Focused" : "Not focused",
+                ].joined(separator: ", ")
+            )
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(
+                    isFocused
+                        ? Color.accentColor.opacity(0.14)
+                        : Color.clear
+                )
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(
+                    isFocused
+                        ? Color.accentColor.opacity(0.55)
+                        : Color.clear,
+                    lineWidth: 1
+                )
+        }
+        .help(
+            isVisible
+                ? "\(spectrum.filename) — Click to focus"
+                : "\(spectrum.filename) — Show to focus"
+        )
     }
 }
 

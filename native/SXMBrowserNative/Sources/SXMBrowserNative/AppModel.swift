@@ -2860,9 +2860,35 @@ final class AppModel: ObservableObject {
         reconcileSingleSpectroscopyState()
     }
 
-    func focusSingleSpectrum(_ id: SpectroscopyFile.ID?) {
-        singleSpectroscopyState.focusSpectrum(id)
-        reconcileSingleSpectroscopyState()
+    func focusSingleSpectrum(_ spectrum: SpectroscopyFile) {
+        guard let parentID =
+            spectrumParentIDBySpectrumID[spectrum.id],
+              let parent = files.first(where: {
+                  $0.id == parentID
+              }) else {
+            return
+        }
+        if selectedID != parentID {
+            select(parent)
+        }
+        guard selectedID == parentID else {
+            reconcileSingleSpectroscopyState()
+            return
+        }
+
+        let groups = presentedSpectrumGroups(for: parent)
+        guard let plan = SpectrumFocusPlan.resolve(
+            spectrumID: spectrum.id,
+            groups: groups
+        ) else {
+            reconcileSingleSpectroscopyState()
+            return
+        }
+        singleSpectroscopyState.activateGroup(plan.groupID)
+        singleSpectroscopyState.focusSpectrum(
+            plan.spectrumID
+        )
+        singleSpectroscopyState.reconcile(with: groups)
     }
 
     func spectrumGroups(for file: SXMMetadata) -> [SpectroscopyGroup] {
@@ -3052,21 +3078,32 @@ final class AppModel: ObservableObject {
         tagContext: UUID? = nil
     ) {
         let relevantModifiers = modifiers.intersection([.command, .shift])
-        if relevantModifiers.contains(.command) || relevantModifiers.contains(.shift) {
-            if sidebarSelectedSpectrumIDs.contains(spectrum.id) {
-                sidebarSelectedSpectrumIDs.remove(spectrum.id)
-            } else {
-                sidebarSelectedSpectrumIDs.insert(spectrum.id)
-            }
+        let rowModifier: SpectrumRowModifier
+        if relevantModifiers.contains(.command) {
+            rowModifier = .command
+        } else if relevantModifiers.contains(.shift) {
+            rowModifier = .shift
         } else {
-            sidebarSelectedSpectrumIDs = [spectrum.id]
+            rowModifier = .plain
         }
+        let interaction = SpectrumRowInteractionPlan(
+            existingAssociationIDs:
+                sidebarSelectedSpectrumIDs,
+            clickedID: spectrum.id,
+            modifier: rowModifier,
+            clickedIsVisible: isSpectrumVisible(spectrum)
+        )
+        sidebarSelectedSpectrumIDs =
+            interaction.associationIDs
 
         if let parentID = spectrumParentIDBySpectrumID[spectrum.id],
            let parent = files.first(where: { $0.id == parentID }) {
             if selectedID != parent.id {
                 select(parent, tagContext: tagContext)
             }
+        }
+        if interaction.shouldFocusClickedSpectrum {
+            focusSingleSpectrum(spectrum)
         }
     }
 
