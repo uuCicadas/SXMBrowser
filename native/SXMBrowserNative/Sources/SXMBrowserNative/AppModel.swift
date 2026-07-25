@@ -526,7 +526,12 @@ final class AppModel: ObservableObject {
     }
 
     func deleteSelectedFiles() {
-        deleteFiles(selectedFiles)
+        let plan = FileDeletionPlan(
+            visibleIDs: visibleFiles.map(\.id),
+            selectedIDs: selectedIDs
+        )
+        let fileByID = Dictionary(uniqueKeysWithValues: files.map { ($0.id, $0) })
+        deleteFiles(plan.targetIDs.compactMap { fileByID[$0] })
     }
 
     func deleteFilesForContext(
@@ -647,16 +652,22 @@ final class AppModel: ObservableObject {
         alert.messageText = targets.count == 1 ? "Delete this SXM file?" : "Delete \(targets.count) SXM files?"
         alert.informativeText = "The original file\(targets.count == 1 ? "" : "s") will be moved to the system Trash."
         alert.alertStyle = .warning
+        alert.accessoryView = fileListAccessoryView(
+            targets.map(\.filename).joined(separator: "\n"),
+            lineCount: targets.count
+        )
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         var trashedIDs: Set<SXMMetadata.ID> = []
+        var trashedNames: [String] = []
         var failedNames: [String] = []
         for file in targets {
             do {
                 try FileManager.default.trashItem(at: file.path, resultingItemURL: nil)
                 trashedIDs.insert(file.id)
+                trashedNames.append(file.filename)
                 removeCachedData(for: file.path)
             } catch {
                 failedNames.append(file.filename)
@@ -665,12 +676,19 @@ final class AppModel: ObservableObject {
 
         guard !trashedIDs.isEmpty else {
             status = failedNames.isEmpty ? "No files deleted." : "Could not delete \(failedNames.count) files."
+            if !failedNames.isEmpty {
+                showDeletionResult(trashedNames: [], failedNames: failedNames)
+            }
             return
         }
 
         let oldVisibleIDs = visibleFiles.map(\.id)
         files.removeAll { trashedIDs.contains($0.id) }
         removeTags(forDeletedFiles: targets.filter { trashedIDs.contains($0.id) })
+        manuallyAssignedSXMIDBySpectrumID = manuallyAssignedSXMIDBySpectrumID.filter {
+            !trashedIDs.contains($0.value)
+        }
+        rebuildSpectrumGroups()
         var updatedSelection = selection
         updatedSelection.reconcileAfterRemoval(
             removedIDs: trashedIDs,
@@ -684,6 +702,71 @@ final class AppModel: ObservableObject {
 
         let deletedText = trashedIDs.count == 1 ? "Moved 1 file to Trash." : "Moved \(trashedIDs.count) files to Trash."
         status = failedNames.isEmpty ? deletedText : "\(deletedText) Could not delete \(failedNames.count)."
+        if !failedNames.isEmpty {
+            showDeletionResult(trashedNames: trashedNames, failedNames: failedNames)
+        }
+    }
+
+    private func fileListAccessoryView(
+        _ text: String,
+        lineCount: Int
+    ) -> NSView {
+        let width: CGFloat = 380
+        let height = min(220, max(64, CGFloat(lineCount) * 18 + 18))
+        let scrollView = NSScrollView(
+            frame: NSRect(x: 0, y: 0, width: width, height: height)
+        )
+        scrollView.borderType = .bezelBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+
+        let textView = NSTextView(
+            frame: NSRect(x: 0, y: 0, width: width, height: height)
+        )
+        textView.string = text
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.drawsBackground = false
+        textView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        textView.textContainerInset = NSSize(width: 8, height: 8)
+        textView.isVerticallyResizable = true
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    private func showDeletionResult(
+        trashedNames: [String],
+        failedNames: [String]
+    ) {
+        let resultAlert = NSAlert()
+        resultAlert.alertStyle = failedNames.isEmpty ? .informational : .warning
+        resultAlert.messageText = trashedNames.isEmpty
+            ? "Files could not be deleted"
+            : "Some files could not be deleted"
+        resultAlert.informativeText = "Successful and failed files are listed separately."
+
+        var sections: [String] = []
+        if !trashedNames.isEmpty {
+            sections.append(
+                "Moved to Trash (\(trashedNames.count))\n"
+                    + trashedNames.joined(separator: "\n")
+            )
+        }
+        if !failedNames.isEmpty {
+            sections.append(
+                "Could not delete (\(failedNames.count))\n"
+                    + failedNames.joined(separator: "\n")
+            )
+        }
+        let lineCount = trashedNames.count + failedNames.count + sections.count
+        resultAlert.accessoryView = fileListAccessoryView(
+            sections.joined(separator: "\n\n"),
+            lineCount: lineCount
+        )
+        resultAlert.addButton(withTitle: "OK")
+        resultAlert.runModal()
     }
 
     func applyDefaultsFromSelection() {
