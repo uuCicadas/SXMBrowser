@@ -24,67 +24,38 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if model.shouldPresentMetadataWarning {
-                MetadataWarningStrip(model: model)
-                    .transition(
-                        .move(edge: .top).combined(with: .opacity)
-                    )
-            }
+        GeometryReader { proxy in
+            let layout = ResponsivePaneLayout(
+                containerWidth: Double(proxy.size.width)
+            )
 
-            HStack(spacing: 0) {
-                if model.isSidebarVisible {
-                    SidebarView(model: model)
-                        .frame(width: liveSidebarWidth)
-                        .clipped()
+            VStack(spacing: 0) {
+                if model.shouldPresentMetadataWarning {
+                    MetadataWarningStrip(model: model)
                         .transition(
-                            .move(edge: .leading).combined(with: .opacity)
-                        )
-                    SplitHandle(
-                        width: $liveSidebarWidth,
-                        range: AppModel.sidebarWidthRange,
-                        defaultWidth: AppModel.defaultSidebarWidth,
-                        edge: .leading,
-                        onEditingChanged: { isResizingSplit = $0 },
-                        onCommit: {
-                            model.sidebarWidth = liveSidebarWidth
-                            model.saveLayoutWidths()
-                        }
-                    )
-                }
-
-                MainImageView(model: model)
-                    .frame(
-                        minWidth: 0,
-                        maxWidth: .infinity,
-                        maxHeight: .infinity
-                    )
-
-                if model.isInspectorVisible {
-                    SplitHandle(
-                        width: $liveInspectorWidth,
-                        range: AppModel.inspectorWidthRange,
-                        defaultWidth: AppModel.defaultInspectorWidth,
-                        edge: .trailing,
-                        onEditingChanged: { isResizingSplit = $0 },
-                        onCommit: {
-                            model.inspectorWidth = liveInspectorWidth
-                            model.saveLayoutWidths()
-                        }
-                    )
-                    InspectorView(model: model)
-                        .frame(width: liveInspectorWidth)
-                        .clipped()
-                        .transition(
-                            .move(edge: .trailing).combined(with: .opacity)
+                            .move(edge: .top).combined(with: .opacity)
                         )
                 }
-            }
-            .transaction { transaction in
-                if isResizingSplit {
-                    transaction.animation = nil
-                    transaction.disablesAnimations = true
-                }
+
+                inlineBrowser(layout: layout)
+                    .overlay(alignment: .leading) {
+                        if model.isSidebarVisible,
+                           layout.sidebarPlacement == .overlay {
+                            floatingSidebar
+                        }
+                    }
+                    .overlay(alignment: .trailing) {
+                        if model.isInspectorVisible,
+                           layout.inspectorPlacement == .overlay {
+                            floatingInspector
+                        }
+                    }
+                    .transaction { transaction in
+                        if isResizingSplit {
+                            transaction.animation = nil
+                            transaction.disablesAnimations = true
+                        }
+                    }
             }
         }
         .background(AppTheme.page)
@@ -161,6 +132,97 @@ struct ContentView: View {
                 liveInspectorWidth = newValue
             }
         }
+    }
+
+    private func inlineBrowser(
+        layout: ResponsivePaneLayout
+    ) -> some View {
+        HStack(spacing: 0) {
+            if model.isSidebarVisible,
+               layout.sidebarPlacement == .inline {
+                SidebarView(model: model)
+                    .frame(width: liveSidebarWidth)
+                    .clipped()
+                    .transition(
+                        .move(edge: .leading).combined(with: .opacity)
+                    )
+                SplitHandle(
+                    width: $liveSidebarWidth,
+                    range: AppModel.sidebarWidthRange,
+                    defaultWidth: AppModel.defaultSidebarWidth,
+                    edge: .leading,
+                    onEditingChanged: { isResizingSplit = $0 },
+                    onCommit: {
+                        model.sidebarWidth = liveSidebarWidth
+                        model.saveLayoutWidths()
+                    }
+                )
+            }
+
+            MainImageView(model: model)
+                .frame(
+                    minWidth: 0,
+                    maxWidth: .infinity,
+                    maxHeight: .infinity
+                )
+
+            if model.isInspectorVisible,
+               layout.inspectorPlacement == .inline {
+                SplitHandle(
+                    width: $liveInspectorWidth,
+                    range: AppModel.inspectorWidthRange,
+                    defaultWidth: AppModel.defaultInspectorWidth,
+                    edge: .trailing,
+                    onEditingChanged: { isResizingSplit = $0 },
+                    onCommit: {
+                        model.inspectorWidth = liveInspectorWidth
+                        model.saveLayoutWidths()
+                    }
+                )
+                InspectorView(model: model)
+                    .frame(width: liveInspectorWidth)
+                    .clipped()
+                    .transition(
+                        .move(edge: .trailing).combined(with: .opacity)
+                    )
+            }
+        }
+    }
+
+    private var floatingSidebar: some View {
+        SidebarView(model: model)
+            .frame(width: liveSidebarWidth)
+            .frame(maxHeight: .infinity)
+            .background(AppTheme.sidebar)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(AppTheme.separator, lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.20), radius: 18, x: 4, y: 0)
+            .padding(12)
+            .transition(
+                .move(edge: .leading).combined(with: .opacity)
+            )
+            .zIndex(2)
+    }
+
+    private var floatingInspector: some View {
+        InspectorView(model: model)
+            .frame(width: liveInspectorWidth)
+            .frame(maxHeight: .infinity)
+            .background(AppTheme.sidebar)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(AppTheme.separator, lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.20), radius: 18, x: -4, y: 0)
+            .padding(12)
+            .transition(
+                .move(edge: .trailing).combined(with: .opacity)
+            )
+            .zIndex(3)
     }
 
     private func handleFileDrop(_ providers: [NSItemProvider]) -> Bool {

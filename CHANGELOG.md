@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 57 (2026-07-25): 按 760、900 和 1200 像素切换侧栏与检查器布局
 ## 2.1.0 - 2026-07-25
 
 - Build 56 (2026-07-25): 准备数据管线、缓存与持久化版本 2.1.0
