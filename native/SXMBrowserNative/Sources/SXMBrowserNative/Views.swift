@@ -448,6 +448,23 @@ struct TagGroupView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .contextMenu {
+                    Button {
+                        model.promptToRenameTag(tag.id)
+                    } label: {
+                        Label("Rename", systemImage: "pencil")
+                    }
+                    .disabled(!model.canModifyTags)
+
+                    Divider()
+
+                    Button(role: .destructive) {
+                        model.deleteTag(id: tag.id)
+                    } label: {
+                        Label("Delete Tag", systemImage: "trash")
+                    }
+                    .disabled(!model.canModifyTags)
+                }
             }
 
             if model.expandedTagIDs.contains(tag.id) {

@@ -105,6 +105,11 @@ final class AppModel: ObservableObject {
         let warning: String?
     }
 
+    private enum MissingActiveTagResolution {
+        case firstAvailable
+        case preferred(UUID?)
+    }
+
     static let defaultSidebarWidth: CGFloat = 300
     static let defaultInspectorWidth: CGFloat = 320
     static let sidebarWidthRange: ClosedRange<CGFloat> = 220...460
@@ -1193,6 +1198,83 @@ final class AppModel: ObservableObject {
             createTag(named: name, adding: targetFiles)
         } else {
             createTag(named: name, adding: [])
+        }
+    }
+
+    func promptToRenameTag(_ tagID: UUID) {
+        guard canModifyTags,
+              let tag = tags.first(where: { $0.id == tagID }) else {
+            status = metadataUnavailableForTagChangesMessage
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Rename Tag"
+        alert.informativeText = "Enter a new name for \(tag.name)."
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+
+        let field = NSTextField(
+            frame: NSRect(x: 0, y: 0, width: 240, height: 24)
+        )
+        field.stringValue = tag.name
+        field.placeholderString = "Tag name"
+        alert.accessoryView = field
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        renameTag(id: tagID, to: field.stringValue)
+    }
+
+    func renameTag(id tagID: UUID, to name: String) {
+        guard activeDatasetSession != nil,
+              tags.contains(where: { $0.id == tagID }) else {
+            status = metadataUnavailableForTagChangesMessage
+            return
+        }
+        performTagMutation(successMessage: "Tag renamed.") { record in
+            try record.renameTag(id: tagID, to: name)
+        }
+    }
+
+    func deleteTag(id tagID: UUID) {
+        guard canModifyTags,
+              let tag = tags.first(where: { $0.id == tagID }) else {
+            status = metadataUnavailableForTagChangesMessage
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Delete Tag “\(tag.name)”?"
+        alert.informativeText =
+            "This only deletes the tag. No files will be deleted."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        guard canModifyTags,
+              let currentTag = tags.first(where: {
+                  $0.id == tagID
+              }) else {
+            status = metadataUnavailableForTagChangesMessage
+            return
+        }
+        let activeTagResolution: MissingActiveTagResolution =
+            activeTagID == tagID
+            ? .preferred(
+                TagPresentationProjection.successorTagID(
+                    afterDeleting: tagID,
+                    from: tags
+                )
+            )
+            : .firstAvailable
+        performTagMutation(
+            activeTagResolution: activeTagResolution,
+            successMessage: "Deleted tag \(currentTag.name)."
+        ) { record in
+            guard record.deleteTag(id: tagID) != nil else {
+                throw DatasetMetadataValidationError.tagNotFound(tagID)
+            }
         }
     }
 
@@ -2326,6 +2408,7 @@ final class AppModel: ObservableObject {
 
     private func performTagMutation(
         expandingTagID: UUID? = nil,
+        activeTagResolution: MissingActiveTagResolution = .firstAvailable,
         successMessage: String? = nil,
         failurePrefix: String = "Tag metadata could not be updated",
         mutation: @escaping @Sendable (
@@ -2378,6 +2461,7 @@ final class AppModel: ObservableObject {
                 publishUpdatedTagPresentation(
                     tags: verifiedRecord.tags,
                     expandingTagID: expandingTagID,
+                    activeTagResolution: activeTagResolution,
                     datasetID: datasetID
                 )
                 if let successMessage {
@@ -2433,6 +2517,7 @@ final class AppModel: ObservableObject {
     private func publishUpdatedTagPresentation(
         tags updatedTags: [DatasetTagV1],
         expandingTagID: UUID?,
+        activeTagResolution: MissingActiveTagResolution,
         datasetID: UUID
     ) {
         tags = updatedTags
@@ -2450,9 +2535,18 @@ final class AppModel: ObservableObject {
         }
         if sidebarMode == .tag {
             if activeTagID == nil {
-                if let firstTagID = updatedTags.first?.id {
-                    activeTagID = firstTagID
-                } else {
+                switch activeTagResolution {
+                case .firstAvailable:
+                    activeTagID = updatedTags.first?.id
+                case .preferred(let preferredID):
+                    if let preferredID,
+                       updatedTags.contains(where: {
+                           $0.id == preferredID
+                       }) {
+                        activeTagID = preferredID
+                    }
+                }
+                if activeTagID == nil {
                     sidebarMode = .all
                 }
             }
