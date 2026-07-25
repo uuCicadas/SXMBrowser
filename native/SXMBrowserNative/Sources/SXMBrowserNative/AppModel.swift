@@ -122,7 +122,10 @@ final class AppModel: ObservableObject {
     @Published var spectrumParentIDBySpectrumID: [SpectroscopyFile.ID: SXMMetadata.ID] = [:]
     @Published var hiddenSpectrumIDs: Set<SpectroscopyFile.ID> = []
     @Published var sidebarSelectedSpectrumIDs: Set<SpectroscopyFile.ID> = []
-    @Published var manuallyAssignedSXMIDBySpectrumID: [SpectroscopyFile.ID: SXMMetadata.ID] = [:]
+    @Published private(set) var manuallyAssignedSXMIDBySpectrumID:
+        [SpectroscopyFile.ID: SXMMetadata.ID] = [:]
+    @Published private(set) var unassociatedSpectrumIDs:
+        Set<SpectroscopyFile.ID> = []
     @Published var areSpectraVisible = true
     @Published private(set) var selection = SelectionState<SXMMetadata.ID>()
     @Published var sidebarMode: SidebarMode = .all
@@ -196,6 +199,10 @@ final class AppModel: ObservableObject {
     private var datasetSessionGate = DatasetSessionGate()
     private var metadataMutationTask: Task<Void, Never>?
     private var metadataMutationID: UUID?
+    private var manualTargetPathByDATPath:
+        [DatasetRelativePath: DatasetRelativePath] = [:]
+    private var manualAssociationProjection:
+        ManualSpectrumAssociationProjection?
     private var processedRenderCache: ProcessedRenderCache?
     private var spectrumDragPayloads: [String: [SpectroscopyFile.ID]] = [:]
     private var securityScopedFolderURL: URL?
@@ -253,6 +260,27 @@ final class AppModel: ObservableObject {
         activeDatasetSession != nil
             && !isLoading
             && !isMetadataMutationInFlight
+    }
+
+    var canAssociateSpectra: Bool {
+        activeDatasetSession != nil
+            && !isLoading
+            && !isMetadataMutationInFlight
+    }
+
+    var visibleUnassociatedSpectra: [SpectroscopyFile] {
+        let query = filenameSearch
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return spectra
+            .filter { unassociatedSpectrumIDs.contains($0.id) }
+            .filter {
+                query.isEmpty
+                    || $0.filename.localizedCaseInsensitiveContains(query)
+            }
+            .sorted {
+                $0.filename.localizedStandardCompare($1.filename)
+                    == .orderedAscending
+            }
     }
 
     var sortedFiles: [SXMMetadata] {
@@ -476,6 +504,9 @@ final class AppModel: ObservableObject {
         hiddenSpectrumIDs.removeAll()
         sidebarSelectedSpectrumIDs.removeAll()
         manuallyAssignedSXMIDBySpectrumID.removeAll()
+        unassociatedSpectrumIDs.removeAll()
+        manualTargetPathByDATPath.removeAll()
+        manualAssociationProjection = nil
         spectrumDragPayloads.removeAll()
         selection.clear()
         sidebarMode = .all
@@ -588,6 +619,7 @@ final class AppModel: ObservableObject {
                 files = scanned.0.items
                 spectra = scanned.1.items
                 scanIssues = scanned.0.issues + scanned.1.issues
+                restoreManualSpectrumAssociations()
                 rebuildSpectrumGroups()
                 var opensDroppedFileInSingleMode = false
                 if let selectedPath,
@@ -1430,9 +1462,7 @@ final class AppModel: ObservableObject {
         let oldVisibleIDs = visibleFiles.map(\.id)
         files.removeAll { trashedIDs.contains($0.id) }
         removeTags(forDeletedFiles: targets.filter { trashedIDs.contains($0.id) })
-        manuallyAssignedSXMIDBySpectrumID = manuallyAssignedSXMIDBySpectrumID.filter {
-            !trashedIDs.contains($0.value)
-        }
+        restoreManualSpectrumAssociations()
         rebuildSpectrumGroups()
         var updatedSelection = selection
         updatedSelection.reconcileAfterRemoval(
@@ -1691,28 +1721,73 @@ final class AppModel: ObservableObject {
         return token
     }
 
-    func assignSpectra(
+    func associateSpectra(
         fromDragToken token: String,
         to file: SXMMetadata,
         tagContext: UUID? = nil
     ) -> Bool {
-        guard let ids = spectrumDragPayloads.removeValue(forKey: token), !ids.isEmpty else {
+        guard let ids = spectrumDragPayloads.removeValue(forKey: token),
+              !ids.isEmpty else {
             return false
         }
-        activateTagContextIfNeeded(tagContext)
-        let oldParentIDs = Set(ids.compactMap { spectrumParentIDBySpectrumID[$0] })
-        for id in ids {
-            manuallyAssignedSXMIDBySpectrumID[id] = file.id
-            spectrumParentIDBySpectrumID[id] = file.id
+        guard let session = activeDatasetSession else {
+            status = metadataUnavailableForSpectrumChangesMessage
+            return false
         }
-        hiddenSpectrumIDs.subtract(ids)
-        sidebarSelectedSpectrumIDs = Set(ids)
-        updateSelection { state, visibleIDs in
-            state.selectOnly(file.id, in: visibleIDs)
+        guard !isMetadataMutationInFlight else {
+            status = "Wait for the current metadata update to finish."
+            return false
         }
-        rebuildSpectrumGroups(for: oldParentIDs.union([file.id]))
-        syncSpectrumAxesWithSelection()
-        status = "Moved \(ids.count) spectrum file\(ids.count == 1 ? "" : "s") to \(file.filename)."
+        let currentSpectrumIDs = Set(spectra.map(\.id))
+        guard currentSpectrumIDs.isSuperset(of: ids),
+              files.contains(where: { $0.id == file.id }) else {
+            status = "The association selection is no longer available."
+            return false
+        }
+
+        let plan: ManualAssociationUpdatePlan
+        do {
+            plan = try ManualAssociationUpdatePlan(
+                datIDs: ids,
+                targetSXMID: file.id,
+                pathIndex: session.pathIndex
+            )
+        } catch {
+            status = "Spectra could not be associated: "
+                + error.localizedDescription
+            return false
+        }
+
+        let updatedAt = Date()
+        let successMessage =
+            "Associated \(ids.count) spectrum file"
+            + (ids.count == 1 ? "" : "s")
+            + " with \(file.filename)."
+        performMetadataMutation(
+            unavailableMessage: metadataUnavailableForSpectrumChangesMessage,
+            successMessage: successMessage,
+            failurePrefix: "Spectra could not be associated",
+            mutation: { record in
+                let updated = try plan.applying(
+                    to: record.manualAssociations
+                )
+                try record.replaceManualAssociations(
+                    with: updated,
+                    updatedAt: updatedAt
+                )
+            },
+            onVerified: { [weak self] _ in
+                guard let self else { return }
+                restoreManualSpectrumAssociations()
+                rebuildSpectrumGroups()
+                activateTagContextIfNeeded(tagContext)
+                sidebarSelectedSpectrumIDs = Set(ids)
+                updateSelection { state, visibleIDs in
+                    state.selectOnly(file.id, in: visibleIDs)
+                }
+                syncSpectrumAxesWithSelection()
+            }
+        )
         return true
     }
 
@@ -2491,8 +2566,36 @@ final class AppModel: ObservableObject {
             inout DatasetRecordV1
         ) throws -> Void
     ) {
+        performMetadataMutation(
+            unavailableMessage: metadataUnavailableForTagChangesMessage,
+            successMessage: successMessage,
+            failurePrefix: failurePrefix,
+            mutation: mutation,
+            onVerified: { [weak self] updatedSession in
+                guard let self else { return }
+                publishUpdatedTagPresentation(
+                    tags: updatedSession.verifiedRecord.tags,
+                    expandingTagID: expandingTagID,
+                    activeTagResolution: activeTagResolution,
+                    datasetID: updatedSession.datasetID
+                )
+            }
+        )
+    }
+
+    private func performMetadataMutation(
+        unavailableMessage: String,
+        successMessage: String? = nil,
+        failurePrefix: String,
+        mutation: @escaping @Sendable (
+            inout DatasetRecordV1
+        ) throws -> Void,
+        onVerified: @escaping @MainActor (
+            ActiveDatasetSession
+        ) -> Void
+    ) {
         guard let session = activeDatasetSession else {
-            status = metadataUnavailableForTagChangesMessage
+            status = unavailableMessage
             return
         }
         guard !isMetadataMutationInFlight else {
@@ -2534,12 +2637,7 @@ final class AppModel: ObservableObject {
                     return
                 }
                 activeDatasetSession = updatedSession
-                publishUpdatedTagPresentation(
-                    tags: verifiedRecord.tags,
-                    expandingTagID: expandingTagID,
-                    activeTagResolution: activeTagResolution,
-                    datasetID: datasetID
-                )
+                onVerified(updatedSession)
                 if let successMessage {
                     status = successMessage
                 }
@@ -2652,10 +2750,34 @@ final class AppModel: ObservableObject {
         "Tag metadata is unavailable for this folder. Reopen the folder to retry."
     }
 
+    private var metadataUnavailableForSpectrumChangesMessage: String {
+        "Spectrum association metadata is unavailable for this folder. "
+            + "Reopen the folder to retry."
+    }
+
+    private func restoreManualSpectrumAssociations() {
+        guard let session = activeDatasetSession else {
+            manualTargetPathByDATPath = [:]
+            manualAssociationProjection = nil
+            manuallyAssignedSXMIDBySpectrumID = [:]
+            return
+        }
+        let projection = ManualSpectrumAssociationProjection(
+            associations: session.verifiedRecord.manualAssociations,
+            pathIndex: session.pathIndex,
+            availableSXMIDs: Set(files.map(\.id))
+        )
+        manualTargetPathByDATPath = projection.targetPathByDATPath
+        manualAssociationProjection = projection
+        manuallyAssignedSXMIDBySpectrumID =
+            projection.resolvedSXMIDByDATID
+    }
+
     private func rebuildSpectrumGroups() {
         let associated = associateSpectra(spectra, with: files)
         spectrumParentIDBySpectrumID = associated.parents
         spectrumGroupsByFileID = associated.groups
+        unassociatedSpectrumIDs = associated.unassociated
         ensureSpectrumAxisSelections(
             for: associated.groups.values.flatMap { $0 }
         )
@@ -2705,7 +2827,14 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func associateSpectra(_ spectra: [SpectroscopyFile], with sxmFiles: [SXMMetadata]) -> (groups: [SXMMetadata.ID: [SpectroscopyGroup]], parents: [SpectroscopyFile.ID: SXMMetadata.ID]) {
+    private func associateSpectra(
+        _ spectra: [SpectroscopyFile],
+        with sxmFiles: [SXMMetadata]
+    ) -> (
+        groups: [SXMMetadata.ID: [SpectroscopyGroup]],
+        parents: [SpectroscopyFile.ID: SXMMetadata.ID],
+        unassociated: Set<SpectroscopyFile.ID>
+    ) {
         let sxmByTime = sxmFiles.sorted { lhs, rhs in
             if lhs.modifiedTime == rhs.modifiedTime {
                 return lhs.filename.localizedStandardCompare(rhs.filename) == .orderedAscending
@@ -2715,18 +2844,37 @@ final class AppModel: ObservableObject {
         let sxmByName = sxmFiles.sorted {
             sxmBasename($0).count > sxmBasename($1).count
         }
-        guard !sxmByTime.isEmpty else { return ([:], [:]) }
+        guard !sxmByTime.isEmpty else {
+            return ([:], [:], Set(spectra.map(\.id)))
+        }
 
         var buckets: [SXMMetadata.ID: [SpectroscopyFile]] = [:]
         var parents: [SpectroscopyFile.ID: SXMMetadata.ID] = [:]
+        var unassociated: Set<SpectroscopyFile.ID> = []
         for spectrum in spectra.sorted(by: { lhs, rhs in
             lhs.filename.localizedStandardCompare(rhs.filename) == .orderedAscending
         }) {
-            let parent = manuallyAssignedSXMIDBySpectrumID[spectrum.id].flatMap { id in sxmFiles.first { $0.id == id } }
-                ?? sxmMatchingFilename(for: spectrum, in: sxmByName)
-                ?? sxmByTime.last(where: { $0.modifiedTime <= spectrum.modifiedTime })
-                ?? nearestSXM(to: spectrum, in: sxmByTime)
-            guard let parent else { continue }
+            let resolution = manualAssociationProjection?
+                .resolution(forDATID: spectrum.id)
+                ?? .automaticAllowed
+            let parent: SXMMetadata?
+            switch resolution {
+            case .automaticAllowed:
+                parent =
+                    sxmMatchingFilename(for: spectrum, in: sxmByName)
+                    ?? sxmByTime.last(where: {
+                        $0.modifiedTime <= spectrum.modifiedTime
+                    })
+                    ?? nearestSXM(to: spectrum, in: sxmByTime)
+            case .manual(let sxmID):
+                parent = sxmFiles.first { $0.id == sxmID }
+            case .missingManualTarget:
+                parent = nil
+            }
+            guard let parent else {
+                unassociated.insert(spectrum.id)
+                continue
+            }
             parents[spectrum.id] = parent.id
             if !hiddenSpectrumIDs.contains(spectrum.id) {
                 buckets[parent.id, default: []].append(spectrum)
@@ -2741,7 +2889,7 @@ final class AppModel: ObservableObject {
                 spectra: fileSpectra
             )
         }
-        return (output, parents)
+        return (output, parents, unassociated)
     }
 
     private func sxmMatchingFilename(for spectrum: SpectroscopyFile, in sxmFilesByDescendingBasenameLength: [SXMMetadata]) -> SXMMetadata? {

@@ -337,7 +337,8 @@ struct SidebarView: View {
 
                 if model.isLoading {
                     ProgressView("Scanning...")
-                } else if model.files.isEmpty {
+                } else if model.files.isEmpty
+                            && model.unassociatedSpectrumIDs.isEmpty {
                     Text("No SXM files")
                         .foregroundStyle(.secondary)
                 } else if model.sidebarMode == .all {
@@ -379,6 +380,28 @@ struct AllSidebarFileList: View {
                     ForEach(model.visibleFiles) { file in
                         SXMFileSidebarItem(model: model, file: file)
                         .id(file.id)
+                    }
+
+                    if !model.visibleUnassociatedSpectra.isEmpty {
+                        Divider()
+                            .padding(.vertical, 4)
+
+                        Label(
+                            "Unassociated spectra",
+                            systemImage: "link.badge.plus"
+                        )
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+
+                        ForEach(model.visibleUnassociatedSpectra) {
+                            spectrum in
+                            SpectroscopySidebarRow(
+                                model: model,
+                                spectrum: spectrum
+                            )
+                            .padding(.leading, 8)
+                        }
                     }
                 }
                 .padding(6)
@@ -597,6 +620,7 @@ struct SXMFileSidebarItem: View {
             .onDrop(of: [UTType.plainText.identifier], isTargeted: $isDropTargeted) { providers in
                 handleSpectrumDrop(providers)
             }
+            .help("Drop spectra here to associate them with \(file.filename)")
 
             ForEach(model.spectra(for: file)) { spectrum in
                 SpectroscopySidebarRow(
@@ -610,7 +634,8 @@ struct SXMFileSidebarItem: View {
     }
 
     private func handleSpectrumDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) }) else {
+        guard model.canAssociateSpectra,
+              let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) }) else {
             return false
         }
         provider.loadItem(forTypeIdentifier: UTType.plainText.identifier, options: nil) { item, _ in
@@ -627,7 +652,7 @@ struct SXMFileSidebarItem: View {
 
             if let token {
                 Task { @MainActor in
-                    _ = model.assignSpectra(
+                    _ = model.associateSpectra(
                         fromDragToken: token,
                         to: file,
                         tagContext: tagContext
@@ -683,7 +708,7 @@ struct SpectroscopySidebarRow: View {
         .onDrag {
             NSItemProvider(object: model.dragToken(for: spectrum) as NSString)
         }
-        .help(spectrum.filename)
+        .help("\(spectrum.filename) — Drag to associate with an SXM file")
     }
 }
 
