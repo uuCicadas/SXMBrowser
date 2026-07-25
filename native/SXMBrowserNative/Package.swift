@@ -11,7 +11,12 @@ let package = Package(
         .executable(name: "SXMBrowserBenchmark", targets: ["SXMBrowserBenchmark"]),
     ],
     targets: [
-        .target(name: "SXMBrowserCore"),
+        .target(
+            name: "SXMBrowserCore",
+            resources: [
+                .embedInCode("Resources/palettes.json"),
+            ]
+        ),
         .target(name: "SXMBrowserAppCore", dependencies: ["SXMBrowserCore"]),
         .executableTarget(
             name: "SXMBrowserNative",

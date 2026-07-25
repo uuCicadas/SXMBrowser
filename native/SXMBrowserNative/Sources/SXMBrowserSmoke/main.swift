@@ -7,6 +7,13 @@ let folder = CommandLine.arguments.dropFirst().first.map(URL.init(fileURLWithPat
 let parser = SXMParser()
 let report = try parser.scanFolder(folder)
 let files = report.items
+let paletteCount = PaletteName.allCases.filter {
+    PaletteStore.shared.stops(for: $0).count >= 2
+}.count
+guard paletteCount == PaletteName.allCases.count else {
+    fail("Smoke failed: the embedded palette catalog is incomplete.")
+}
+print("palettes=\(paletteCount)")
 print("files=\(files.count) issues=\(report.issues.count)")
 for file in files.prefix(3) {
     print("\(file.filename) \(file.pixels.width)x\(file.pixels.height) default=\(file.defaultChannel ?? "-")")
