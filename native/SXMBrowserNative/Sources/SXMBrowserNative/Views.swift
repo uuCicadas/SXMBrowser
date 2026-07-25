@@ -261,7 +261,10 @@ struct SidebarView: View {
                 .controlSize(.small)
                 .frame(maxWidth: .infinity)
 
-                SearchField(text: $model.filenameSearch) {
+                SearchField(text: Binding(
+                    get: { model.filenameSearch },
+                    set: { model.setFilenameSearch($0) }
+                )) {
                     model.jumpToFilenameSearch()
                 }
 
@@ -323,7 +326,7 @@ struct AllSidebarFileList: View {
     @ObservedObject var model: AppModel
 
     private func scrollToSelection(with proxy: ScrollViewProxy) {
-        guard let selectedID = model.sidebarSelectedIDs.first else { return }
+        guard let selectedID = model.selectedID else { return }
         DispatchQueue.main.async {
             withAnimation(.easeInOut(duration: 0.18)) {
                 proxy.scrollTo(selectedID, anchor: .center)
@@ -335,8 +338,8 @@ struct AllSidebarFileList: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 4) {
-                    ForEach(model.sortedFiles) { file in
-                        SXMFileSidebarItem(model: model, file: file, fromSidebar: true)
+                    ForEach(model.visibleFiles) { file in
+                        SXMFileSidebarItem(model: model, file: file)
                         .id(file.id)
                     }
                 }
@@ -346,7 +349,7 @@ struct AllSidebarFileList: View {
             .onAppear {
                 scrollToSelection(with: proxy)
             }
-            .onChange(of: model.sidebarSelectedIDs) { _, _ in
+            .onChange(of: model.selection) { _, _ in
                 scrollToSelection(with: proxy)
             }
             .onChange(of: model.sortMode) { _, _ in
@@ -387,7 +390,7 @@ struct TagGroupView: View {
     let tag: String
 
     private var files: [SXMMetadata] {
-        model.files(forTag: tag)
+        model.visibleFiles(forTag: tag)
     }
 
     var body: some View {
@@ -441,7 +444,7 @@ struct TagGroupView: View {
                         .padding(.vertical, 6)
                 } else {
                     ForEach(files) { file in
-                        SXMFileSidebarItem(model: model, file: file, fromSidebar: true)
+                        SXMFileSidebarItem(model: model, file: file, tagContext: tag)
                     }
                 }
             }
@@ -452,32 +455,40 @@ struct TagGroupView: View {
 struct SXMFileSidebarItem: View {
     @ObservedObject var model: AppModel
     let file: SXMMetadata
-    var fromSidebar = false
+    var tagContext: String? = nil
     @State private var isDropTargeted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Button {
-                model.select(file, modifiers: NSEvent.modifierFlags, updateSidebarSelection: true)
+                model.select(
+                    file,
+                    modifiers: NSEvent.modifierFlags,
+                    tagContext: tagContext
+                )
             } label: {
                 FileRow(
                     file: file,
-                    isSelected: model.sidebarSelectedIDs.contains(file.id),
-                    isCurrent: model.sidebarSelectedIDs.contains(file.id) && model.selectedID == file.id,
+                    isSelected: model.selectedIDs.contains(file.id),
+                    isCurrent: model.selectedID == file.id,
                     isDropTargeted: isDropTargeted
                 )
             }
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity)
             .contextMenu {
-                FileContextMenu(model: model, file: file, fromSidebar: fromSidebar)
+                FileContextMenu(model: model, file: file, tagContext: tagContext)
             }
             .onDrop(of: [UTType.plainText.identifier], isTargeted: $isDropTargeted) { providers in
                 handleSpectrumDrop(providers)
             }
 
             ForEach(model.spectra(for: file)) { spectrum in
-                SpectroscopySidebarRow(model: model, spectrum: spectrum)
+                SpectroscopySidebarRow(
+                    model: model,
+                    spectrum: spectrum,
+                    tagContext: tagContext
+                )
                     .padding(.leading, 14)
             }
         }
@@ -501,7 +512,11 @@ struct SXMFileSidebarItem: View {
 
             if let token {
                 Task { @MainActor in
-                    _ = model.assignSpectra(fromDragToken: token, to: file)
+                    _ = model.assignSpectra(
+                        fromDragToken: token,
+                        to: file,
+                        tagContext: tagContext
+                    )
                 }
             }
         }
@@ -512,6 +527,7 @@ struct SXMFileSidebarItem: View {
 struct SpectroscopySidebarRow: View {
     @ObservedObject var model: AppModel
     let spectrum: SpectroscopyFile
+    var tagContext: String? = nil
 
     var body: some View {
         HStack(spacing: 7) {
@@ -543,7 +559,11 @@ struct SpectroscopySidebarRow: View {
         )
         .contentShape(Rectangle())
         .onTapGesture {
-            model.selectSpectrumRow(spectrum, modifiers: NSEvent.modifierFlags)
+            model.selectSpectrumRow(
+                spectrum,
+                modifiers: NSEvent.modifierFlags,
+                tagContext: tagContext
+            )
         }
         .onDrag {
             NSItemProvider(object: model.dragToken(for: spectrum) as NSString)
@@ -664,17 +684,17 @@ struct FileRow: View {
 struct FileContextMenu: View {
     @ObservedObject var model: AppModel
     let file: SXMMetadata
-    var fromSidebar = false
+    var tagContext: String? = nil
 
     var body: some View {
         Button {
-            model.openFilesForContext(containing: file, fromSidebar: fromSidebar)
+            model.openFilesForContext(containing: file, tagContext: tagContext)
         } label: {
             Label("Open", systemImage: "arrow.up.forward.app")
         }
 
         Button(role: .destructive) {
-            model.deleteFilesForContext(containing: file, fromSidebar: fromSidebar)
+            model.deleteFilesForContext(containing: file, tagContext: tagContext)
         } label: {
             Label("Delete", systemImage: "trash")
         }
@@ -682,17 +702,17 @@ struct FileContextMenu: View {
         Menu {
             if model.tagNames.isEmpty {
                 Button("New Tag...") {
-                    model.promptForNewTag(toContextContaining: file, fromSidebar: fromSidebar)
+                    model.promptForNewTag(toContextContaining: file, tagContext: tagContext)
                 }
             } else {
                 ForEach(model.tagNames, id: \.self) { tag in
                     Button(tag) {
-                        model.addTag(tag, toContextContaining: file, fromSidebar: fromSidebar)
+                        model.addTag(tag, toContextContaining: file, tagContext: tagContext)
                     }
                 }
                 Divider()
                 Button("New Tag...") {
-                    model.promptForNewTag(toContextContaining: file, fromSidebar: fromSidebar)
+                    model.promptForNewTag(toContextContaining: file, tagContext: tagContext)
                 }
             }
         } label: {
@@ -700,13 +720,20 @@ struct FileContextMenu: View {
         }
 
         Menu {
-            let removableTags = model.removableTagsForContext(containing: file, fromSidebar: fromSidebar)
+            let removableTags = model.removableTagsForContext(
+                containing: file,
+                tagContext: tagContext
+            )
             if removableTags.isEmpty {
                 Text("No Tags")
             } else {
                 ForEach(removableTags, id: \.self) { tag in
                     Button(tag) {
-                        model.removeTag(tag, fromContextContaining: file, fromSidebar: fromSidebar)
+                        model.removeTag(
+                            tag,
+                            fromContextContaining: file,
+                            tagContext: tagContext
+                        )
                     }
                 }
             }
@@ -715,7 +742,7 @@ struct FileContextMenu: View {
         }
 
         Button {
-            model.revealInFinderForContext(containing: file, fromSidebar: fromSidebar)
+            model.revealInFinderForContext(containing: file, tagContext: tagContext)
         } label: {
             Label("Open in Finder", systemImage: "folder")
         }

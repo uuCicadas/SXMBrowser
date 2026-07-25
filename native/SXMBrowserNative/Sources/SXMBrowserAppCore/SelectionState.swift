@@ -3,14 +3,10 @@ public struct SelectionState<ID: Hashable & Sendable>: Equatable, Sendable {
     public private(set) var selectedIDs: Set<ID>
     public private(set) var anchorID: ID?
 
-    public init(
-        primaryID: ID? = nil,
-        selectedIDs: Set<ID> = [],
-        anchorID: ID? = nil
-    ) {
-        self.primaryID = primaryID
-        self.selectedIDs = selectedIDs
-        self.anchorID = anchorID
+    public init() {
+        primaryID = nil
+        selectedIDs = []
+        anchorID = nil
     }
 
     public mutating func clear() {

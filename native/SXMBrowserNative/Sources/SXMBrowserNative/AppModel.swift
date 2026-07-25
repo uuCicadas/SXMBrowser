@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SXMBrowserAppCore
 import SXMBrowserCore
 import SwiftUI
 
@@ -82,12 +83,10 @@ final class AppModel: ObservableObject {
     @Published var sidebarSelectedSpectrumIDs: Set<SpectroscopyFile.ID> = []
     @Published var manuallyAssignedSXMIDBySpectrumID: [SpectroscopyFile.ID: SXMMetadata.ID] = [:]
     @Published var areSpectraVisible = true
-    @Published var selectedID: SXMMetadata.ID?
-    @Published var selectedIDs: Set<SXMMetadata.ID> = []
-    @Published var sidebarSelectedIDs: Set<SXMMetadata.ID> = []
+    @Published private(set) var selection = SelectionState<SXMMetadata.ID>()
     @Published var sidebarMode: SidebarMode = .all
     @Published var activeTagName: String?
-    @Published var filenameSearch = ""
+    @Published private(set) var filenameSearch = ""
     @Published var mode: BrowserMode = .grid
     @Published var sortMode: SortMode = AppModel.loadSortMode() {
         didSet { UserDefaults.standard.set(sortMode.rawValue, forKey: Defaults.sortMode) }
@@ -148,12 +147,19 @@ final class AppModel: ObservableObject {
     private var processedCacheMatrix: Matrix?
     private var processedCacheStats: HistogramStats?
     private var processedCacheStatsBins: Int?
-    private var selectionAnchorID: SXMMetadata.ID?
     private var spectrumDragPayloads: [String: [SpectroscopyFile.ID]] = [:]
 
     init() {
         thumbnailCache.countLimit = 180
         thumbnailCache.totalCostLimit = 64 * 1024 * 1024
+    }
+
+    var selectedID: SXMMetadata.ID? {
+        selection.primaryID
+    }
+
+    var selectedIDs: Set<SXMMetadata.ID> {
+        selection.selectedIDs
     }
 
     var selectedFile: SXMMetadata? {
@@ -162,7 +168,7 @@ final class AppModel: ObservableObject {
     }
 
     var selectedFiles: [SXMMetadata] {
-        sortedFiles.filter { selectedIDs.contains($0.id) }
+        visibleFiles.filter { selectedIDs.contains($0.id) }
     }
 
     var selectedCount: Int {
@@ -170,7 +176,7 @@ final class AppModel: ObservableObject {
     }
 
     var canDeleteSelection: Bool {
-        !selectedIDs.isEmpty && !isLoading
+        !selectedFiles.isEmpty && !isLoading
     }
 
     var sortedFiles: [SXMMetadata] {
@@ -187,8 +193,17 @@ final class AppModel: ObservableObject {
     }
 
     var visibleFiles: [SXMMetadata] {
-        guard sidebarMode == .tag, let activeTagName else { return sortedFiles }
-        return files(forTag: activeTagName)
+        let scopedFiles: [SXMMetadata]
+        switch sidebarMode {
+        case .all:
+            scopedFiles = sortedFiles
+        case .tag:
+            guard let activeTagName, tagNames.contains(activeTagName) else {
+                return []
+            }
+            scopedFiles = files(forTag: activeTagName)
+        }
+        return filesMatchingSearch(in: scopedFiles)
     }
 
     var visibleDisplayItems: [GridDisplayItem] {
@@ -232,6 +247,10 @@ final class AppModel: ObservableObject {
         return sortedFiles.filter { taggedPaths.contains(fileKey($0.path)) }
     }
 
+    func visibleFiles(forTag tag: String) -> [SXMMetadata] {
+        filesMatchingSearch(in: files(forTag: tag))
+    }
+
     func setSidebarMode(_ mode: SidebarMode) {
         sidebarMode = mode
         if mode == .all {
@@ -239,6 +258,18 @@ final class AppModel: ObservableObject {
             ensureSelectionIsVisible()
         } else if let activeTagName, tagNames.contains(activeTagName) {
             selectTag(activeTagName)
+        } else if let firstTag = tagNames.first {
+            selectTag(firstTag)
+        } else {
+            ensureSelectionIsVisible()
+        }
+    }
+
+    func setFilenameSearch(_ value: String) {
+        guard filenameSearch != value else { return }
+        filenameSearch = value
+        updateSelection { state, visibleIDs in
+            state.reconcile(with: visibleIDs, fallbackToFirst: false)
         }
     }
 
@@ -325,11 +356,10 @@ final class AppModel: ObservableObject {
         sidebarSelectedSpectrumIDs.removeAll()
         manuallyAssignedSXMIDBySpectrumID.removeAll()
         spectrumDragPayloads.removeAll()
-        selectedID = nil
-        selectedIDs.removeAll()
-        sidebarSelectedIDs.removeAll()
+        selection.clear()
+        sidebarMode = .all
         activeTagName = nil
-        selectionAnchorID = nil
+        filenameSearch = ""
         selectedImage = nil
         selectedStats = nil
         selectedSpectrumXColumn = ""
@@ -360,16 +390,10 @@ final class AppModel: ObservableObject {
                 pruneTagsToCurrentFiles()
                 if let selectedPath,
                    let droppedFile = files.first(where: { $0.path.standardizedFileURL == selectedPath.standardizedFileURL }) {
-                    selectedID = droppedFile.id
-                    selectedIDs = [droppedFile.id]
-                    sidebarSelectedIDs = [droppedFile.id]
-                    selectionAnchorID = droppedFile.id
+                    selection.selectOnly(droppedFile.id, in: visibleFiles.map(\.id))
                     mode = .single
                 } else if let firstID = sortedFiles.first?.id {
-                    selectedID = firstID
-                    selectedIDs = [firstID]
-                    sidebarSelectedIDs = [firstID]
-                    selectionAnchorID = firstID
+                    selection.selectOnly(firstID, in: visibleFiles.map(\.id))
                 }
                 applyDefaultsFromSelection()
                 isLoading = false
@@ -386,42 +410,38 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func select(_ file: SXMMetadata, updateSidebarSelection: Bool = false) {
-        selectedID = file.id
-        selectedIDs = [file.id]
-        if updateSidebarSelection {
-            sidebarSelectedIDs = [file.id]
-        }
-        selectionAnchorID = file.id
-        applyDefaultsFromSelection()
-        if mode == .single {
-            refreshSelectedImage(resetScale: true)
+    func select(_ file: SXMMetadata, tagContext: String? = nil) {
+        activateTagContextIfNeeded(tagContext)
+        updateSelection { state, visibleIDs in
+            state.selectOnly(file.id, in: visibleIDs)
         }
     }
 
-    func select(_ file: SXMMetadata, modifiers: NSEvent.ModifierFlags, updateSidebarSelection: Bool = false) {
+    func select(
+        _ file: SXMMetadata,
+        modifiers: NSEvent.ModifierFlags,
+        tagContext: String? = nil
+    ) {
+        activateTagContextIfNeeded(tagContext)
         let relevantModifiers = modifiers.intersection([.command, .shift])
-        if relevantModifiers.contains(.shift), let anchorID = selectionAnchorID {
-            selectRange(from: anchorID, to: file.id, updateSidebarSelection: updateSidebarSelection)
+        if relevantModifiers.contains(.shift) {
+            updateSelection { state, visibleIDs in
+                state.selectRange(to: file.id, in: visibleIDs)
+            }
         } else if relevantModifiers.contains(.command) {
-            toggleSelection(file, updateSidebarSelection: updateSidebarSelection)
+            updateSelection { state, visibleIDs in
+                state.toggle(file.id, in: visibleIDs)
+            }
         } else {
-            select(file, updateSidebarSelection: updateSidebarSelection)
+            select(file, tagContext: tagContext)
         }
     }
 
     func selectAll() {
-        let ids = Set(visibleFiles.map(\.id))
-        guard !ids.isEmpty else { return }
-        selectedIDs = ids
-        sidebarSelectedIDs = ids
-        selectedID = selectedID.flatMap { ids.contains($0) ? $0 : nil } ?? visibleFiles.first?.id
-        selectionAnchorID = selectedID
-        applyDefaultsFromSelection()
-        if mode == .single {
-            refreshSelectedImage(resetScale: true)
+        updateSelection { state, visibleIDs in
+            state.selectAll(in: visibleIDs)
         }
-        status = "Selected \(ids.count) files."
+        status = "Selected \(selectedIDs.count) files."
     }
 
     func jumpToFilenameSearch() {
@@ -442,7 +462,7 @@ final class AppModel: ObservableObject {
             return
         }
 
-        select(list[matchIndex], updateSidebarSelection: true)
+        select(list[matchIndex])
         status = "Selected \(list[matchIndex].filename)"
     }
 
@@ -486,32 +506,56 @@ final class AppModel: ObservableObject {
         deleteFiles(selectedFiles)
     }
 
-    func deleteFilesForContext(containing file: SXMMetadata, fromSidebar: Bool = false) {
-        deleteFiles(contextFiles(containing: file, fromSidebar: fromSidebar))
+    func deleteFilesForContext(
+        containing file: SXMMetadata,
+        tagContext: String? = nil
+    ) {
+        deleteFiles(contextFiles(containing: file, tagContext: tagContext))
     }
 
-    func contextFiles(containing file: SXMMetadata, fromSidebar: Bool = false) -> [SXMMetadata] {
-        let ids = fromSidebar ? sidebarSelectedIDs : selectedIDs
-        return ids.contains(file.id) ? sortedFiles.filter { ids.contains($0.id) } : [file]
+    func contextFiles(
+        containing file: SXMMetadata,
+        tagContext: String? = nil
+    ) -> [SXMMetadata] {
+        let scopedFiles = tagContext.map(visibleFiles(forTag:)) ?? visibleFiles
+        return selectedIDs.contains(file.id)
+            ? scopedFiles.filter { selectedIDs.contains($0.id) }
+            : [file]
     }
 
-    func revealInFinderForContext(containing file: SXMMetadata, fromSidebar: Bool = false) {
-        let urls = contextFiles(containing: file, fromSidebar: fromSidebar).map(\.path)
+    func revealInFinderForContext(
+        containing file: SXMMetadata,
+        tagContext: String? = nil
+    ) {
+        let urls = contextFiles(containing: file, tagContext: tagContext).map(\.path)
         NSWorkspace.shared.activateFileViewerSelecting(urls)
     }
 
-    func openFilesForContext(containing file: SXMMetadata, fromSidebar: Bool = false) {
-        for target in contextFiles(containing: file, fromSidebar: fromSidebar) {
+    func openFilesForContext(
+        containing file: SXMMetadata,
+        tagContext: String? = nil
+    ) {
+        for target in contextFiles(containing: file, tagContext: tagContext) {
             NSWorkspace.shared.open(target.path)
         }
     }
 
-    func addTag(_ tag: String, toContextContaining file: SXMMetadata, fromSidebar: Bool = false) {
-        addTag(tag, to: contextFiles(containing: file, fromSidebar: fromSidebar))
+    func addTag(
+        _ tag: String,
+        toContextContaining file: SXMMetadata,
+        tagContext: String? = nil
+    ) {
+        addTag(tag, to: contextFiles(containing: file, tagContext: tagContext))
     }
 
-    func removableTagsForContext(containing file: SXMMetadata, fromSidebar: Bool = false) -> [String] {
-        let targetPaths = Set(contextFiles(containing: file, fromSidebar: fromSidebar).map { fileKey($0.path) })
+    func removableTagsForContext(
+        containing file: SXMMetadata,
+        tagContext: String? = nil
+    ) -> [String] {
+        let targetPaths = Set(
+            contextFiles(containing: file, tagContext: tagContext)
+                .map { fileKey($0.path) }
+        )
         guard !targetPaths.isEmpty else { return [] }
         return tagNames.filter { tag in
             guard let taggedPaths = taggedFilePathsByTag[tag] else { return false }
@@ -519,11 +563,18 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func removeTag(_ tag: String, fromContextContaining file: SXMMetadata, fromSidebar: Bool = false) {
-        removeTag(tag, from: contextFiles(containing: file, fromSidebar: fromSidebar))
+    func removeTag(
+        _ tag: String,
+        fromContextContaining file: SXMMetadata,
+        tagContext: String? = nil
+    ) {
+        removeTag(tag, from: contextFiles(containing: file, tagContext: tagContext))
     }
 
-    func promptForNewTag(toContextContaining file: SXMMetadata? = nil, fromSidebar: Bool = false) {
+    func promptForNewTag(
+        toContextContaining file: SXMMetadata? = nil,
+        tagContext: String? = nil
+    ) {
         let alert = NSAlert()
         alert.messageText = file == nil ? "Create Tag" : "Create and Add Tag"
         alert.informativeText = "Enter a tag name."
@@ -540,7 +591,7 @@ final class AppModel: ObservableObject {
 
         createTag(named: name)
         if let file {
-            addTag(name, toContextContaining: file, fromSidebar: fromSidebar)
+            addTag(name, toContextContaining: file, tagContext: tagContext)
         }
     }
 
@@ -560,30 +611,8 @@ final class AppModel: ObservableObject {
         saveTags()
 
         let tagFiles = files(forTag: tag)
-        let tagIDs = Set(tagFiles.map(\.id))
-        selectedIDs = selectedIDs.intersection(tagIDs)
-        sidebarSelectedIDs = sidebarSelectedIDs.intersection(tagIDs)
-
-        if let selectedID, tagIDs.contains(selectedID) {
-            selectionAnchorID = selectedID
-            status = "Showing \(tagFiles.count) files in \(tag)."
-            return
-        }
-
-        if let firstFile = tagFiles.first {
-            selectedID = firstFile.id
-            selectedIDs = [firstFile.id]
-            selectionAnchorID = firstFile.id
-            applyDefaultsFromSelection()
-            if mode == .single {
-                refreshSelectedImage(resetScale: true)
-            }
-        } else {
-            selectedID = nil
-            selectedIDs.removeAll()
-            selectionAnchorID = nil
-            selectedImage = nil
-            selectedStats = nil
+        updateSelection { state, visibleIDs in
+            state.reconcile(with: visibleIDs, fallbackToFirst: true)
         }
         status = "Showing \(tagFiles.count) files in \(tag)."
     }
@@ -616,32 +645,18 @@ final class AppModel: ObservableObject {
             return
         }
 
-        let oldSelectedID = selectedID
+        let oldVisibleIDs = visibleFiles.map(\.id)
         files.removeAll { trashedIDs.contains($0.id) }
-        selectedIDs.subtract(trashedIDs)
-        sidebarSelectedIDs.subtract(trashedIDs)
         removeTags(forDeletedFiles: targets.filter { trashedIDs.contains($0.id) })
-
-        if let oldSelectedID, trashedIDs.contains(oldSelectedID) {
-            selectedID = selectedIDsInDisplayOrder().first ?? nearestSelection(afterDeleting: targets)
-        } else if let currentID = selectedID, !files.contains(where: { $0.id == currentID }) {
-            selectedID = selectedIDsInDisplayOrder().first
-        }
-
-        if let selectedID {
-            selectedIDs.insert(selectedID)
-            selectionAnchorID = selectedID
-        } else {
-            selectionAnchorID = nil
-        }
-
-        applyDefaultsFromSelection()
-        if mode == .single {
-            refreshSelectedImage(resetScale: true)
-        } else if selectedID == nil {
-            imageTask?.cancel()
-            selectedImage = nil
-            selectedStats = nil
+        var updatedSelection = selection
+        updatedSelection.reconcileAfterRemoval(
+            removedIDs: trashedIDs,
+            oldVisibleIDs: oldVisibleIDs,
+            newVisibleIDs: visibleFiles.map(\.id)
+        )
+        commitSelection(updatedSelection, resetScale: true)
+        if selectedID == nil {
+            clearSelectedRender()
         }
 
         let deletedText = trashedIDs.count == 1 ? "Moved 1 file to Trash." : "Moved \(trashedIDs.count) files to Trash."
@@ -743,7 +758,11 @@ final class AppModel: ObservableObject {
         status = visible ? "Showing \(spectrum.filename)." : "Hidden \(spectrum.filename)."
     }
 
-    func selectSpectrumRow(_ spectrum: SpectroscopyFile, modifiers: NSEvent.ModifierFlags) {
+    func selectSpectrumRow(
+        _ spectrum: SpectroscopyFile,
+        modifiers: NSEvent.ModifierFlags,
+        tagContext: String? = nil
+    ) {
         let relevantModifiers = modifiers.intersection([.command, .shift])
         if relevantModifiers.contains(.command) || relevantModifiers.contains(.shift) {
             if sidebarSelectedSpectrumIDs.contains(spectrum.id) {
@@ -758,7 +777,7 @@ final class AppModel: ObservableObject {
         if let parentID = spectrumParentIDBySpectrumID[spectrum.id],
            let parent = files.first(where: { $0.id == parentID }) {
             if selectedID != parent.id {
-                select(parent, updateSidebarSelection: true)
+                select(parent, tagContext: tagContext)
             }
             syncSpectrumAxesWithSelection(preferredSpectrum: spectrum)
         }
@@ -774,10 +793,15 @@ final class AppModel: ObservableObject {
         return token
     }
 
-    func assignSpectra(fromDragToken token: String, to file: SXMMetadata) -> Bool {
+    func assignSpectra(
+        fromDragToken token: String,
+        to file: SXMMetadata,
+        tagContext: String? = nil
+    ) -> Bool {
         guard let ids = spectrumDragPayloads.removeValue(forKey: token), !ids.isEmpty else {
             return false
         }
+        activateTagContextIfNeeded(tagContext)
         let oldParentIDs = Set(ids.compactMap { spectrumParentIDBySpectrumID[$0] })
         for id in ids {
             manuallyAssignedSXMIDBySpectrumID[id] = file.id
@@ -785,10 +809,9 @@ final class AppModel: ObservableObject {
         }
         hiddenSpectrumIDs.subtract(ids)
         sidebarSelectedSpectrumIDs = Set(ids)
-        selectedID = file.id
-        selectedIDs = [file.id]
-        sidebarSelectedIDs = [file.id]
-        selectionAnchorID = file.id
+        updateSelection { state, visibleIDs in
+            state.selectOnly(file.id, in: visibleIDs)
+        }
         rebuildSpectrumGroups(for: oldParentIDs.union([file.id]))
         syncSpectrumAxesWithSelection()
         status = "Moved \(ids.count) spectrum file\(ids.count == 1 ? "" : "s") to \(file.filename)."
@@ -1077,85 +1100,66 @@ final class AppModel: ObservableObject {
         fullCacheOrder.append(url)
     }
 
-    private func selectRange(from anchorID: SXMMetadata.ID, to targetID: SXMMetadata.ID, updateSidebarSelection: Bool) {
-        let list = sortedFiles
-        guard let anchorIndex = list.firstIndex(where: { $0.id == anchorID }),
-              let targetIndex = list.firstIndex(where: { $0.id == targetID }) else {
-            if let target = list.first(where: { $0.id == targetID }) {
-                select(target, updateSidebarSelection: updateSidebarSelection)
-            }
-            return
-        }
-
-        let bounds = min(anchorIndex, targetIndex)...max(anchorIndex, targetIndex)
-        selectedIDs = Set(bounds.map { list[$0].id })
-        if updateSidebarSelection {
-            sidebarSelectedIDs = selectedIDs
-        }
-        selectedID = targetID
-        applyDefaultsFromSelection()
-        if mode == .single {
-            refreshSelectedImage(resetScale: true)
-        }
+    private func updateSelection(
+        resetScale: Bool = true,
+        _ mutation: (
+            inout SelectionState<SXMMetadata.ID>,
+            [SXMMetadata.ID]
+        ) -> Void
+    ) {
+        var updatedSelection = selection
+        mutation(&updatedSelection, visibleFiles.map(\.id))
+        commitSelection(updatedSelection, resetScale: resetScale)
     }
 
-    private func toggleSelection(_ file: SXMMetadata, updateSidebarSelection: Bool) {
-        let wasCurrent = selectedID == file.id
-        if selectedIDs.contains(file.id) {
-            selectedIDs.remove(file.id)
-            if updateSidebarSelection {
-                sidebarSelectedIDs.remove(file.id)
-            }
-            if wasCurrent {
-                selectedID = selectedIDsInDisplayOrder().first
-            }
-        } else {
-            selectedIDs.insert(file.id)
-            if updateSidebarSelection {
-                sidebarSelectedIDs.insert(file.id)
-            }
-            selectedID = file.id
-            selectionAnchorID = file.id
-        }
+    private func commitSelection(
+        _ updatedSelection: SelectionState<SXMMetadata.ID>,
+        resetScale: Bool
+    ) {
+        let previousPrimaryID = selection.primaryID
+        guard selection != updatedSelection else { return }
+        selection = updatedSelection
+        guard previousPrimaryID != selection.primaryID else { return }
 
-        if selectedIDs.isEmpty {
-            selectedID = nil
-            selectedImage = nil
-            selectedStats = nil
-            if updateSidebarSelection {
-                sidebarSelectedIDs.removeAll()
-            }
+        clearSelectedRender()
+        guard selectedID != nil else {
+            selectedSpectrumXColumn = ""
+            selectedSpectrumYColumn = ""
             status = "No file selected."
             return
         }
 
         applyDefaultsFromSelection()
         if mode == .single {
-            refreshSelectedImage(resetScale: true)
+            refreshSelectedImage(resetScale: resetScale)
         }
     }
 
-    private func selectedIDsInDisplayOrder() -> [SXMMetadata.ID] {
-        visibleFiles.compactMap { selectedIDs.contains($0.id) ? $0.id : nil }
+    private func clearSelectedRender() {
+        imageTask?.cancel()
+        scaleRenderTask?.cancel()
+        selectedImage = nil
+        selectedStats = nil
     }
 
-    private func nearestSelection(afterDeleting deletedFiles: [SXMMetadata]) -> SXMMetadata.ID? {
-        let remaining = visibleFiles
-        guard !remaining.isEmpty else { return nil }
-        let deletedPaths = Set(deletedFiles.map(\.path))
-        let oldList = (files + deletedFiles).sorted { lhs, rhs in
-            let result: Bool
-            switch sortMode {
-            case .modifiedTime:
-                result = lhs.modifiedTime < rhs.modifiedTime
-            case .name:
-                result = lhs.filename.localizedStandardCompare(rhs.filename) == .orderedAscending
-            }
-            return sortAscending ? result : !result
+    private func activateTagContextIfNeeded(_ tag: String?) {
+        guard let tag, tagNames.contains(tag) else { return }
+        sidebarMode = .tag
+        activeTagName = tag
+        expandedTagNames.insert(tag)
+        saveTags()
+    }
+
+    private func filesMatchingSearch(in candidates: [SXMMetadata]) -> [SXMMetadata] {
+        let query = filenameSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return candidates }
+
+        return candidates.filter { file in
+            file.filename.localizedCaseInsensitiveContains(query)
+                || spectra(for: file).contains {
+                    $0.filename.localizedCaseInsensitiveContains(query)
+                }
         }
-        let firstDeletedIndex = oldList.firstIndex { deletedPaths.contains($0.path) } ?? 0
-        let nextIndex = min(firstDeletedIndex, remaining.count - 1)
-        return remaining[nextIndex].id
     }
 
     private func removeCachedData(for url: URL) {
@@ -1170,29 +1174,8 @@ final class AppModel: ObservableObject {
     }
 
     private func ensureSelectionIsVisible() {
-        let visible = visibleFiles
-        let visibleIDs = Set(visible.map(\.id))
-        if let selectedID, visibleIDs.contains(selectedID) {
-            let visibleSelection = selectedIDs.intersection(visibleIDs)
-            selectedIDs = visibleSelection.isEmpty ? [selectedID] : visibleSelection
-            selectionAnchorID = selectedID
-            return
-        }
-
-        if let firstFile = visible.first {
-            selectedID = firstFile.id
-            selectedIDs = [firstFile.id]
-            selectionAnchorID = firstFile.id
-            applyDefaultsFromSelection()
-            if mode == .single {
-                refreshSelectedImage(resetScale: true)
-            }
-        } else {
-            selectedID = nil
-            selectedIDs.removeAll()
-            selectionAnchorID = nil
-            selectedImage = nil
-            selectedStats = nil
+        updateSelection { state, visibleIDs in
+            state.reconcile(with: visibleIDs, fallbackToFirst: true)
         }
     }
 
@@ -1245,7 +1228,6 @@ final class AppModel: ObservableObject {
         let removedCount = beforeCount - taggedPaths.count
         if activeTagName == tag {
             ensureSelectionIsVisible()
-            sidebarSelectedIDs = sidebarSelectedIDs.intersection(Set(files(forTag: tag).map(\.id)))
         }
 
         status = removedCount == 1 ? "Removed 1 file from \(tag)." : "Removed \(removedCount) files from \(tag)."
