@@ -14,5 +14,6 @@ let package = Package(
         .executableTarget(name: "SXMBrowserNative", dependencies: ["SXMBrowserCore"]),
         .executableTarget(name: "SXMBrowserSmoke", dependencies: ["SXMBrowserCore"]),
         .executableTarget(name: "SXMBrowserBenchmark", dependencies: ["SXMBrowserCore"]),
+        .testTarget(name: "SXMBrowserCoreTests", dependencies: ["SXMBrowserCore"]),
     ]
 )
