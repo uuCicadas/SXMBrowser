@@ -32,8 +32,20 @@ SXM payload、默认矩阵、谱图数据、内置调色板以及首图渲染。
 
 ```bash
 cd native/SXMBrowserNative
-.build/release/SXMBrowserBenchmark /path/to/sxm-folder
+swift run -c release SXMBrowserBenchmark \
+  --files 500 \
+  --width 512 \
+  --height 512 \
+  --trials 5 \
+  --max-scan-ms 1000 \
+  --max-image-ms 100 \
+  --max-thumbnail-ms 100
 ```
+
+基准会在本机临时目录生成可复现的 500 个 512×512 SXM 文件；fixture 生成与
+校验不计入时间。扫描、未缓存首图和未缓存首缩略图各预热一次后采样 5 次，
+输出全部样本和中位数，并在任一中位数超过门槛时返回非零状态。性能门槛仅在
+Apple Silicon、macOS 14+ 的 Release 构建中执行。
 
 原生源码在：
 
@@ -72,7 +84,7 @@ native/SXMBrowserNative
 - 图像、直方图和导出只在需要时按文件读取。
 - 最近使用的数据文件和 PNG 渲染结果会用有限缓存保留，避免 500 个文件时占用过多内存。
 - 网格模式下 Color Scale 和 Histogram 不生效，避免拖动色阶时重绘大量缩略图。
-- 原生版最近一次 500 文件本地基准：扫描 500 个 `.sxm` 约 318 ms；首个文件完整读取约 5.5 ms；首个缩略图渲染约 8.6 ms。基准使用 example 文件硬链接生成，仅用于检测架构级退化。
+- 性能基准使用确定性大端 SXM 数据和稀疏 payload，避免依赖用户样例、机器路径或占用约 500 MiB 的实际磁盘空间。
 
 ## 当前限制
 
