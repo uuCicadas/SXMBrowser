@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 31 (2026-07-25): add atomic application support metadata store
 - Build 30 (2026-07-25): add validated versioned dataset metadata models
 - Build 29 (2026-07-25): coalesce byte-accounted matrix loads
 - Build 28 (2026-07-25): add byte-accounted matrix cache primitives
