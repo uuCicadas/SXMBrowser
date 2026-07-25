@@ -3,6 +3,8 @@
 # Swift build artifacts
 .build/
 .build-cache/
+.build-*/
+.build-cache-*/
 .swiftpm/
 DerivedData/
 

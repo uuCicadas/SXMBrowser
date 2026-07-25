@@ -15,7 +15,7 @@ func measure<T>(_ work: () throws -> T) rethrows -> TimerResult<T> {
 
 let args = CommandLine.arguments.dropFirst()
 let folder = args.first.map(URL.init(fileURLWithPath:))
-    ?? URL(fileURLWithPath: "/Users/wuziyou/Documents/数据处理/example")
+    ?? defaultExampleFolder()
 
 let parser = SXMParser()
 let spectroscopyParser = SpectroscopyParser()
@@ -74,3 +74,14 @@ let image = try measure {
 print("first_file=\(first.filename)")
 print("first_channel=\(channel) direction=\(direction.rawValue) processing=\(processing.rawValue)")
 print(String(format: "load_full_ms=%.2f process_ms=%.2f hist_ms=%.2f thumb_render_ms=%.2f", full.milliseconds, processed.milliseconds, stats.milliseconds, image.milliseconds))
+
+func defaultExampleFolder() -> URL {
+    let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    let candidates = [
+        cwd.appendingPathComponent("example"),
+        cwd.appendingPathComponent("../example").standardizedFileURL,
+        cwd.appendingPathComponent("../../example").standardizedFileURL,
+        cwd.appendingPathComponent("../../../example").standardizedFileURL,
+    ]
+    return candidates.first { FileManager.default.fileExists(atPath: $0.path) } ?? cwd
+}

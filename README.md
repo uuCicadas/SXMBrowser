@@ -7,26 +7,26 @@
 应用位于：
 
 ```bash
-open "/Users/wuziyou/Documents/数据处理/sxm-browser/SXM Browser.app"
+open "./SXM Browser.app"
 ```
 
 它是 SwiftUI/AppKit 写的本地 macOS 应用，不启动本地网页服务，也不依赖浏览器。构建脚本：
 
 ```bash
-/Users/wuziyou/Documents/数据处理/sxm-browser/scripts/build_native_app.command
+./scripts/build_native_app.command
 ```
 
 原生性能快速检查：
 
 ```bash
-cd /Users/wuziyou/Documents/数据处理/sxm-browser/native/SXMBrowserNative
+cd native/SXMBrowserNative
 .build/release/SXMBrowserBenchmark /path/to/sxm-folder
 ```
 
 原生源码在：
 
 ```text
-/Users/wuziyou/Documents/数据处理/sxm-browser/native/SXMBrowserNative
+native/SXMBrowserNative
 ```
 
 当前原生版已包含：文件夹导入、按文件名/修改时间排序、缩略图网格、单图自动适配缩放、默认通道/配色/处理规则、channel/正反扫/processing/palette 切换、谱图 `.dat` 全通道解析与 X/Y 通道切换、Inspector 风格 color scale、可拖动 histogram、PNG 导出。

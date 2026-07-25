@@ -2,13 +2,24 @@ import Foundation
 import SXMBrowserCore
 
 let folder = CommandLine.arguments.dropFirst().first.map(URL.init(fileURLWithPath:))
-    ?? URL(fileURLWithPath: "/Users/wuziyou/Documents/数据处理/example")
+    ?? defaultExampleFolder()
 
 let parser = SXMParser()
 let files = try parser.scanFolder(folder)
 print("files=\(files.count)")
 for file in files.prefix(3) {
     print("\(file.filename) \(file.pixels.width)x\(file.pixels.height) default=\(file.defaultChannel ?? "-")")
+}
+
+func defaultExampleFolder() -> URL {
+    let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    let candidates = [
+        cwd.appendingPathComponent("example"),
+        cwd.appendingPathComponent("../example").standardizedFileURL,
+        cwd.appendingPathComponent("../../example").standardizedFileURL,
+        cwd.appendingPathComponent("../../../example").standardizedFileURL,
+    ]
+    return candidates.first { FileManager.default.fileExists(atPath: $0.path) } ?? cwd
 }
 
 if let first = files.first {

@@ -1,15 +1,19 @@
 #!/bin/zsh
 set -euo pipefail
 
-ROOT="/Users/wuziyou/Documents/数据处理/sxm-browser"
+SCRIPT_DIR="${0:A:h}"
+ROOT="${SCRIPT_DIR:h}"
 PROJECT="$ROOT/native/SXMBrowserNative"
 APP="$ROOT/SXM Browser.app"
+BUILD_ID="$(md5 -q -s "$PROJECT")"
+BUILD_DIR="$PROJECT/.build-$BUILD_ID"
+CACHE_DIR="$PROJECT/.build-cache-$BUILD_ID"
 
 cd "$PROJECT"
-mkdir -p .build-cache/clang .build-cache/swiftpm
-export SWIFTPM_CACHE_PATH="$PROJECT/.build-cache/swiftpm"
-export CLANG_MODULE_CACHE_PATH="$PROJECT/.build-cache/clang"
-swift build -c release --scratch-path .build
+mkdir -p "$CACHE_DIR/clang" "$CACHE_DIR/swiftpm"
+export SWIFTPM_CACHE_PATH="$CACHE_DIR/swiftpm"
+export CLANG_MODULE_CACHE_PATH="$CACHE_DIR/clang"
+swift build -c release --scratch-path "$BUILD_DIR"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -17,7 +21,7 @@ cp "$PROJECT/Bundle/Info.plist" "$APP/Contents/Info.plist"
 if [ -d "$PROJECT/Bundle/Resources" ]; then
     ditto "$PROJECT/Bundle/Resources" "$APP/Contents/Resources"
 fi
-cp "$PROJECT/.build/release/SXMBrowserNative" "$APP/Contents/MacOS/SXMBrowserNative"
+cp "$BUILD_DIR/release/SXMBrowserNative" "$APP/Contents/MacOS/SXMBrowserNative"
 chmod +x "$APP/Contents/MacOS/SXMBrowserNative"
 
 echo "Built: $APP"

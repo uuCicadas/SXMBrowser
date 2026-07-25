@@ -264,9 +264,22 @@ final class AppModel: ObservableObject {
             }
         }
 
+        let appParent = Bundle.main.bundleURL.deletingLastPathComponent()
+        let workspaceParent = appParent.deletingLastPathComponent()
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let exampleFolders = [
-            URL(fileURLWithPath: "/Users/wuziyou/Documents/数据处理/example-graph"),
-            URL(fileURLWithPath: "/Users/wuziyou/Documents/数据处理/example"),
+            workspaceParent.appendingPathComponent("example-graph"),
+            workspaceParent.appendingPathComponent("example"),
+            appParent.appendingPathComponent("example-graph"),
+            appParent.appendingPathComponent("example"),
+            cwd.appendingPathComponent("example-graph"),
+            cwd.appendingPathComponent("example"),
+            cwd.appendingPathComponent("../example-graph").standardizedFileURL,
+            cwd.appendingPathComponent("../example").standardizedFileURL,
+            cwd.appendingPathComponent("../../example-graph").standardizedFileURL,
+            cwd.appendingPathComponent("../../example").standardizedFileURL,
+            cwd.appendingPathComponent("../../../example-graph").standardizedFileURL,
+            cwd.appendingPathComponent("../../../example").standardizedFileURL,
         ]
         if let example = exampleFolders.first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
             openFolder(example)
