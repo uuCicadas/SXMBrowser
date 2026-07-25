@@ -797,14 +797,14 @@ struct MainImageView: View {
                 } label: {
                     Image(systemName: "chevron.left")
                 }
-                .disabled(model.visibleFiles.isEmpty)
+                .disabled(!model.canStepSelection(by: -1))
 
                 Button {
                     model.stepSelection(1)
                 } label: {
                     Image(systemName: "chevron.right")
                 }
-                .disabled(model.visibleFiles.isEmpty)
+                .disabled(!model.canStepSelection(by: 1))
 
                 Button(role: .destructive) {
                     model.deleteSelectedFiles()

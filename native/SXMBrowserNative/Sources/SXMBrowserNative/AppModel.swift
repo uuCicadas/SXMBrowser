@@ -87,7 +87,7 @@ final class AppModel: ObservableObject {
     @Published var sidebarMode: SidebarMode = .all
     @Published var activeTagName: String?
     @Published private(set) var filenameSearch = ""
-    @Published var mode: BrowserMode = .grid
+    @Published private(set) var mode: BrowserMode = .grid
     @Published var sortMode: SortMode = AppModel.loadSortMode() {
         didSet { UserDefaults.standard.set(sortMode.rawValue, forKey: Defaults.sortMode) }
     }
@@ -388,10 +388,11 @@ final class AppModel: ObservableObject {
                 spectra = scanned.1
                 rebuildSpectrumGroups()
                 pruneTagsToCurrentFiles()
+                var opensDroppedFileInSingleMode = false
                 if let selectedPath,
                    let droppedFile = files.first(where: { $0.path.standardizedFileURL == selectedPath.standardizedFileURL }) {
                     selection.selectOnly(droppedFile.id, in: visibleFiles.map(\.id))
-                    mode = .single
+                    opensDroppedFileInSingleMode = true
                 } else if let firstID = sortedFiles.first?.id {
                     selection.selectOnly(firstID, in: visibleFiles.map(\.id))
                 }
@@ -399,7 +400,9 @@ final class AppModel: ObservableObject {
                 isLoading = false
                 let groupCount = spectrumGroupsByFileID.values.reduce(0) { $0 + $1.count }
                 status = "Loaded \(scanned.0.count) SXM files and \(scanned.1.count) spectra in \(groupCount) plots."
-                if mode == .single {
+                if opensDroppedFileInSingleMode {
+                    setMode(.single)
+                } else if mode == .single {
                     refreshSelectedImage(resetScale: true)
                 }
             } catch {
@@ -466,16 +469,20 @@ final class AppModel: ObservableObject {
         status = "Selected \(list[matchIndex].filename)"
     }
 
-    func stepSelection(_ delta: Int, switchToSingle: Bool = true) {
+    func canStepSelection(by delta: Int) -> Bool {
+        selection.canStep(by: delta, in: visibleFiles.map(\.id))
+    }
+
+    func stepSelection(_ delta: Int) {
         let list = visibleFiles
-        guard !list.isEmpty else { return }
-        let current = selectedFile.flatMap { selected in list.firstIndex { $0.id == selected.id } } ?? 0
-        let next = min(list.count - 1, max(0, current + delta))
-        select(list[next])
-        if switchToSingle {
-            mode = .single
+        guard canStepSelection(by: delta) else { return }
+        updateSelection { state, visibleIDs in
+            state.step(by: delta, in: visibleIDs)
         }
-        status = list[next].filename
+        if let selectedID,
+           let selected = list.first(where: { $0.id == selectedID }) {
+            status = selected.filename
+        }
     }
 
     func moveSelectionForArrow(_ direction: MoveCommandDirection) {
@@ -489,13 +496,13 @@ final class AppModel: ObservableObject {
         case .grid:
             switch direction {
             case .left:
-                stepSelection(-1, switchToSingle: false)
+                stepSelection(-1)
             case .right:
-                stepSelection(1, switchToSingle: false)
+                stepSelection(1)
             case .up:
-                stepSelection(-gridColumns, switchToSingle: false)
+                stepSelection(-gridColumns)
             case .down:
-                stepSelection(gridColumns, switchToSingle: false)
+                stepSelection(gridColumns)
             default:
                 break
             }
@@ -703,9 +710,19 @@ final class AppModel: ObservableObject {
     }
 
     func setMode(_ newMode: BrowserMode) {
+        if mode == newMode {
+            if newMode == .single, selectedImage == nil {
+                refreshSelectedImage(resetScale: false)
+            }
+            return
+        }
         mode = newMode
-        if newMode == .single {
+        switch newMode {
+        case .single:
             refreshSelectedImage(resetScale: false)
+        case .grid:
+            imageTask?.cancel()
+            scaleRenderTask?.cancel()
         }
     }
 

@@ -90,6 +90,16 @@ public struct SelectionState<ID: Hashable & Sendable>: Equatable, Sendable {
         selectOnly(visibleIDs[targetIndex], in: visibleIDs)
     }
 
+    public func canStep(by delta: Int, in visibleIDs: [ID]) -> Bool {
+        guard delta != 0,
+              let primaryID,
+              let currentIndex = visibleIDs.firstIndex(of: primaryID) else {
+            return false
+        }
+        let (targetIndex, overflowed) = currentIndex.addingReportingOverflow(delta)
+        return !overflowed && visibleIDs.indices.contains(targetIndex)
+    }
+
     public mutating func reconcile(
         with visibleIDs: [ID],
         fallbackToFirst: Bool

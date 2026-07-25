@@ -87,6 +87,8 @@ func steppingDoesNotClampAtEitherEnd() {
     var state = SelectionState<Item>()
     state.selectOnly(.a, in: visible)
 
+    #expect(!state.canStep(by: -1, in: visible))
+    #expect(state.canStep(by: 1, in: visible))
     state.step(by: -1, in: visible)
     #expect(state.primaryID == .a)
 
@@ -94,6 +96,8 @@ func steppingDoesNotClampAtEitherEnd() {
     #expect(state.primaryID == .b)
     state.step(by: 1, in: visible)
     #expect(state.primaryID == .c)
+    #expect(state.canStep(by: -1, in: visible))
+    #expect(!state.canStep(by: 1, in: visible))
     state.step(by: 1, in: visible)
     #expect(state.primaryID == .c)
     expectValid(state, visibleIDs: visible)
