@@ -35,9 +35,25 @@ public enum SXMRenderer {
         guard !finite.isEmpty else { return nil }
         let sorted = finite.sorted()
         let minValue = sorted.first ?? 0
-        var maxValue = sorted.last ?? 1
-        if maxValue <= minValue { maxValue = minValue + 1 }
+        let maxValue = sorted.last ?? minValue
         let bins = max(16, min(2048, requestedBins))
+        if maxValue == minValue {
+            var hist = [Int](repeating: 0, count: bins)
+            hist[bins / 2] = finite.count
+            return HistogramStats(
+                count: finite.count,
+                min: minValue,
+                max: maxValue,
+                p1: minValue,
+                p99: maxValue,
+                mean: minValue,
+                std: 0,
+                bins: bins,
+                hist: hist,
+                edges: [Double](repeating: minValue, count: bins + 1)
+            )
+        }
+
         let width = (maxValue - minValue) / Double(bins)
         var hist = [Int](repeating: 0, count: bins)
         var sum = 0.0
@@ -101,14 +117,15 @@ public enum SXMRenderer {
 
     public static func automaticScale(_ matrix: Matrix) -> (vmin: Double, vmax: Double)? {
         let finite = matrix.values.compactMap { $0.isFinite ? Double($0) : nil }.sorted()
-        guard !finite.isEmpty else { return nil }
-        var lo = percentile(finite, 1)
-        var hi = percentile(finite, 99)
-        if hi <= lo {
-            lo = finite.first ?? 0
-            hi = finite.last ?? lo + 1
+        guard let first = finite.first, let last = finite.last else { return nil }
+        if first == last {
+            return (first, last)
         }
-        if hi <= lo { hi = lo + 1 }
+        let lo = percentile(finite, 1)
+        let hi = percentile(finite, 99)
+        if hi <= lo {
+            return (first, last)
+        }
         return (lo, hi)
     }
 
@@ -121,14 +138,16 @@ public enum SXMRenderer {
     ) -> [UInt8] {
         let auto = (vmin == nil || vmax == nil) ? automaticScale(matrix) : nil
         let lo = vmin ?? auto?.vmin ?? 0
-        var hi = vmax ?? auto?.vmax ?? 1
-        if hi <= lo { hi = lo + 1 }
+        let hi = vmax ?? auto?.vmax ?? 1
+        let hasSpan = lo.isFinite && hi.isFinite && hi > lo
 
         let stops = PaletteStore.shared.stops(for: palette)
         var rgba = [UInt8](repeating: 255, count: matrix.width * matrix.height * 4)
         for idx in matrix.values.indices {
             let value = matrix.values[idx]
-            var scaled = value.isFinite ? (Double(value) - lo) / (hi - lo) : 0
+            var scaled = value.isFinite
+                ? (hasSpan ? (Double(value) - lo) / (hi - lo) : 0.5)
+                : 0
             scaled = min(1, max(0, scaled))
             if invert { scaled = 1 - scaled }
             let color = interpolate(stops: stops, at: scaled)

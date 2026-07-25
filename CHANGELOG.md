@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 17 (2026-07-25): preserve constant-matrix statistics and midpoint colors
 - Build 16 (2026-07-25): add strict Recorded Time sorting with missing values last
 - Build 15 (2026-07-25): validate SXM dimensions, byte layout, and MSB storage
 - Build 14 (2026-07-25): show exact Trash targets and reconcile partial deletion results
