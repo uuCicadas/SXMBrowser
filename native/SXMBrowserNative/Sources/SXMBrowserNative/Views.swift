@@ -1002,7 +1002,7 @@ struct SidebarView: View {
                     .disabled(!model.canOpenFolder)
                     .keyboardShortcut("o")
 
-                    Text("\(model.files.count)")
+                    Text(model.searchResultCountText)
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 8)
@@ -1054,6 +1054,8 @@ struct SidebarView: View {
                     set: { model.setFilenameSearch($0) }
                 )) {
                     model.jumpToFilenameSearch()
+                } onClear: {
+                    model.clearFilenameSearch()
                 }
 
                 HStack(spacing: 8) {
@@ -1484,6 +1486,7 @@ struct SpectroscopySidebarRow: View {
 struct SearchField: View {
     @Binding var text: String
     let onSubmit: () -> Void
+    let onClear: () -> Void
 
     var body: some View {
         HStack(spacing: 6) {
@@ -1495,10 +1498,11 @@ struct SearchField: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .onSubmit(onSubmit)
+                .onExitCommand(perform: onClear)
 
             if !text.isEmpty {
                 Button {
-                    text = ""
+                    onClear()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 11, weight: .medium))

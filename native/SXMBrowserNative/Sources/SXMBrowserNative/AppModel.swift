@@ -171,6 +171,7 @@ final class AppModel: ObservableObject {
     @Published var sidebarMode: SidebarMode = .all
     @Published private(set) var activeTagID: UUID?
     @Published private(set) var filenameSearch = ""
+    @Published private(set) var appliedFilenameSearch = ""
     @Published private(set) var mode: BrowserMode = .grid
     @Published var sortMode: SortMode = AppModel.loadSortMode() {
         didSet { UserDefaults.standard.set(sortMode.rawValue, forKey: Defaults.sortMode) }
@@ -244,6 +245,8 @@ final class AppModel: ObservableObject {
     private var metadataMutationID: UUID?
     private var metadataTransferTask: Task<Void, Never>?
     private var metadataTransferID: UUID?
+    private var filenameSearchTask: Task<Void, Never>?
+    private var filenameSearchRequestGate = FilenameSearchRequestGate()
     private var datasetInventoryRevisionID: UUID?
     private var manualTargetPathByDATPath:
         [DatasetRelativePath: DatasetRelativePath] = [:]
@@ -396,7 +399,7 @@ final class AppModel: ObservableObject {
     }
 
     var visibleUnassociatedSpectra: [SpectroscopyFile] {
-        let query = filenameSearch
+        let query = appliedFilenameSearch
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return spectra
             .filter { unassociatedSpectrumIDs.contains($0.id) }
@@ -432,6 +435,10 @@ final class AppModel: ObservableObject {
     }
 
     var visibleFiles: [SXMMetadata] {
+        filesMatchingSearch(in: searchScopedFiles)
+    }
+
+    private var searchScopedFiles: [SXMMetadata] {
         let scopedFiles: [SXMMetadata]
         switch sidebarMode {
         case .all:
@@ -443,7 +450,18 @@ final class AppModel: ObservableObject {
             }
             scopedFiles = files(forTagID: activeTagID)
         }
-        return filesMatchingSearch(in: scopedFiles)
+        return scopedFiles
+    }
+
+    var searchResultCountText: String {
+        let scopedCount = searchScopedFiles.count
+        let hasQuery = !appliedFilenameSearch.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ).isEmpty
+        guard hasQuery else {
+            return "\(scopedCount)"
+        }
+        return "\(visibleFiles.count) / \(scopedCount)"
     }
 
     var visibleDisplayItems: [GridDisplayItem] {
@@ -512,6 +530,58 @@ final class AppModel: ObservableObject {
     func setFilenameSearch(_ value: String) {
         guard filenameSearch != value else { return }
         filenameSearch = value
+        filenameSearchTask?.cancel()
+        filenameSearchTask = nil
+
+        let request = filenameSearchRequestGate.begin(query: value)
+        if value.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ).isEmpty {
+            applyFilenameSearch(request)
+            return
+        }
+
+        filenameSearchTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(100))
+            } catch {
+                return
+            }
+            guard let self else { return }
+            self.applyFilenameSearch(request)
+        }
+    }
+
+    func clearFilenameSearch() {
+        filenameSearchTask?.cancel()
+        filenameSearchTask = nil
+        filenameSearchRequestGate.cancel()
+        filenameSearch = ""
+        setAppliedFilenameSearch("")
+    }
+
+    private func commitFilenameSearch() {
+        filenameSearchTask?.cancel()
+        filenameSearchTask = nil
+        let request = filenameSearchRequestGate.begin(
+            query: filenameSearch
+        )
+        applyFilenameSearch(request)
+    }
+
+    private func applyFilenameSearch(
+        _ request: FilenameSearchRequest
+    ) {
+        guard filenameSearchRequestGate.accepts(request) else {
+            return
+        }
+        filenameSearchTask = nil
+        setAppliedFilenameSearch(request.query)
+    }
+
+    private func setAppliedFilenameSearch(_ value: String) {
+        guard appliedFilenameSearch != value else { return }
+        appliedFilenameSearch = value
         updateSelection { state, visibleIDs in
             state.reconcile(with: visibleIDs, fallbackToFirst: false)
         }
@@ -1100,7 +1170,7 @@ final class AppModel: ObservableObject {
         spectrumDragPayloads.removeAll()
         selection.clear()
         sidebarMode = .all
-        filenameSearch = ""
+        clearFilenameSearch()
         spectrumAxisState.clear()
         spectrumAxisRestoreIssues.removeAll()
         datasetInventoryRevisionID = nil
@@ -1836,7 +1906,10 @@ final class AppModel: ObservableObject {
     }
 
     func jumpToFilenameSearch() {
-        let query = filenameSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        commitFilenameSearch()
+        let query = appliedFilenameSearch.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
         guard !query.isEmpty else { return }
 
         let list = visibleFiles
@@ -1846,9 +1919,7 @@ final class AppModel: ObservableObject {
         } ?? -1
         let orderedIndices = Array((currentIndex + 1)..<list.count) + Array(0...max(currentIndex, 0))
 
-        guard let matchIndex = orderedIndices.first(where: { index in
-            list[index].filename.localizedCaseInsensitiveContains(query)
-        }) else {
+        guard let matchIndex = orderedIndices.first else {
             status = "No file matching \"\(query)\"."
             return
         }
@@ -3026,15 +3097,20 @@ final class AppModel: ObservableObject {
     }
 
     private func filesMatchingSearch(in candidates: [SXMMetadata]) -> [SXMMetadata] {
-        let query = filenameSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return candidates }
-
-        return candidates.filter { file in
-            file.filename.localizedCaseInsensitiveContains(query)
-                || spectra(for: file).contains {
-                    $0.filename.localizedCaseInsensitiveContains(query)
-                }
-        }
+        let projection = FilenameSearchProjection(
+            query: appliedFilenameSearch,
+            candidates: candidates.map { file in
+                FilenameSearchCandidate(
+                    id: file.id,
+                    sxmFilename: file.filename,
+                    associatedDATFilenames: spectra(for: file).map(
+                        \.filename
+                    )
+                )
+            }
+        )
+        let matchingIDs = Set(projection.matchingIDs)
+        return candidates.filter { matchingIDs.contains($0.id) }
     }
 
     private func removeCachedData(for url: URL) {
