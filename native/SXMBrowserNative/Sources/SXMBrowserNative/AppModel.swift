@@ -51,12 +51,13 @@ enum SidebarMode: String, CaseIterable, Identifiable {
 
 enum GridDisplayItem: Identifiable {
     case sxm(SXMMetadata)
-    case spectroscopy(SpectroscopyGroup)
+    case spectroscopy(PresentedSpectroscopyGroup)
 
     var id: String {
         switch self {
         case .sxm(let file): "sxm-\(file.id.uuidString)"
-        case .spectroscopy(let group): "spectroscopy-\(group.renderID)"
+        case .spectroscopy(let presentation):
+            "spectroscopy-\(presentation.id)"
         }
     }
 }
@@ -514,7 +515,11 @@ final class AppModel: ObservableObject {
         visibleFiles.flatMap { file -> [GridDisplayItem] in
             var items: [GridDisplayItem] = [.sxm(file)]
             if areSpectraVisible {
-                items.append(contentsOf: spectrumGroups(for: file).map(GridDisplayItem.spectroscopy))
+                items.append(
+                    contentsOf: presentedSpectrumGroups(for: file)
+                        .filter(\.shouldShowGridCard)
+                        .map(GridDisplayItem.spectroscopy)
+                )
             }
             return items
         }
@@ -1455,11 +1460,11 @@ final class AppModel: ObservableObject {
                     ? ""
                     : " Axis preference issues: "
                         + "\(presentedSpectrumAxisRestoreIssues.count)."
-                status = "Loaded \(scanned.0.items.count) SXM files and \(scanned.1.items.count) spectra in \(groupCount) plots. Scan issues: \(scanIssues.count).\(axisIssueText)"
+                status = "Loaded \(scanned.0.items.count) SXM files and \(scanned.1.items.count) spectra in \(groupCount) groups. Scan issues: \(scanIssues.count).\(axisIssueText)"
                 let loadedSummary =
                     "\(scanned.0.items.count) SXM files, "
                     + "\(scanned.1.items.count) spectra, "
-                    + "\(groupCount) plots."
+                    + "\(groupCount) spectrum groups."
                 if !scanIssues.isEmpty
                     || !presentedSpectrumAxisRestoreIssues.isEmpty {
                     var issueLabels: [String] = []
@@ -2793,6 +2798,15 @@ final class AppModel: ObservableObject {
         spectrumGroupsByFileID[file.id] ?? []
     }
 
+    func presentedSpectrumGroups(
+        for file: SXMMetadata
+    ) -> [PresentedSpectroscopyGroup] {
+        SpectroscopyPresentationProjection(
+            groups: spectrumGroups(for: file),
+            hiddenSpectrumIDs: hiddenSpectrumIDs
+        ).groups
+    }
+
     func spectrumXAxis(for group: SpectroscopyGroup) -> String {
         spectrumAxisState.selection(forGroupID: group.id)?.xColumn
             ?? group.canonicalColumn(matching: group.xLabel)
@@ -2894,7 +2908,10 @@ final class AppModel: ObservableObject {
     }
 
     func spectraForMarkers(on file: SXMMetadata) -> [SpectroscopyFile] {
-        spectrumGroups(for: file).flatMap(\.spectra)
+        SpectroscopyPresentationProjection(
+            groups: spectrumGroups(for: file),
+            hiddenSpectrumIDs: hiddenSpectrumIDs
+        ).markerSpectra
     }
 
     func isSpectrumVisible(_ spectrum: SpectroscopyFile) -> Bool {
@@ -2933,7 +2950,6 @@ final class AppModel: ObservableObject {
             return
         }
 
-        let parentID = spectrumParentIDBySpectrumID[spectrum.id]
         let updatedAt = Date()
         performMetadataMutation(
             unavailableMessage:
@@ -2954,11 +2970,6 @@ final class AppModel: ObservableObject {
             onVerified: { [weak self] _ in
                 guard let self else { return }
                 restoreHiddenSpectrumVisibility()
-                if let parentID {
-                    rebuildSpectrumGroups(for: [parentID])
-                } else {
-                    rebuildSpectrumGroups()
-                }
             }
         )
     }
@@ -3868,31 +3879,6 @@ final class AppModel: ObservableObject {
         restoreSpectrumAxisPreferences()
     }
 
-    private func rebuildSpectrumGroups(for parentIDs: Set<SXMMetadata.ID>) {
-        guard !parentIDs.isEmpty else { return }
-        var updatedGroups = spectrumGroupsByFileID
-        for parentID in parentIDs {
-            guard let file = files.first(where: { $0.id == parentID }) else {
-                updatedGroups.removeValue(forKey: parentID)
-                continue
-            }
-            let visibleSpectra = spectra.filter {
-                spectrumParentIDBySpectrumID[$0.id] == parentID && !hiddenSpectrumIDs.contains($0.id)
-            }
-            let groups = SpectroscopyGroup.compatibleGroups(
-                sxm: file,
-                spectra: visibleSpectra
-            )
-            if groups.isEmpty {
-                updatedGroups.removeValue(forKey: parentID)
-            } else {
-                updatedGroups[parentID] = groups
-            }
-        }
-        spectrumGroupsByFileID = updatedGroups
-        restoreSpectrumAxisPreferences()
-    }
-
     private func restoreSpectrumAxisPreferences() {
         let groups = spectrumGroupsByFileID.values
             .flatMap { $0 }
@@ -3963,9 +3949,7 @@ final class AppModel: ObservableObject {
                 continue
             }
             parents[spectrum.id] = parent.id
-            if !hiddenSpectrumIDs.contains(spectrum.id) {
-                buckets[parent.id, default: []].append(spectrum)
-            }
+            buckets[parent.id, default: []].append(spectrum)
         }
 
         var output: [SXMMetadata.ID: [SpectroscopyGroup]] = [:]

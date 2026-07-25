@@ -2411,10 +2411,10 @@ struct GridBrowserView: View {
                                         file: file
                                     )
                                     .id(item.id)
-                                case .spectroscopy(let group):
+                                case .spectroscopy(let presentation):
                                     SpectroscopyPlotCard(
                                         model: model,
-                                        group: group
+                                        presentation: presentation
                                     )
                                     .id(item.id)
                                 }
@@ -2663,16 +2663,25 @@ struct MeasurementMarker: View {
 struct SpectroscopyPlotCard: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var model: AppModel
-    let group: SpectroscopyGroup
+    let presentation: PresentedSpectroscopyGroup
+
+    private var group: SpectroscopyGroup {
+        presentation.group
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             SpectroscopyPlotView(
                 group: group,
+                spectra: presentation.visibleSpectra,
                 xColumn: model.spectrumXAxis(for: group),
                 yColumn: model.spectrumYAxis(for: group)
             )
-                .id("\(group.renderID)|\(model.spectrumXAxis(for: group))|\(model.spectrumYAxis(for: group))")
+                .id(
+                    "\(presentation.renderID)|"
+                        + "\(model.spectrumXAxis(for: group))|"
+                        + "\(model.spectrumYAxis(for: group))"
+                )
                 .aspectRatio(1, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
 
@@ -2684,7 +2693,7 @@ struct SpectroscopyPlotCard: View {
                 Text(group.kind.label)
                     .lineLimit(1)
                 Spacer()
-                Text(group.curveCountText)
+                Text(presentation.visibleCurveCountText)
             }
             .font(.caption2)
             .foregroundStyle(.secondary)
@@ -2705,6 +2714,7 @@ struct SpectroscopyPlotCard: View {
 
 struct SpectroscopyPlotView: View {
     let group: SpectroscopyGroup
+    let spectra: [SpectroscopyFile]
     let xColumn: String
     let yColumn: String
 
@@ -2792,7 +2802,7 @@ struct SpectroscopyPlotView: View {
     }
 
     private func drawCurves(context: inout GraphicsContext, plot: CGRect, ranges: (xMin: Double, xMax: Double, yMin: Double, yMax: Double)) {
-        for spectrum in group.spectra {
+        for spectrum in spectra {
             guard let points = group.points(
                 for: spectrum,
                 xColumn: xColumn,
@@ -2820,7 +2830,7 @@ struct SpectroscopyPlotView: View {
     }
 
     private func dataRanges() -> (xMin: Double, xMax: Double, yMin: Double, yMax: Double) {
-        let points = group.spectra.flatMap {
+        let points = spectra.flatMap {
             group.points(
                 for: $0,
                 xColumn: xColumn,
@@ -3124,8 +3134,11 @@ struct InspectorView: View {
                             }
                         }
 
-                        StatLabel("plots", "\(groups.count)")
-                        StatLabel("points", "\(model.spectraForMarkers(on: file).count)")
+                        StatLabel("groups", "\(groups.count)")
+                        StatLabel(
+                            "visible spectra",
+                            "\(model.spectraForMarkers(on: file).count)"
+                        )
                     }
                 }
             }
