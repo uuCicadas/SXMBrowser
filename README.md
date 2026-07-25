@@ -16,6 +16,18 @@ open "./SXM Browser.app"
 ./scripts/build_native_app.command
 ```
 
+使用仓库外的标准样例执行可靠性 Smoke：
+
+```bash
+cd native/SXMBrowserNative
+swift run -c release SXMBrowserSmoke \
+  --canonical-sample "/path/to/example-graph"
+```
+
+该检查要求样例精确包含 6 个标准 SXM 和 18 个标准 DAT 文件，并会验证所有
+SXM payload、默认矩阵、谱图数据、内置调色板以及首图渲染。检查不再猜测当前
+目录中的样例位置；缺少文件、存在解析问题或关键结果为空时都会返回非零状态。
+
 原生性能快速检查：
 
 ```bash
