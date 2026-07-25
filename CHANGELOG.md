@@ -4,6 +4,9 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+## 2.0.1 - 2026-07-25
+
+- Build 19 (2026-07-25): prepare reliability and file-safety release 2.0.1
 - Build 18 (2026-07-25): verify tagged milestone source archives
 - Build 17 (2026-07-25): preserve constant-matrix statistics and midpoint colors
 - Build 16 (2026-07-25): add strict Recorded Time sorting with missing values last
