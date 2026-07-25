@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 67 (2026-07-25): Add accessible color and line-style spectrum encoding
 - Build 66 (2026-07-25): Link spectrum legend, markers, and sidebar focus
 - Build 65 (2026-07-25): add persistent collapsible Single spectroscopy drawer
 - Build 64 (2026-07-25): add independent Single spectroscopy drawer state

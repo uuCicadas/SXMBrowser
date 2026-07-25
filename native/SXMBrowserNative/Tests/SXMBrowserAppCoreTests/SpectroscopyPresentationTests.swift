@@ -131,6 +131,16 @@ func showingHiddenSpectrumRestoresTheSameCanonicalGroupAndStyleSeed() {
         restored.groups[0].visibleSpectra[0].colorIndex
             == fixture.first.colorIndex
     )
+    #expect(
+        SpectrumVisualStyle.resolve(
+            index:
+                restored.groups[0]
+                    .visibleSpectra[0].colorIndex
+        )
+            == SpectrumVisualStyle.resolve(
+                index: fixture.first.colorIndex
+            )
+    )
 }
 
 @Test

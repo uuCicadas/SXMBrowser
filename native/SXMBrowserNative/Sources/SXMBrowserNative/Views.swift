@@ -1693,7 +1693,15 @@ struct SpectroscopySidebarRow: View {
             .buttonStyle(.plain)
             .accessibilityLabel(spectrum.filename)
             .accessibilityValue(
-                isFocused ? "Focused spectrum" : "Spectrum"
+                [
+                    spectrumStyleDescription(for: spectrum),
+                    isFocused
+                        ? "Focused spectrum"
+                        : "Spectrum",
+                ].joined(separator: ", ")
+            )
+            .accessibilityAddTraits(
+                isFocused ? .isSelected : []
             )
         }
         .padding(.horizontal, 8)
@@ -1724,20 +1732,67 @@ struct SpectroscopySidebarRow: View {
 }
 
 private struct SpectrumStyleGlyph: View {
-    let spectrum: SpectroscopyFile
+    let style: SpectrumVisualStyle
+    let width: CGFloat
+    let lineWidth: CGFloat
+
+    init(
+        spectrum: SpectroscopyFile,
+        width: CGFloat = 32,
+        lineWidth: CGFloat = 2.2
+    ) {
+        style = spectrumVisualStyle(for: spectrum)
+        self.width = width
+        self.lineWidth = lineWidth
+    }
+
+    init(
+        style: SpectrumVisualStyle,
+        width: CGFloat = 32,
+        lineWidth: CGFloat = 2.2
+    ) {
+        self.style = style
+        self.width = width
+        self.lineWidth = lineWidth
+    }
 
     var body: some View {
-        Capsule()
-            .fill(spectrumColor(for: spectrum))
-            .frame(width: 20, height: 3)
-            .overlay {
-                Capsule()
-                    .stroke(
-                        Color.primary.opacity(0.16),
-                        lineWidth: 0.5
-                    )
-            }
-            .accessibilityHidden(true)
+        Canvas { context, size in
+            var path = Path()
+            path.move(
+                to: CGPoint(x: 1, y: size.height / 2)
+            )
+            path.addLine(
+                to: CGPoint(
+                    x: max(1, size.width - 1),
+                    y: size.height / 2
+                )
+            )
+            context.stroke(
+                path,
+                with: .color(Color.primary.opacity(0.78)),
+                style: spectrumStrokeStyle(
+                    style.pattern,
+                    lineWidth: lineWidth + 1.8,
+                    compact: true,
+                    lineCap: .butt
+                )
+            )
+            context.stroke(
+                path,
+                with: .color(spectrumColor(style)),
+                style: spectrumStrokeStyle(
+                    style.pattern,
+                    lineWidth: lineWidth,
+                    compact: true
+                )
+            )
+        }
+        .frame(
+            width: width,
+            height: max(10, lineWidth + 5)
+        )
+        .accessibilityHidden(true)
     }
 }
 
@@ -2674,6 +2729,9 @@ struct SpectroscopyMarkerLayer: View {
         GeometryReader { proxy in
             let rect = imageRect(in: proxy.size)
             ForEach(model.spectraForMarkers(on: file)) { spectrum in
+                let visualStyle = spectrumVisualStyle(
+                    for: spectrum
+                )
                 if let point = model.normalizedMarkerPosition(for: spectrum, on: file) {
                     let center = CGPoint(
                         x: rect.minX + point.x * rect.width,
@@ -2684,7 +2742,7 @@ struct SpectroscopyMarkerLayer: View {
                             model.focusSingleSpectrum(spectrum)
                         } label: {
                             MeasurementMarker(
-                                color: spectrumColor(for: spectrum),
+                                style: visualStyle,
                                 isFocused:
                                     model.singleSpectroscopyState
                                         .focusedSpectrumID
@@ -2692,7 +2750,7 @@ struct SpectroscopyMarkerLayer: View {
                             )
                         }
                         .buttonStyle(.plain)
-                        .frame(width: 24, height: 24)
+                        .frame(width: 30, height: 30)
                         .contentShape(Circle())
                         .position(center)
                         .help(spectrum.filename)
@@ -2700,11 +2758,16 @@ struct SpectroscopyMarkerLayer: View {
                             "Focus \(spectrum.filename)"
                         )
                         .accessibilityValue(
-                            model.singleSpectroscopyState
-                                .focusedSpectrumID
-                                == spectrum.id
-                                ? "Focused spectrum"
-                                : "Spectrum marker"
+                            [
+                                spectrumStyleDescription(
+                                    visualStyle
+                                ),
+                                model.singleSpectroscopyState
+                                    .focusedSpectrumID
+                                    == spectrum.id
+                                    ? "Focused spectrum"
+                                    : "Spectrum marker",
+                            ].joined(separator: ", ")
                         )
                         .accessibilityAddTraits(
                             model.singleSpectroscopyState
@@ -2715,7 +2778,7 @@ struct SpectroscopyMarkerLayer: View {
                         )
                     } else {
                         MeasurementMarker(
-                            color: spectrumColor(for: spectrum)
+                            style: visualStyle
                         )
                         .position(center)
                     }
@@ -2747,36 +2810,53 @@ struct SpectroscopyMarkerLayer: View {
 }
 
 struct MeasurementMarker: View {
-    let color: Color
+    let style: SpectrumVisualStyle
     var isFocused = false
 
     var body: some View {
         ZStack {
             Circle()
-                .fill(color.opacity(0.92))
-                .frame(
-                    width: isFocused ? 10 : 8,
-                    height: isFocused ? 10 : 8
-                )
+                .fill(spectrumColor(style).opacity(0.26))
+                .frame(width: 18, height: 18)
             Circle()
-                .stroke(Color.white.opacity(0.95), lineWidth: 1.2)
-                .frame(
-                    width: isFocused ? 14 : 11,
-                    height: isFocused ? 14 : 11
-                )
+                .stroke(Color.white.opacity(0.98), lineWidth: 2)
+                .frame(width: 20, height: 20)
             Circle()
                 .stroke(
-                    isFocused
-                        ? Color.accentColor
-                        : Color.black.opacity(0.55),
-                    lineWidth: isFocused ? 2 : 0.8
+                    Color.black.opacity(0.78),
+                    lineWidth: 1
                 )
-                .frame(
-                    width: isFocused ? 18 : 13,
-                    height: isFocused ? 18 : 13
-                )
+                .frame(width: 22, height: 22)
+
+            SpectrumStyleGlyph(
+                style: style,
+                width: 16,
+                lineWidth: 2
+            )
+
+            if isFocused {
+                Circle()
+                    .stroke(
+                        Color.accentColor,
+                        lineWidth: 2.2
+                    )
+                    .frame(width: 27, height: 27)
+                    .shadow(
+                        color: Color.accentColor.opacity(0.45),
+                        radius: 2
+                    )
+            }
         }
-        .shadow(color: .black.opacity(0.35), radius: 1.5, x: 0, y: 1)
+        .frame(
+            width: isFocused ? 29 : 24,
+            height: isFocused ? 29 : 24
+        )
+        .shadow(
+            color: .black.opacity(0.35),
+            radius: 1.5,
+            x: 0,
+            y: 1
+        )
     }
 }
 
@@ -2833,13 +2913,21 @@ struct SpectroscopyPlotCard: View {
 }
 
 struct SpectroscopyPlotView: View {
+    @Environment(\.colorSchemeContrast)
+    private var colorSchemeContrast
+
     let group: SpectroscopyGroup
     let spectra: [SpectroscopyFile]
     let xColumn: String
     let yColumn: String
     var focusedSpectrumID: SpectroscopyFile.ID? = nil
 
-    private let inset = EdgeInsets(top: 20, leading: 50, bottom: 36, trailing: 14)
+    private let inset = EdgeInsets(
+        top: 20,
+        leading: 60,
+        bottom: 43,
+        trailing: 14
+    )
 
     var body: some View {
         Canvas { context, size in
@@ -2869,20 +2957,31 @@ struct SpectroscopyPlotView: View {
         drawCurves(context: &context, plot: plot, ranges: ranges)
 
         context.draw(
-            Text(group.kind.label).font(.custom("Arial", size: 12).weight(.semibold)).foregroundColor(.black),
+            Text(group.kind.label)
+                .font(
+                    .system(
+                        size: 12,
+                        weight: .semibold
+                    )
+                )
+                .foregroundColor(.black),
             at: CGPoint(x: plot.minX + 7, y: plot.minY + 7),
             anchor: .topLeading
         )
         context.draw(
-            Text(xColumn).font(.custom("Arial", size: 9)).foregroundColor(.black.opacity(0.82)),
-            at: CGPoint(x: plot.midX, y: size.height - 12),
+            Text(xColumn)
+                .font(.system(size: 11))
+                .foregroundColor(.black.opacity(0.86)),
+            at: CGPoint(x: plot.midX, y: size.height - 13),
             anchor: .center
         )
         var yLabelContext = context
-        yLabelContext.translateBy(x: 10, y: plot.midY)
+        yLabelContext.translateBy(x: 12, y: plot.midY)
         yLabelContext.rotate(by: .degrees(-90))
         yLabelContext.draw(
-            Text(yColumn).font(.custom("Arial", size: 9)).foregroundColor(.black.opacity(0.82)),
+            Text(yColumn)
+                .font(.system(size: 11))
+                .foregroundColor(.black.opacity(0.86)),
             at: .zero,
             anchor: .center
         )
@@ -2904,8 +3003,10 @@ struct SpectroscopyPlotView: View {
 
             let value = ranges.xMin + Double(fraction) * (ranges.xMax - ranges.xMin)
             context.draw(
-                Text(compact(value)).font(.custom("Arial", size: 8)).foregroundColor(.black),
-                at: CGPoint(x: x, y: plot.maxY + 8),
+                Text(compact(value))
+                    .font(.system(size: 10))
+                    .foregroundColor(.black),
+                at: CGPoint(x: x, y: plot.maxY + 9),
                 anchor: .top
             )
         }
@@ -2920,17 +3021,16 @@ struct SpectroscopyPlotView: View {
 
             let value = ranges.yMin + Double(fraction) * (ranges.yMax - ranges.yMin)
             context.draw(
-                Text(compact(value)).font(.custom("Arial", size: 8)).foregroundColor(.black),
-                at: CGPoint(x: plot.minX - 5, y: y),
+                Text(compact(value))
+                    .font(.system(size: 10))
+                    .foregroundColor(.black),
+                at: CGPoint(x: plot.minX - 7, y: y),
                 anchor: .trailing
             )
         }
     }
 
     private func drawCurves(context: inout GraphicsContext, plot: CGRect, ranges: (xMin: Double, xMax: Double, yMin: Double, yMax: Double)) {
-        let hasFocusedCurve = spectra.contains {
-            $0.id == focusedSpectrumID
-        }
         let orderedSpectra = spectra.filter {
             $0.id != focusedSpectrumID
         } + spectra.filter {
@@ -2960,23 +3060,57 @@ struct SpectroscopyPlotView: View {
                 }
             }
             let isFocused = spectrum.id == focusedSpectrumID
+            let visualStyle = spectrumVisualStyle(
+                for: spectrum
+            )
+            let underlayWidth: CGFloat
+            let colorWidth: CGFloat
+            if isFocused {
+                underlayWidth =
+                    colorSchemeContrast == .increased
+                    ? 5.2
+                    : 4.6
+                colorWidth =
+                    colorSchemeContrast == .increased
+                    ? 3.2
+                    : 2.8
+            } else {
+                underlayWidth =
+                    colorSchemeContrast == .increased
+                    ? 3.4
+                    : 2.8
+                colorWidth =
+                    colorSchemeContrast == .increased
+                    ? 2
+                    : 1.7
+            }
             if isFocused {
                 context.stroke(
                     path,
                     with: .color(.white.opacity(0.92)),
-                    lineWidth: 4.8
+                    style: spectrumStrokeStyle(
+                        visualStyle.pattern,
+                        lineWidth: underlayWidth + 2,
+                        lineCap: .butt
+                    )
                 )
             }
             context.stroke(
                 path,
-                with: .color(
-                    spectrumColor(for: spectrum).opacity(
-                        hasFocusedCurve && !isFocused
-                            ? 0.34
-                            : 1
-                    )
-                ),
-                lineWidth: isFocused ? 2.6 : 1.35
+                with: .color(.black.opacity(0.72)),
+                style: spectrumStrokeStyle(
+                    visualStyle.pattern,
+                    lineWidth: underlayWidth,
+                    lineCap: .butt
+                )
+            )
+            context.stroke(
+                path,
+                with: .color(spectrumColor(visualStyle)),
+                style: spectrumStrokeStyle(
+                    visualStyle.pattern,
+                    lineWidth: colorWidth
+                )
             )
         }
     }
@@ -2993,8 +3127,14 @@ struct SpectroscopyPlotView: View {
         } else {
             focusedText = ""
         }
+        let curveDetails = spectra.prefix(18).map {
+            "\($0.filename), "
+                + spectrumStyleDescription(for: $0)
+        }.joined(separator: "; ")
         return "X axis \(xColumn), Y axis \(yColumn), "
-            + curveText + focusedText
+            + curveText
+            + ". Curves: \(curveDetails)"
+            + focusedText
     }
 
     private func dataRanges() -> (xMin: Double, xMax: Double, yMin: Double, yMax: Double) {
@@ -3020,22 +3160,76 @@ struct SpectroscopyPlotView: View {
     }
 }
 
-func spectrumColor(for spectrum: SpectroscopyFile) -> Color {
-    spectrumColor(spectrum.colorIndex)
+private func spectrumVisualStyle(
+    for spectrum: SpectroscopyFile
+) -> SpectrumVisualStyle {
+    SpectrumVisualStyle.resolve(
+        index: spectrum.colorIndex
+    )
 }
 
-func spectrumColor(_ index: Int) -> Color {
-    let colors: [Color] = [
-        Color(red: 0.10, green: 0.33, blue: 0.82),
-        Color(red: 0.82, green: 0.20, blue: 0.16),
-        Color(red: 0.10, green: 0.58, blue: 0.25),
-        Color(red: 0.68, green: 0.30, blue: 0.86),
-        Color(red: 0.90, green: 0.55, blue: 0.08),
-        Color(red: 0.06, green: 0.56, blue: 0.62),
-        Color(red: 0.76, green: 0.12, blue: 0.42),
-        Color(red: 0.24, green: 0.24, blue: 0.24),
+private func spectrumColor(
+    _ style: SpectrumVisualStyle
+) -> Color {
+    Color(
+        .sRGB,
+        red: style.color.normalizedRed,
+        green: style.color.normalizedGreen,
+        blue: style.color.normalizedBlue,
+        opacity: 1
+    )
+}
+
+private func spectrumStrokeStyle(
+    _ pattern: SpectrumLinePattern,
+    lineWidth: CGFloat,
+    compact: Bool = false,
+    lineCap: CGLineCap = .round
+) -> StrokeStyle {
+    let scale = compact ? 0.62 : 1
+    return StrokeStyle(
+        lineWidth: lineWidth,
+        lineCap: lineCap,
+        lineJoin: .round,
+        dash: pattern.dashPattern.map {
+            CGFloat($0) * scale
+        }
+    )
+}
+
+private func spectrumStyleDescription(
+    for spectrum: SpectroscopyFile
+) -> String {
+    spectrumStyleDescription(
+        spectrumVisualStyle(for: spectrum)
+    )
+}
+
+private func spectrumStyleDescription(
+    _ style: SpectrumVisualStyle
+) -> String {
+    let colorNames = [
+        "Blue",
+        "Vermilion",
+        "Bluish green",
+        "Reddish purple",
+        "Orange",
+        "Sky blue",
+        "Black",
     ]
-    return colors[index % colors.count]
+    let colorName = colorNames[style.paletteIndex]
+    let patternName: String
+    switch style.pattern {
+    case .solid:
+        patternName = "solid line"
+    case .dashed:
+        patternName = "dashed line"
+    case .dotted:
+        patternName = "dotted line"
+    case .dashDot:
+        patternName = "dash-dot line"
+    }
+    return "\(colorName), \(patternName)"
 }
 
 
@@ -3651,11 +3845,17 @@ private struct SpectroscopyLegendRow: View {
             } label: {
                 HStack(spacing: 7) {
                     SpectrumStyleGlyph(spectrum: spectrum)
+                        .opacity(isVisible ? 1 : 0.72)
 
                     Text(spectrum.filename)
                         .font(.system(size: 11))
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .foregroundStyle(
+                            isVisible
+                                ? Color.primary
+                                : Color.secondary
+                        )
 
                     Spacer(minLength: 0)
 
@@ -3663,19 +3863,28 @@ private struct SpectroscopyLegendRow: View {
                         Image(systemName: "scope")
                             .font(.caption)
                             .foregroundStyle(Color.accentColor)
+                    } else if !isVisible {
+                        Image(systemName: "eye.slash")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(!isVisible)
-            .opacity(isVisible ? 1 : 0.48)
             .accessibilityLabel(spectrum.filename)
             .accessibilityValue(
                 [
+                    spectrumStyleDescription(
+                        for: spectrum
+                    ),
                     isVisible ? "Visible" : "Hidden",
                     isFocused ? "Focused" : "Not focused",
                 ].joined(separator: ", ")
+            )
+            .accessibilityAddTraits(
+                isFocused ? .isSelected : []
             )
         }
         .padding(.horizontal, 7)
