@@ -100,6 +100,11 @@ final class AppModel: ObservableObject {
         let task: Task<NSImage?, Never>
     }
 
+    private struct DatasetMetadataPreparation {
+        let record: DatasetRecordV1?
+        let warning: String?
+    }
+
     static let defaultSidebarWidth: CGFloat = 300
     static let defaultInspectorWidth: CGFloat = 320
     static let sidebarWidthRange: ClosedRange<CGFloat> = 220...460
@@ -136,6 +141,9 @@ final class AppModel: ObservableObject {
     @Published var isLoading = false
     @Published var status = "Choose a folder with .sxm files."
     @Published private(set) var scanIssues: [ScanIssue] = []
+    @Published private(set) var metadataWarning: String?
+    @Published private(set) var activeDatasetSession:
+        ActiveDatasetSession?
 
     @Published var selectedChannel = ""
     @Published var selectedDirection: ScanDirection = .fwd
@@ -166,20 +174,31 @@ final class AppModel: ObservableObject {
 
     private let parser = SXMParser()
     private let spectroscopyParser = SpectroscopyParser()
+    private let metadataStore: DatasetMetadataStore
+    private let folderBookmarker: any FolderBookmarking
     private var matrixCache = MatrixLoadCache()
     private let thumbnailCache = NSCache<NSString, NSImage>()
     private var thumbnailTasks: [String: ThumbnailTaskEntry] = [:]
     private let thumbnailLimiter = AsyncLimiter(limit: 4)
+    private var startupTask: Task<Void, Never>?
+    private var startupRequestID: UUID?
     private var scanTask: Task<Void, Never>?
     private var imageTask: Task<Void, Never>?
     private var histogramTask: Task<Void, Never>?
     private var scaleRenderTask: Task<Void, Never>?
     private var renderRequestGate = RenderRequestGate<SXMMetadata.ID>()
     private var histogramRequestGate = HistogramRequestGate<SXMMetadata.ID>()
+    private var datasetSessionGate = DatasetSessionGate()
     private var processedRenderCache: ProcessedRenderCache?
     private var spectrumDragPayloads: [String: [SpectroscopyFile.ID]] = [:]
+    private var securityScopedFolderURL: URL?
 
-    init() {
+    init(
+        metadataStore: DatasetMetadataStore = DatasetMetadataStore(),
+        folderBookmarker: any FolderBookmarking = MacOSFolderBookmarker()
+    ) {
+        self.metadataStore = metadataStore
+        self.folderBookmarker = folderBookmarker
         thumbnailCache.countLimit = 180
         thumbnailCache.totalCostLimit = 64 * 1024 * 1024
     }
@@ -325,33 +344,12 @@ final class AppModel: ObservableObject {
     }
 
     func openStartupFolder() {
-        if let savedPath = UserDefaults.standard.string(forKey: Defaults.lastFolder) {
-            let savedURL = URL(fileURLWithPath: savedPath)
-            if FileManager.default.fileExists(atPath: savedURL.path) {
-                openFolder(savedURL)
-                return
-            }
-        }
-
-        let appParent = Bundle.main.bundleURL.deletingLastPathComponent()
-        let workspaceParent = appParent.deletingLastPathComponent()
-        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let exampleFolders = [
-            workspaceParent.appendingPathComponent("example-graph"),
-            workspaceParent.appendingPathComponent("example"),
-            appParent.appendingPathComponent("example-graph"),
-            appParent.appendingPathComponent("example"),
-            cwd.appendingPathComponent("example-graph"),
-            cwd.appendingPathComponent("example"),
-            cwd.appendingPathComponent("../example-graph").standardizedFileURL,
-            cwd.appendingPathComponent("../example").standardizedFileURL,
-            cwd.appendingPathComponent("../../example-graph").standardizedFileURL,
-            cwd.appendingPathComponent("../../example").standardizedFileURL,
-            cwd.appendingPathComponent("../../../example-graph").standardizedFileURL,
-            cwd.appendingPathComponent("../../../example").standardizedFileURL,
-        ]
-        if let example = exampleFolders.first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
-            openFolder(example)
+        cancelStartupLookup()
+        let requestID = UUID()
+        startupRequestID = requestID
+        startupTask = Task { [weak self] in
+            guard let self else { return }
+            await restoreStartupFolder(requestID: requestID)
         }
     }
 
@@ -402,15 +400,38 @@ final class AppModel: ObservableObject {
     }
 
     func openFolder(_ url: URL, selecting selectedPath: URL? = nil) {
+        cancelStartupLookup()
+        beginOpeningFolder(url, selecting: selectedPath)
+    }
+
+    private func beginOpeningFolder(
+        _ url: URL,
+        selecting selectedPath: URL? = nil,
+        preferredDatasetID: UUID? = nil,
+        existingBookmark: Data? = nil,
+        initialMetadataWarning: String? = nil
+    ) {
         scanTask?.cancel()
         invalidateActiveRender(clearFrame: true)
-        let datasetRevision = UUID()
-        renderRequestGate.beginNewDataset(revision: datasetRevision)
-        histogramRequestGate.beginNewDataset(revision: datasetRevision)
-        folder = url
-        UserDefaults.standard.set(url.path, forKey: Defaults.lastFolder)
+        stopSecurityScopedFolderAccess()
+
+        let sessionID = datasetSessionGate.begin()
+        renderRequestGate.beginNewDataset(revision: sessionID)
+        histogramRequestGate.beginNewDataset(revision: sessionID)
+        let openedURL = url.standardizedFileURL
+        if openedURL.startAccessingSecurityScopedResource() {
+            securityScopedFolderURL = openedURL
+        }
+
+        folder = openedURL
+        UserDefaults.standard.set(
+            openedURL.path,
+            forKey: Defaults.lastFolder
+        )
         isLoading = true
         status = "Scanning folder..."
+        metadataWarning = initialMetadataWarning
+        activeDatasetSession = nil
         files.removeAll()
         spectra.removeAll()
         scanIssues.removeAll()
@@ -433,18 +454,94 @@ final class AppModel: ObservableObject {
         }
         thumbnailCache.removeAllObjects()
         cancelThumbnailTasks()
-        loadTags(for: url)
+        loadTags(for: openedURL)
 
         scanTask = Task {
+            let metadataPreparation: DatasetMetadataPreparation
+            do {
+                metadataPreparation = try await prepareDatasetMetadata(
+                    for: openedURL,
+                    preferredDatasetID: preferredDatasetID,
+                    existingBookmark: existingBookmark,
+                    initialWarning: initialMetadataWarning
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                guard datasetSessionGate.acceptsOpeningResult(
+                    sessionID: sessionID
+                ) else {
+                    return
+                }
+                metadataPreparation = DatasetMetadataPreparation(
+                    record: nil,
+                    warning: Self.appendingMetadataWarning(
+                        initialMetadataWarning,
+                        "Metadata preparation failed: "
+                            + error.localizedDescription
+                    )
+                )
+            }
+            guard !Task.isCancelled,
+                  datasetSessionGate.acceptsOpeningResult(
+                    sessionID: sessionID
+                  ) else {
+                return
+            }
+            metadataWarning = metadataPreparation.warning
+
             do {
                 let parser = self.parser
                 let spectroscopyParser = self.spectroscopyParser
                 let scanned = try await runDetachedCancellable(priority: .userInitiated) {
-                    let sxmReport = try parser.scanFolder(url)
-                    let spectroscopyReport = try spectroscopyParser.scanFolder(url)
+                    let sxmReport = try parser.scanFolder(openedURL)
+                    let spectroscopyReport = try spectroscopyParser.scanFolder(
+                        openedURL
+                    )
                     return (sxmReport, spectroscopyReport)
                 }
-                guard !Task.isCancelled, folder == url else { return }
+                guard !Task.isCancelled,
+                      datasetSessionGate.acceptsOpeningResult(
+                        sessionID: sessionID
+                      ) else {
+                    return
+                }
+
+                if let record = metadataPreparation.record {
+                    do {
+                        let pathIndex = try DatasetPathIndex(
+                            folderURL: openedURL,
+                            sxmFiles: scanned.0.items,
+                            spectroscopyFiles: scanned.1.items
+                        )
+                        let session = try ActiveDatasetSession(
+                            sessionID: sessionID,
+                            datasetID: record.id,
+                            folderURL: openedURL,
+                            verifiedRecord: record,
+                            pathIndex: pathIndex
+                        )
+                        guard datasetSessionGate.activate(session) else {
+                            return
+                        }
+                        activeDatasetSession = session
+                    } catch {
+                        activeDatasetSession = nil
+                        metadataWarning = Self.appendingMetadataWarning(
+                            metadataPreparation.warning,
+                            "Metadata session is unavailable: "
+                                + error.localizedDescription
+                        )
+                    }
+                } else {
+                    activeDatasetSession = nil
+                }
+
+                guard datasetSessionGate.acceptsOpeningResult(
+                    sessionID: sessionID
+                ) else {
+                    return
+                }
                 files = scanned.0.items
                 spectra = scanned.1.items
                 scanIssues = scanned.0.issues + scanned.1.issues
@@ -467,11 +564,334 @@ final class AppModel: ObservableObject {
                     refreshSelectedImage(resetScale: true)
                 }
             } catch {
-                guard !Task.isCancelled, folder == url else { return }
+                guard !Task.isCancelled,
+                      datasetSessionGate.acceptsOpeningResult(
+                        sessionID: sessionID
+                      ) else {
+                    return
+                }
                 isLoading = false
                 status = error.localizedDescription
             }
         }
+    }
+
+    private func prepareDatasetMetadata(
+        for folderURL: URL,
+        preferredDatasetID: UUID?,
+        existingBookmark: Data?,
+        initialWarning: String?
+    ) async throws -> DatasetMetadataPreparation {
+        var warning = initialWarning
+        var bookmark = existingBookmark
+
+        if bookmark == nil {
+            do {
+                bookmark = try await createFolderBookmark(for: folderURL)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                warning = Self.appendingMetadataWarning(
+                    warning,
+                    "Folder access could not be saved: "
+                        + error.localizedDescription
+                )
+            }
+        }
+        try Task.checkCancellation()
+
+        do {
+            let record: DatasetRecordV1
+            if let preferredDatasetID {
+                record = try await metadataStore.rebindDataset(
+                    id: preferredDatasetID,
+                    toFolderURL: folderURL,
+                    folderBookmark: bookmark
+                )
+            } else {
+                record = try await metadataStore.findOrCreateDataset(
+                    forFolderURL: folderURL,
+                    folderBookmark: bookmark
+                )
+            }
+            try Task.checkCancellation()
+            return DatasetMetadataPreparation(
+                record: record,
+                warning: warning
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return DatasetMetadataPreparation(
+                record: nil,
+                warning: Self.appendingMetadataWarning(
+                    warning,
+                    "Metadata is read-only for this folder: "
+                        + error.localizedDescription
+                )
+            )
+        }
+    }
+
+    private func restoreStartupFolder(requestID: UUID) async {
+        var warning: String?
+
+        do {
+            if let record = try await metadataStore.lastOpenedDataset() {
+                guard startupRequestIsCurrent(requestID) else { return }
+
+                if let storedBookmark = record.folderBookmark {
+                    do {
+                        if let resolution = try await resolveFolderBookmark(
+                            storedBookmark
+                        ) {
+                            guard startupRequestIsCurrent(requestID) else {
+                                return
+                            }
+                            if let resolvedFolder =
+                                existingSecurityScopedDirectory(
+                                    at: resolution.folderURL
+                                ) {
+                                var bookmark = storedBookmark
+                                if resolution.isStale {
+                                    do {
+                                        if let refreshed =
+                                            try await createFolderBookmark(
+                                                for: resolvedFolder
+                                            ) {
+                                            bookmark = refreshed
+                                        } else {
+                                            warning = Self
+                                                .appendingMetadataWarning(
+                                                    warning,
+                                                    "The stored folder "
+                                                        + "bookmark is stale "
+                                                        + "and could not be "
+                                                        + "refreshed."
+                                                )
+                                        }
+                                    } catch is CancellationError {
+                                        return
+                                    } catch {
+                                        warning = Self
+                                            .appendingMetadataWarning(
+                                                warning,
+                                                "The stored folder bookmark "
+                                                    + "is stale and could not "
+                                                    + "be refreshed: "
+                                                    + error
+                                                        .localizedDescription
+                                            )
+                                    }
+                                }
+                                guard startupRequestIsCurrent(requestID) else {
+                                    return
+                                }
+                                openStartupFolderCandidate(
+                                    resolvedFolder,
+                                    requestID: requestID,
+                                    datasetID: record.id,
+                                    bookmark: bookmark,
+                                    warning: warning
+                                )
+                                return
+                            }
+                            warning = Self.appendingMetadataWarning(
+                                warning,
+                                "The stored folder bookmark points to an "
+                                    + "unavailable directory."
+                            )
+                        } else {
+                            warning = Self.appendingMetadataWarning(
+                                warning,
+                                "The stored folder bookmark could not be "
+                                    + "resolved."
+                            )
+                        }
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        warning = Self.appendingMetadataWarning(
+                            warning,
+                            "The stored folder bookmark could not be "
+                                + "resolved: "
+                                + error.localizedDescription
+                        )
+                    }
+                }
+
+                let lastKnownURL = URL(
+                    fileURLWithPath: record.lastKnownPath,
+                    isDirectory: true
+                )
+                if let existingFolder = existingDirectory(
+                    at: lastKnownURL
+                ) {
+                    guard startupRequestIsCurrent(requestID) else {
+                        return
+                    }
+                    openStartupFolderCandidate(
+                        existingFolder,
+                        requestID: requestID,
+                        datasetID: record.id,
+                        bookmark: nil,
+                        warning: warning
+                    )
+                    return
+                }
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            warning = Self.appendingMetadataWarning(
+                warning,
+                "Saved dataset metadata could not be loaded: "
+                    + error.localizedDescription
+            )
+        }
+
+        guard startupRequestIsCurrent(requestID) else { return }
+        if let savedPath = UserDefaults.standard.string(
+            forKey: Defaults.lastFolder
+        ), let savedFolder = existingDirectory(
+            at: URL(
+                fileURLWithPath: savedPath,
+                isDirectory: true
+            )
+        ) {
+            openStartupFolderCandidate(
+                savedFolder,
+                requestID: requestID,
+                warning: warning
+            )
+            return
+        }
+
+        if let exampleFolder = firstAvailableExampleFolder() {
+            openStartupFolderCandidate(
+                exampleFolder,
+                requestID: requestID,
+                warning: warning
+            )
+            return
+        }
+
+        startupRequestID = nil
+        startupTask = nil
+        metadataWarning = warning
+    }
+
+    private func openStartupFolderCandidate(
+        _ folderURL: URL,
+        requestID: UUID,
+        datasetID: UUID? = nil,
+        bookmark: Data? = nil,
+        warning: String?
+    ) {
+        guard startupRequestIsCurrent(requestID) else { return }
+        startupRequestID = nil
+        startupTask = nil
+        beginOpeningFolder(
+            folderURL,
+            preferredDatasetID: datasetID,
+            existingBookmark: bookmark,
+            initialMetadataWarning: warning
+        )
+    }
+
+    private func startupRequestIsCurrent(_ requestID: UUID) -> Bool {
+        !Task.isCancelled && startupRequestID == requestID
+    }
+
+    private func cancelStartupLookup() {
+        startupTask?.cancel()
+        startupTask = nil
+        startupRequestID = nil
+    }
+
+    private func createFolderBookmark(
+        for folderURL: URL
+    ) async throws -> Data? {
+        let bookmarker = folderBookmarker
+        return try await runDetachedCancellable(priority: .utility) {
+            try bookmarker.createBookmark(for: folderURL)
+        }
+    }
+
+    private func resolveFolderBookmark(
+        _ bookmark: Data
+    ) async throws -> FolderBookmarkResolution? {
+        let bookmarker = folderBookmarker
+        return try await runDetachedCancellable(priority: .utility) {
+            try bookmarker.resolveBookmark(bookmark)
+        }
+    }
+
+    private func existingDirectory(at url: URL) -> URL? {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(
+            atPath: url.path,
+            isDirectory: &isDirectory
+        ), isDirectory.boolValue else {
+            return nil
+        }
+        return url.standardizedFileURL
+    }
+
+    private func existingSecurityScopedDirectory(
+        at url: URL
+    ) -> URL? {
+        let didStartAccess = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccess {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        return existingDirectory(at: url)
+    }
+
+    private func firstAvailableExampleFolder() -> URL? {
+        let appParent = Bundle.main.bundleURL.deletingLastPathComponent()
+        let workspaceParent = appParent.deletingLastPathComponent()
+        let cwd = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let candidates = [
+            workspaceParent.appendingPathComponent("example-graph"),
+            workspaceParent.appendingPathComponent("example"),
+            appParent.appendingPathComponent("example-graph"),
+            appParent.appendingPathComponent("example"),
+            cwd.appendingPathComponent("example-graph"),
+            cwd.appendingPathComponent("example"),
+            cwd.appendingPathComponent("../example-graph")
+                .standardizedFileURL,
+            cwd.appendingPathComponent("../example").standardizedFileURL,
+            cwd.appendingPathComponent("../../example-graph")
+                .standardizedFileURL,
+            cwd.appendingPathComponent("../../example")
+                .standardizedFileURL,
+            cwd.appendingPathComponent("../../../example-graph")
+                .standardizedFileURL,
+            cwd.appendingPathComponent("../../../example")
+                .standardizedFileURL,
+        ]
+        return candidates.lazy.compactMap(existingDirectory(at:)).first
+    }
+
+    private func stopSecurityScopedFolderAccess() {
+        guard let securityScopedFolderURL else { return }
+        securityScopedFolderURL.stopAccessingSecurityScopedResource()
+        self.securityScopedFolderURL = nil
+    }
+
+    private static func appendingMetadataWarning(
+        _ existing: String?,
+        _ message: String
+    ) -> String {
+        guard let existing, !existing.isEmpty else { return message }
+        guard existing != message else { return existing }
+        return "\(existing)\n\(message)"
     }
 
     func select(_ file: SXMMetadata, tagContext: String? = nil) {
