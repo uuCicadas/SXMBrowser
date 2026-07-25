@@ -1278,6 +1278,82 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func sortTagsByName() {
+        guard activeDatasetSession != nil else {
+            status = metadataUnavailableForTagChangesMessage
+            return
+        }
+        guard !isMetadataMutationInFlight else {
+            status = "Wait for the current metadata update to finish."
+            return
+        }
+        performTagMutation(successMessage: "Sorted tags A–Z.") { record in
+            record.sortTagsByName()
+        }
+    }
+
+    func moveTag(sourceID: UUID, toTargetID targetID: UUID) {
+        guard activeDatasetSession != nil else {
+            status = metadataUnavailableForTagChangesMessage
+            return
+        }
+        guard !isMetadataMutationInFlight else {
+            status = "Wait for the current metadata update to finish."
+            return
+        }
+
+        let currentPlan: TagReorderPlan
+        do {
+            currentPlan = try TagReorderPlan.make(
+                sourceID: sourceID,
+                targetID: targetID,
+                tags: tags
+            )
+        } catch {
+            status = error.localizedDescription
+            return
+        }
+        guard currentPlan != .noChange else {
+            status = "Tag order unchanged."
+            return
+        }
+
+        performTagMutation(successMessage: "Reordered tags.") { record in
+            switch try TagReorderPlan.make(
+                sourceID: sourceID,
+                targetID: targetID,
+                tags: record.tags
+            ) {
+            case .noChange:
+                return
+            case .move(let verifiedSourceID, let destinationIndex):
+                try record.moveTag(
+                    id: verifiedSourceID,
+                    to: destinationIndex
+                )
+            }
+        }
+    }
+
+    func moveTag(
+        fromDropData data: Data,
+        typeIdentifier: String,
+        toTargetID targetID: UUID
+    ) {
+        do {
+            let payload = try TagDropPayload(
+                data: data,
+                typeIdentifier: typeIdentifier
+            )
+            moveTag(
+                sourceID: payload.tagID,
+                toTargetID: targetID
+            )
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
     func toggleTagExpansion(_ tagID: UUID) {
         guard let session = activeDatasetSession,
               tags.contains(where: { $0.id == tagID }) else {

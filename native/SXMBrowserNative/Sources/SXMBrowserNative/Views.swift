@@ -4,6 +4,12 @@ import SXMBrowserCore
 import SwiftUI
 import UniformTypeIdentifiers
 
+private extension UTType {
+    static let sxmBrowserTagID = UTType(
+        exportedAs: TagDropPayload.typeIdentifier
+    )
+}
+
 struct ContentView: View {
     @ObservedObject var model: AppModel
     @State private var isDropTargeted = false
@@ -304,6 +310,23 @@ struct SidebarView: View {
                         .controlSize(.small)
                         .disabled(!model.canModifyTags)
                         .help("Create tag")
+
+                        Menu {
+                            Button {
+                                model.sortTagsByName()
+                            } label: {
+                                Label(
+                                    "Sort A–Z",
+                                    systemImage: "textformat.abc"
+                                )
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .disabled(!model.canModifyTags)
+                        .help("Tag actions")
                     }
                 }
             }
@@ -403,6 +426,7 @@ struct TagGroupView: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var model: AppModel
     let tag: DatasetTagV1
+    @State private var isTagDropTargeted = false
 
     private var files: [SXMMetadata] {
         model.visibleFiles(forTagID: tag.id)
@@ -444,7 +468,16 @@ struct TagGroupView: View {
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
-                            .stroke(model.activeTagID == tag.id ? Color.accentColor.opacity(0.9) : Color.clear, lineWidth: 1)
+                            .stroke(
+                                isTagDropTargeted
+                                    ? Color.accentColor
+                                    : (
+                                        model.activeTagID == tag.id
+                                            ? Color.accentColor.opacity(0.9)
+                                            : Color.clear
+                                    ),
+                                lineWidth: isTagDropTargeted ? 1.6 : 1
+                            )
                     )
                 }
                 .buttonStyle(.plain)
@@ -465,6 +498,15 @@ struct TagGroupView: View {
                     }
                     .disabled(!model.canModifyTags)
                 }
+                .onDrag {
+                    tagItemProvider()
+                }
+                .onDrop(
+                    of: [UTType.sxmBrowserTagID.identifier],
+                    isTargeted: $isTagDropTargeted
+                ) { providers in
+                    handleTagDrop(providers)
+                }
             }
 
             if model.expandedTagIDs.contains(tag.id) {
@@ -481,6 +523,47 @@ struct TagGroupView: View {
                 }
             }
         }
+    }
+
+    private func tagItemProvider() -> NSItemProvider {
+        guard model.canModifyTags else {
+            return NSItemProvider()
+        }
+        let data = TagDropPayload(tagID: tag.id).encodedData
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(
+            forTypeIdentifier: UTType.sxmBrowserTagID.identifier,
+            visibility: .ownProcess
+        ) { completion in
+            completion(data, nil)
+            return nil
+        }
+        return provider
+    }
+
+    private func handleTagDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard model.canModifyTags,
+              let provider = providers.first(where: {
+                  $0.hasItemConformingToTypeIdentifier(
+                      UTType.sxmBrowserTagID.identifier
+                  )
+              }) else {
+            return false
+        }
+        provider.loadDataRepresentation(
+            forTypeIdentifier: UTType.sxmBrowserTagID.identifier
+        ) { data, _ in
+            guard let data else { return }
+            Task { @MainActor in
+                guard model.canModifyTags else { return }
+                model.moveTag(
+                    fromDropData: data,
+                    typeIdentifier: UTType.sxmBrowserTagID.identifier,
+                    toTargetID: tag.id
+                )
+            }
+        }
+        return true
     }
 }
 

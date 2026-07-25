@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 38 (2026-07-25): add deterministic tag sorting and typed drag reorder
 - Build 37 (2026-07-25): add durable tag rename and delete workflows
 - Build 36 (2026-07-25): migrate and persist tags with stable identities
 - Build 35 (2026-07-25): connect stable bookmark-backed folder sessions
