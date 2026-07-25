@@ -116,7 +116,7 @@ public final class SpectroscopyParser: Sendable {
         var badLineCount = 0
         for line in dataLines.dropFirst() {
             let values = splitSpectroscopyLine(line)
-            guard values.count >= columns.count else {
+            guard values.count == columns.count else {
                 badLineCount += 1
                 continue
             }
@@ -124,7 +124,8 @@ public final class SpectroscopyParser: Sendable {
             parsedValues.reserveCapacity(columns.count)
             var isCompleteRow = true
             for index in columns.indices {
-                guard let value = parseEngineeringDouble(values[index]) else {
+                guard let value = parseEngineeringDouble(values[index]),
+                      value.isFinite else {
                     isCompleteRow = false
                     break
                 }
@@ -289,11 +290,12 @@ private func parseEngineeringDouble(_ raw: String) -> Double? {
         ("m", 1e-3), ("k", 1e3), ("M", 1e6), ("G", 1e9)
     ]
     if let direct = Double(normalized) {
-        return direct
+        return direct.isFinite ? direct : nil
     }
     for (suffix, multiplier) in multipliers {
         if normalized.hasSuffix(suffix), let value = Double(normalized.dropLast(suffix.count)) {
-            return value * multiplier
+            let scaled = value * multiplier
+            return scaled.isFinite ? scaled : nil
         }
     }
     return nil
