@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 43 (2026-07-25): plan safe metadata imports with stale-state protection
 - Build 42 (2026-07-25): define portable strict metadata transfer format
 - Build 41 (2026-07-25): persist stable per-group spectrum axes
 - Build 40 (2026-07-25): persist per-spectrum visibility without data loss
