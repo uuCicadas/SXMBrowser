@@ -67,6 +67,14 @@ enum ScalePreset: String, CaseIterable, Identifiable {
     }
 }
 
+struct RenderedFrame {
+    let request: RenderRequestIdentity<SXMMetadata.ID>
+    let image: NSImage
+    let stats: HistogramStats?
+    let automaticScaleMin: Double?
+    let automaticScaleMax: Double?
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     static let defaultSidebarWidth: CGFloat = 300
@@ -113,8 +121,7 @@ final class AppModel: ObservableObject {
     @Published var selectedSpectrumXColumn = ""
     @Published var selectedSpectrumYColumn = ""
 
-    @Published var selectedImage: NSImage?
-    @Published var selectedStats: HistogramStats?
+    @Published private(set) var renderedFrame: RenderedFrame?
     @Published var scalePreset: ScalePreset = .percentile
     @Published var histogramBins: Int = AppModel.loadInt(Defaults.histogramBins, fallback: 256, range: 64...1024) {
         didSet {
@@ -143,6 +150,7 @@ final class AppModel: ObservableObject {
     private var scanTask: Task<Void, Never>?
     private var imageTask: Task<Void, Never>?
     private var scaleRenderTask: Task<Void, Never>?
+    private var renderRequestGate = RenderRequestGate<SXMMetadata.ID>()
     private var processedCacheKey: String?
     private var processedCacheMatrix: Matrix?
     private var processedCacheStats: HistogramStats?
@@ -160,6 +168,16 @@ final class AppModel: ObservableObject {
 
     var selectedIDs: Set<SXMMetadata.ID> {
         selection.selectedIDs
+    }
+
+    var selectedImage: NSImage? {
+        guard renderedFrame?.request.fileID == selectedID else { return nil }
+        return renderedFrame?.image
+    }
+
+    var selectedStats: HistogramStats? {
+        guard renderedFrame?.request.fileID == selectedID else { return nil }
+        return renderedFrame?.stats
     }
 
     var selectedFile: SXMMetadata? {
@@ -342,8 +360,8 @@ final class AppModel: ObservableObject {
 
     func openFolder(_ url: URL, selecting selectedPath: URL? = nil) {
         scanTask?.cancel()
-        imageTask?.cancel()
-        scaleRenderTask?.cancel()
+        invalidateActiveRender(clearFrame: true)
+        renderRequestGate.beginNewDataset()
         folder = url
         UserDefaults.standard.set(url.path, forKey: Defaults.lastFolder)
         isLoading = true
@@ -360,8 +378,6 @@ final class AppModel: ObservableObject {
         sidebarMode = .all
         activeTagName = nil
         filenameSearch = ""
-        selectedImage = nil
-        selectedStats = nil
         selectedSpectrumXColumn = ""
         selectedSpectrumYColumn = ""
         processedCacheKey = nil
@@ -858,9 +874,7 @@ final class AppModel: ObservableObject {
 
     func controlsChanged(resetScale: Bool = false) {
         guard mode == .single else {
-            imageTask?.cancel()
-            selectedImage = nil
-            selectedStats = nil
+            invalidateActiveRender(clearFrame: true)
             return
         }
         refreshSelectedImage(resetScale: resetScale)
@@ -876,9 +890,7 @@ final class AppModel: ObservableObject {
         if mode == .single {
             refreshSelectedImage(resetScale: true)
         } else {
-            imageTask?.cancel()
-            selectedImage = nil
-            selectedStats = nil
+            invalidateActiveRender(clearFrame: true)
         }
     }
 
@@ -973,27 +985,29 @@ final class AppModel: ObservableObject {
     func refreshSelectedImage(resetScale: Bool) {
         imageTask?.cancel()
         guard let file = selectedFile, !selectedChannel.isEmpty else {
-            selectedImage = nil
-            selectedStats = nil
+            invalidateActiveRender(clearFrame: true)
             return
         }
-        selectedImage = nil
-        status = "Rendering \(file.filename)..."
         if resetScale {
             scaleLocked = false
             scaleMin = nil
             scaleMax = nil
         }
 
-        let channel = selectedChannel
-        let direction = selectedDirection
-        let processing = selectedProcessing
-        let palette = selectedPalette
-        let invert = invertPalette
-        let locked = scaleLocked
-        let manualMin = scaleMin
-        let manualMax = scaleMax
-        let bins = histogramBins
+        let configuration = currentRenderConfiguration
+        let request = renderRequestGate.begin(
+            fileID: file.id,
+            configuration: configuration
+        )
+        renderedFrame = nil
+        status = "Rendering \(file.filename)..."
+
+        let channel = configuration.channel
+        let direction = configuration.direction
+        let processing = configuration.processing
+        let palette = configuration.palette
+        let invert = configuration.invert
+        let bins = configuration.histogramBins
         let cacheKey = processedKey(file: file, channel: channel, direction: direction, processing: processing)
 
         imageTask = Task {
@@ -1005,13 +1019,18 @@ final class AppModel: ObservableObject {
                 } else {
                     let full = try await fullFile(for: file)
                     guard let matrix = full.matrices[MatrixKey(channel: channel, direction: direction)] else {
-                        status = "Direction is not available for this channel."
+                        publishRenderFailure(
+                            request,
+                            message: "Direction is not available for this channel."
+                        )
                         return
                     }
                     processed = await Task.detached(priority: .userInitiated) {
                         SXMRenderer.processedMatrix(matrix, processing: processing)
                     }.value
                 }
+                guard !Task.isCancelled, acceptsRenderRequest(request) else { return }
+
                 let stats: HistogramStats?
                 if processedCacheKey == cacheKey,
                    processedCacheStatsBins == bins,
@@ -1022,9 +1041,19 @@ final class AppModel: ObservableObject {
                         SXMRenderer.histogram(processed, bins: bins)
                     }.value
                 }
+                guard !Task.isCancelled, acceptsRenderRequest(request) else { return }
+
                 let autoScale = SXMRenderer.automaticScale(processed)
-                let renderMin = locked ? manualMin : autoScale?.vmin
-                let renderMax = locked ? manualMax : autoScale?.vmax
+                let renderMin: Double?
+                let renderMax: Double?
+                switch configuration.scale {
+                case .automatic:
+                    renderMin = autoScale?.vmin
+                    renderMax = autoScale?.vmax
+                case .locked(let min, let max):
+                    renderMin = min
+                    renderMax = max
+                }
                 let options = RenderOptions(
                     channel: channel,
                     direction: direction,
@@ -1037,20 +1066,27 @@ final class AppModel: ObservableObject {
                 let image = try await Task.detached(priority: .userInitiated) {
                     try SXMRenderer.renderProcessedImage(matrix: processed, options: options)
                 }.value
-                if Task.isCancelled { return }
+                guard !Task.isCancelled, acceptsRenderRequest(request) else { return }
+
                 processedCacheKey = cacheKey
                 processedCacheMatrix = processed
                 processedCacheStats = stats
                 processedCacheStatsBins = bins
-                selectedStats = stats
-                if !locked {
+                if case .automatic = configuration.scale {
                     scaleMin = autoScale?.vmin
                     scaleMax = autoScale?.vmax
                 }
-                selectedImage = image
+                renderedFrame = RenderedFrame(
+                    request: request,
+                    image: image,
+                    stats: stats,
+                    automaticScaleMin: autoScale?.vmin,
+                    automaticScaleMax: autoScale?.vmax
+                )
                 status = file.filename
             } catch {
-                status = error.localizedDescription
+                guard !Task.isCancelled else { return }
+                publishRenderFailure(request, message: error.localizedDescription)
             }
         }
     }
@@ -1152,11 +1188,52 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func clearSelectedRender() {
+    private var currentRenderConfiguration: SelectedRenderConfiguration {
+        SelectedRenderConfiguration(
+            channel: selectedChannel,
+            direction: selectedDirection,
+            processing: selectedProcessing,
+            palette: selectedPalette,
+            invert: invertPalette,
+            histogramBins: histogramBins,
+            scale: scaleLocked
+                ? .locked(min: scaleMin, max: scaleMax)
+                : .automatic
+        )
+    }
+
+    private func acceptsRenderRequest(
+        _ request: RenderRequestIdentity<SXMMetadata.ID>
+    ) -> Bool {
+        mode == .single
+            && renderRequestGate.accepts(
+                request,
+                currentFileID: selectedID,
+                currentConfiguration: currentRenderConfiguration
+            )
+    }
+
+    private func publishRenderFailure(
+        _ request: RenderRequestIdentity<SXMMetadata.ID>,
+        message: String
+    ) {
+        guard acceptsRenderRequest(request) else { return }
+        renderRequestGate.invalidate()
+        renderedFrame = nil
+        status = message
+    }
+
+    private func invalidateActiveRender(clearFrame: Bool) {
         imageTask?.cancel()
         scaleRenderTask?.cancel()
-        selectedImage = nil
-        selectedStats = nil
+        renderRequestGate.invalidate()
+        if clearFrame {
+            renderedFrame = nil
+        }
+    }
+
+    private func clearSelectedRender() {
+        invalidateActiveRender(clearFrame: true)
     }
 
     private func activateTagContextIfNeeded(_ tag: String?) {

@@ -1378,16 +1378,16 @@ struct SingleImageView: View {
         GeometryReader { proxy in
             ZStack {
                 AppTheme.stage
-                if let image = model.selectedImage {
-                    Image(nsImage: image)
+                if let frame = model.renderedFrame,
+                   frame.request.fileID == model.selectedID,
+                   let file = model.files.first(where: { $0.id == frame.request.fileID }) {
+                    Image(nsImage: frame.image)
                         .resizable()
                         .interpolation(.none)
                         .scaledToFit()
                         .frame(width: proxy.size.width - 36, height: proxy.size.height - 36)
                         .overlay {
-                            if let file = model.selectedFile {
-                                SpectroscopyMarkerLayer(model: model, file: file)
-                            }
+                            SpectroscopyMarkerLayer(model: model, file: file)
                         }
                 } else {
                     ProgressView()
