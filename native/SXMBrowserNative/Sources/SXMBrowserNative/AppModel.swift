@@ -312,11 +312,24 @@ final class AppModel: ObservableObject {
     }
 
     var selectedFiles: [SXMMetadata] {
-        visibleFiles.filter { selectedIDs.contains($0.id) }
+        let fileByID = Dictionary(
+            uniqueKeysWithValues: files.map { ($0.id, $0) }
+        )
+        return selectionActionPresentation.orderedIDs.compactMap {
+            fileByID[$0]
+        }
     }
 
     var selectedCount: Int {
-        selectedIDs.count
+        selectionActionPresentation.orderedIDs.count
+    }
+
+    var selectionActionPresentation:
+        SelectionActionPresentation<SXMMetadata.ID> {
+        SelectionActionPresentation(
+            visibleIDs: visibleFiles.map(\.id),
+            selectedIDs: selectedIDs
+        )
     }
 
     var isLoading: Bool {
@@ -688,6 +701,41 @@ final class AppModel: ObservableObject {
             return
         }
         NSWorkspace.shared.activateFileViewerSelecting([path])
+    }
+
+    func revealSelectedFilesInFinder() {
+        let paths = selectedFiles.map(\.path)
+        guard !paths.isEmpty else { return }
+        NSWorkspace.shared.activateFileViewerSelecting(paths)
+    }
+
+    func addTagToSelection(_ tagID: UUID) {
+        addTag(tagID, to: selectedFiles)
+    }
+
+    func removeTagFromSelection(_ tagID: UUID) {
+        removeTag(tagID, from: selectedFiles)
+    }
+
+    func removableTagsForSelection() -> [DatasetTagV1] {
+        guard let session = activeDatasetSession else { return [] }
+        let selectedPaths = Set(
+            selectedFiles.compactMap {
+                session.pathIndex.sxmPath(for: $0.id)
+            }
+        )
+        guard !selectedPaths.isEmpty else { return [] }
+        return tags.filter {
+            !Set($0.sxmPaths).intersection(selectedPaths).isEmpty
+        }
+    }
+
+    func promptForNewTagForSelection() {
+        guard let first = selectedFiles.first else { return }
+        promptForNewTag(
+            toContextContaining: first,
+            tagContext: sidebarMode == .tag ? activeTagID : nil
+        )
     }
 
     func dismissNoticeBanner(id: UUID) {
@@ -2212,12 +2260,7 @@ final class AppModel: ObservableObject {
     }
 
     func deleteSelectedFiles() {
-        let plan = FileDeletionPlan(
-            visibleIDs: visibleFiles.map(\.id),
-            selectedIDs: selectedIDs
-        )
-        let fileByID = Dictionary(uniqueKeysWithValues: files.map { ($0.id, $0) })
-        deleteFiles(plan.targetIDs.compactMap { fileByID[$0] })
+        deleteFiles(selectedFiles)
     }
 
     func deleteFilesForContext(
@@ -2225,6 +2268,17 @@ final class AppModel: ObservableObject {
         tagContext: UUID? = nil
     ) {
         deleteFiles(contextFiles(containing: file, tagContext: tagContext))
+    }
+
+    func canDeleteFilesForContext(
+        containing file: SXMMetadata,
+        tagContext: UUID? = nil
+    ) -> Bool {
+        !isMetadataBusy
+            && !contextFiles(
+                containing: file,
+                tagContext: tagContext
+            ).isEmpty
     }
 
     func contextFiles(

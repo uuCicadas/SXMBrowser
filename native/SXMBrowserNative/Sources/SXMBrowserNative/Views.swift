@@ -1806,6 +1806,12 @@ struct FileContextMenu: View {
         } label: {
             Label("Delete", systemImage: "trash")
         }
+        .disabled(
+            !model.canDeleteFilesForContext(
+                containing: file,
+                tagContext: tagContext
+            )
+        )
 
         Menu {
             if model.tags.isEmpty {
@@ -1864,69 +1870,15 @@ struct MainImageView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Text(model.selectedFile?.filename ?? "No file selected")
-                    .font(.system(size: 14, weight: .semibold))
-                    .lineLimit(1)
+            BrowserToolbar(model: model)
 
-                Text(model.selectedPositionText)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(AppTheme.subtleFill))
-
-                Spacer()
-
-                if model.mode == .grid {
-                    GridDensityControl(model: model)
-                }
-
-                Button {
-                    model.toggleSpectraVisibility()
-                } label: {
-                    Image(systemName: model.areSpectraVisible ? "waveform.path.ecg.rectangle" : "eye.slash")
-                }
-                .disabled(model.spectra.isEmpty)
-                .help(model.areSpectraVisible ? "Hide spectroscopy plots" : "Show spectroscopy plots")
-
-                Picker("Mode", selection: Binding(
-                    get: { model.mode },
-                    set: { model.setMode($0) }
-                )) {
-                    ForEach(BrowserMode.allCases) { mode in
-                        Text(mode.label).tag(mode)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .frame(width: 158)
-
-                Button {
-                    model.stepSelection(-1)
-                } label: {
-                    Image(systemName: "chevron.left")
-                }
-                .disabled(!model.canStepSelection(by: -1))
-
-                Button {
-                    model.stepSelection(1)
-                } label: {
-                    Image(systemName: "chevron.right")
-                }
-                .disabled(!model.canStepSelection(by: 1))
-
-                Button(role: .destructive) {
-                    model.deleteSelectedFiles()
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .disabled(!model.canDeleteSelection)
-                .help(model.selectedCount <= 1 ? "Delete selected file" : "Delete \(model.selectedCount) selected files")
+            if model.selectionActionPresentation.placement
+                == .actionBar {
+                SelectionActionBar(model: model)
+                    .transition(
+                        .move(edge: .top).combined(with: .opacity)
+                    )
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(AppTheme.toolbar)
 
             Divider()
 
@@ -2065,6 +2017,216 @@ struct MainImageView: View {
                 }
                 .buttonStyle(.bordered)
             }
+        }
+    }
+}
+
+private struct BrowserToolbar: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(model.selectedFile?.filename ?? "No file selected")
+                .font(.system(size: 14, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .layoutPriority(1)
+                .accessibilityLabel("Selected file")
+                .accessibilityValue(
+                    model.selectedFile?.filename ?? "No file selected"
+                )
+
+            Text(model.selectedPositionText)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(AppTheme.subtleFill))
+                .accessibilityLabel("File position")
+                .accessibilityValue(model.selectedPositionText)
+
+            Spacer(minLength: 4)
+
+            Picker(
+                "View mode",
+                selection: Binding(
+                    get: { model.mode },
+                    set: { model.setMode($0) }
+                )
+            ) {
+                ForEach(BrowserMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(width: 142)
+            .accessibilityLabel("View mode")
+
+            ControlGroup {
+                Button {
+                    model.stepSelection(-1)
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .disabled(!model.canStepSelection(by: -1))
+                .help("Previous visible file")
+                .accessibilityLabel("Previous visible file")
+
+                Button {
+                    model.stepSelection(1)
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(!model.canStepSelection(by: 1))
+                .help("Next visible file")
+                .accessibilityLabel("Next visible file")
+            }
+
+            Menu {
+                if model.mode == .grid {
+                    Picker(
+                        "Grid density",
+                        selection: $model.gridDensity
+                    ) {
+                        ForEach(GridDensity.allCases) { density in
+                            Text(density.label).tag(density)
+                        }
+                    }
+
+                    Button {
+                        model.toggleSpectraVisibility()
+                    } label: {
+                        Label(
+                            model.areSpectraVisible
+                                ? "Hide Spectrum Cards in Grid"
+                                : "Show Spectrum Cards in Grid",
+                            systemImage:
+                                "waveform.path.ecg.rectangle"
+                        )
+                    }
+                    .disabled(model.spectra.isEmpty)
+
+                    Divider()
+                }
+
+                Button {
+                    model.exportPNG()
+                } label: {
+                    Label("Export PNG…", systemImage: "square.and.arrow.up")
+                }
+                .disabled(model.selectedImage == nil)
+
+                Button {
+                    model.revealSelectedFilesInFinder()
+                } label: {
+                    Label("Show in Finder", systemImage: "folder")
+                }
+                .disabled(model.selectedCount == 0)
+
+                if model.selectionActionPresentation.placement
+                    == .overflow {
+                    Divider()
+                    Button(role: .destructive) {
+                        model.deleteSelectedFiles()
+                    } label: {
+                        Label("Move to Trash…", systemImage: "trash")
+                    }
+                    .disabled(!model.canDeleteSelection)
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.body)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("More browser actions")
+            .accessibilityLabel("More browser actions")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(AppTheme.toolbar)
+    }
+}
+
+private struct SelectionActionBar: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Label(
+                "\(model.selectedCount) selected",
+                systemImage: "checkmark.circle.fill"
+            )
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(.primary)
+            .accessibilityLabel("\(model.selectedCount) files selected")
+
+            Spacer(minLength: 8)
+
+            Menu {
+                if model.tags.isEmpty {
+                    Button("New Tag…") {
+                        model.promptForNewTagForSelection()
+                    }
+                } else {
+                    ForEach(model.tags) { tag in
+                        Button(tag.name) {
+                            model.addTagToSelection(tag.id)
+                        }
+                    }
+                    Divider()
+                    Button("New Tag…") {
+                        model.promptForNewTagForSelection()
+                    }
+                }
+            } label: {
+                Label("Add Tag", systemImage: "tag")
+            }
+            .disabled(!model.canModifyTags)
+
+            Menu {
+                let removableTags = model.removableTagsForSelection()
+                if removableTags.isEmpty {
+                    Text("No Tags")
+                } else {
+                    ForEach(removableTags) { tag in
+                        Button(tag.name) {
+                            model.removeTagFromSelection(tag.id)
+                        }
+                    }
+                }
+            } label: {
+                Label("Remove Tag", systemImage: "tag.slash")
+            }
+            .disabled(
+                !model.canModifyTags
+                    || model.removableTagsForSelection().isEmpty
+            )
+
+            Button {
+                model.revealSelectedFilesInFinder()
+            } label: {
+                Label("Show in Finder", systemImage: "folder")
+            }
+            .help("Reveal selected files in Finder")
+
+            Button(role: .destructive) {
+                model.deleteSelectedFiles()
+            } label: {
+                Label("Move to Trash…", systemImage: "trash")
+            }
+            .disabled(!model.canDeleteSelection)
+            .help("Move selected visible files to the system Trash")
+        }
+        .controlSize(.small)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color.accentColor.opacity(0.10))
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(AppTheme.separator)
+                .frame(height: 1)
         }
     }
 }
@@ -2219,34 +2381,6 @@ final class KeyboardArrowCatcherView: NSView {
         return false
     }
 
-}
-
-struct GridDensityControl: View {
-    @ObservedObject var model: AppModel
-
-    var body: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "square.grid.3x3")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-
-            Picker("Grid density", selection: $model.gridDensity) {
-                ForEach(GridDensity.allCases) { density in
-                    Text(density.label).tag(density)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .frame(width: 112)
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .background(
-            Capsule()
-                .fill(AppTheme.subtleFill.opacity(0.9))
-        )
-        .help("Grid density")
-    }
 }
 
 struct GridBrowserView: View {
