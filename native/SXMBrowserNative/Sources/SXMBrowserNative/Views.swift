@@ -3618,6 +3618,7 @@ private struct SingleImageCanvas: View {
                 imageSize.height
                 * displayedTransform.scale
         )
+        let activeProbe = model.probeReading(for: frame)
 
         ZStack(alignment: .topLeading) {
             ZStack {
@@ -3647,6 +3648,33 @@ private struct SingleImageCanvas: View {
                 x: displayedTransform.translation.x,
                 y: displayedTransform.translation.y
             )
+
+            if let activeProbe {
+                if let center =
+                    activeProbe.pixelCoordinate.viewportCenter(
+                        viewerTransform: displayedTransform,
+                        pixelWidth: file.pixels.width,
+                        pixelHeight: file.pixels.height
+                    ) {
+                    ProbeReticle()
+                        .position(
+                            x: center.x,
+                            y: center.y
+                        )
+                }
+
+                VStack {
+                    HStack {
+                        Spacer(minLength: 0)
+                        ProbeReadingCard(
+                            reading: activeProbe
+                        )
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(10)
+                .allowsHitTesting(false)
+            }
         }
         .frame(
             width: viewportSize.width,
@@ -3665,6 +3693,20 @@ private struct SingleImageCanvas: View {
                 startingFrom: displayedTransform
             )
         )
+        .onContinuousHover(
+            coordinateSpace: .local
+        ) { phase in
+            switch phase {
+            case .active(let location):
+                model.updateProbeReading(
+                    at: location,
+                    using: displayedTransform,
+                    request: frame.request
+                )
+            case .ended:
+                model.clearProbeReading()
+            }
+        }
         .onAppear {
             model.reconcileViewerGeometry(
                 imageSize: imageSize,
@@ -3681,9 +3723,16 @@ private struct SingleImageCanvas: View {
         .onChange(of: frame.request.requestID) { _, _ in
             clearGesturePreview()
         }
+        .onDisappear {
+            model.clearProbeReading()
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Image viewer")
-        .accessibilityValue(model.viewerZoomLabel)
+        .accessibilityValue(
+            viewerAccessibilityValue(
+                probe: activeProbe
+            )
+        )
     }
 
     private func panGesture(
@@ -3691,6 +3740,7 @@ private struct SingleImageCanvas: View {
     ) -> some Gesture {
         DragGesture(minimumDistance: 4)
             .onChanged { value in
+                model.clearProbeReading()
                 if dragStartTransform == nil {
                     dragStartTransform =
                         displayedTransform
@@ -3717,6 +3767,7 @@ private struct SingleImageCanvas: View {
     ) -> some Gesture {
         MagnificationGesture(minimumScaleDelta: 0.005)
             .onChanged { value in
+                model.clearProbeReading()
                 if magnifyStartTransform == nil {
                     magnifyStartTransform =
                         displayedTransform
@@ -3768,11 +3819,136 @@ private struct SingleImageCanvas: View {
         magnifyStartTransform = nil
         gestureTransform = nil
     }
+
+    private func viewerAccessibilityValue(
+        probe: ProbeReading?
+    ) -> String {
+        guard let probe else {
+            return model.viewerZoomLabel
+        }
+        return [
+            model.viewerZoomLabel,
+            probeAccessibilitySummary(probe),
+        ].joined(separator: ", ")
+    }
 }
 
 private struct ViewerCanvasGeometry: Equatable {
     let imageSize: CGSize
     let viewportSize: CGSize
+}
+
+private struct ProbeReticle: View {
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color.black.opacity(0.34))
+                .frame(width: 15, height: 15)
+            Circle()
+                .stroke(Color.white, lineWidth: 1.5)
+                .frame(width: 11, height: 11)
+            Rectangle()
+                .fill(Color.white)
+                .frame(width: 17, height: 1)
+            Rectangle()
+                .fill(Color.white)
+                .frame(width: 1, height: 17)
+        }
+        .frame(width: 20, height: 20)
+        .shadow(
+            color: Color.black.opacity(0.75),
+            radius: 1,
+            x: 0,
+            y: 1
+        )
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct ProbeReadingCard: View {
+    let reading: ProbeReading
+
+    var body: some View {
+        Grid(
+            alignment: .leading,
+            horizontalSpacing: 9,
+            verticalSpacing: 3
+        ) {
+            GridRow {
+                Text("Pixel")
+                Text(
+                    "\(reading.pixelCoordinate.x), "
+                        + "\(reading.pixelCoordinate.y)"
+                )
+                .gridColumnAlignment(.trailing)
+            }
+            GridRow {
+                Text("Raw")
+                Text(
+                    formattedProbeValue(
+                        reading.rawValue,
+                        unit: reading.unit
+                    )
+                )
+                .gridColumnAlignment(.trailing)
+            }
+            GridRow {
+                Text("Processed")
+                Text(
+                    formattedProbeValue(
+                        reading.processedValue,
+                        unit: reading.unit
+                    )
+                )
+                .gridColumnAlignment(.trailing)
+            }
+            if let physical = reading.physicalCoordinate {
+                GridRow {
+                    Text("Position")
+                    Text(
+                        "X "
+                            + formattedProbeValue(
+                                physical.x,
+                                unit: "m"
+                            )
+                            + " · Y "
+                            + formattedProbeValue(
+                                physical.y,
+                                unit: "m"
+                            )
+                    )
+                    .gridColumnAlignment(.trailing)
+                }
+            }
+        }
+        .font(.caption.monospacedDigit())
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 7)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(
+                    Color.primary.opacity(0.14),
+                    lineWidth: 1
+                )
+        }
+        .shadow(
+            color: Color.black.opacity(0.18),
+            radius: 5,
+            x: 0,
+            y: 2
+        )
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Data probe")
+        .accessibilityValue(
+            probeAccessibilitySummary(reading)
+        )
+    }
 }
 
 private struct SingleSpectroscopyDrawer: View {
@@ -5069,6 +5245,55 @@ func compact(_ value: Double) -> String {
     }
 
     return String(format: "%.3e", value)
+}
+
+private func formattedProbeValue(
+    _ value: Double?,
+    unit: String
+) -> String {
+    guard let value, value.isFinite else {
+        return "Not finite"
+    }
+    let formatted = compact(value)
+    guard !unit.isEmpty else { return formatted }
+    if value == 0 {
+        return "\(formatted) \(unit)"
+    }
+    return "\(formatted)\(unit)"
+}
+
+private func probeAccessibilitySummary(
+    _ reading: ProbeReading
+) -> String {
+    var fields = [
+        "Pixel \(reading.pixelCoordinate.x), "
+            + "\(reading.pixelCoordinate.y), zero based",
+        "Raw "
+            + formattedProbeValue(
+                reading.rawValue,
+                unit: reading.unit
+            ),
+        "Processed "
+            + formattedProbeValue(
+                reading.processedValue,
+                unit: reading.unit
+            ),
+    ]
+    if let physical = reading.physicalCoordinate {
+        fields.append(
+            "Position X "
+                + formattedProbeValue(
+                    physical.x,
+                    unit: "m"
+                )
+                + ", Y "
+                + formattedProbeValue(
+                    physical.y,
+                    unit: "m"
+                )
+        )
+    }
+    return fields.joined(separator: ", ")
 }
 
 private extension View {

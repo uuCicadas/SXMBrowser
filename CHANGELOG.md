@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 69 (2026-07-25): add request-safe data probe with physical coordinates
 - Build 68 (2026-07-25): Add Fit, 100 percent zoom, bounded pan, and responsive viewer controls
 - Build 67 (2026-07-25): Add accessible color and line-style spectrum encoding
 - Build 66 (2026-07-25): Link spectrum legend, markers, and sidebar focus

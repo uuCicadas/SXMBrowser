@@ -246,6 +246,8 @@ final class AppModel: ObservableObject {
         SelectedRenderState<SXMMetadata.ID> = .idle
     @Published private(set) var viewerTransform =
         ViewerTransform()
+    @Published private(set) var probeReading:
+        ProbeReading?
     @Published var scalePreset: ScalePreset = .percentile
     @Published var histogramBins: Int = AppModel.loadInt(Defaults.histogramBins, fallback: 256, range: 64...1024) {
         didSet {
@@ -289,6 +291,7 @@ final class AppModel: ObservableObject {
     private var filenameSearchRequestGate = FilenameSearchRequestGate()
     private var toastDismissTask: Task<Void, Never>?
     private var renderFailureNoticeID: UUID?
+    private var probeRenderRequestID: UUID?
     private var datasetInventoryRevisionID: UUID?
     private var manualTargetPathByDATPath:
         [DatasetRelativePath: DatasetRelativePath] = [:]
@@ -2850,6 +2853,7 @@ final class AppModel: ObservableObject {
             refreshSelectedImage(resetScale: false)
         case .grid:
             scaleRenderTask?.cancel()
+            clearProbeReading()
             renderCoordinator.invalidate(clearFrame: false)
         }
     }
@@ -2905,13 +2909,16 @@ final class AppModel: ObservableObject {
         )
         guard updated != viewerTransform else { return }
         viewerTransform = updated
+        clearProbeReading()
     }
 
     func fitViewer() {
         guard canAdjustViewerTransform else { return }
         var updated = viewerTransform
         updated.fit()
+        guard updated != viewerTransform else { return }
         viewerTransform = updated
+        clearProbeReading()
     }
 
     func showViewerActualSize() {
@@ -2925,7 +2932,9 @@ final class AppModel: ObservableObject {
             scale,
             around: updated.viewportSize.center
         )
+        guard updated != viewerTransform else { return }
         viewerTransform = updated
+        clearProbeReading()
     }
 
     func zoomViewerIn() {
@@ -2955,7 +2964,84 @@ final class AppModel: ObservableObject {
             imageSize: viewerTransform.imageSize,
             viewportSize: viewerTransform.viewportSize
         )
+        guard updated != viewerTransform else { return }
         viewerTransform = updated
+        clearProbeReading()
+    }
+
+    func updateProbeReading(
+        at viewportPoint: CGPoint,
+        using transform: ViewerTransform,
+        request: RenderRequestIdentity<SXMMetadata.ID>
+    ) {
+        guard mode == .single,
+              let frame = renderedFrame,
+              frame.request == request,
+              acceptsCoordinatorFrame(frame),
+              let file = selectedFile,
+              let pixel = PixelCoordinate.resolve(
+                  viewportX: viewportPoint.x,
+                  viewportY: viewportPoint.y,
+                  viewerTransform: transform,
+                  pixelWidth: file.pixels.width,
+                  pixelHeight: file.pixels.height
+              ) else {
+            clearProbeReading()
+            return
+        }
+
+        if probeRenderRequestID == frame.request.requestID,
+           probeReading?.pixelCoordinate == pixel {
+            return
+        }
+        guard let values = renderCoordinator.probePixelValues(
+            for: frame.request,
+            at: pixel
+        ) else {
+            clearProbeReading()
+            return
+        }
+
+        let channelName =
+            frame.request.configuration.processed.channel
+        let unit = file.channels.first {
+            $0.name == channelName
+        }?.unit ?? ""
+        guard let reading = ProbeReading(
+            pixelCoordinate: pixel,
+            pixelWidth: file.pixels.width,
+            pixelHeight: file.pixels.height,
+            rawValue: values.rawValue,
+            processedValue: values.processedValue,
+            channelName: channelName,
+            unit: unit,
+            scanTransform: scanCoordinateTransform(for: file)
+        ) else {
+            clearProbeReading()
+            return
+        }
+
+        probeRenderRequestID = frame.request.requestID
+        probeReading = reading
+    }
+
+    func clearProbeReading() {
+        guard probeReading != nil
+                || probeRenderRequestID != nil else {
+            return
+        }
+        probeRenderRequestID = nil
+        probeReading = nil
+    }
+
+    func probeReading(
+        for frame: CoordinatorRenderedFrame
+    ) -> ProbeReading? {
+        guard probeRenderRequestID
+                == frame.request.requestID else {
+            return nil
+        }
+        return probeReading
     }
 
     func activateSingleSpectroscopyGroup(_ id: String?) {
@@ -3291,23 +3377,20 @@ final class AppModel: ObservableObject {
 
     func normalizedMarkerPosition(for spectrum: SpectroscopyFile, on file: SXMMetadata) -> CGPoint? {
         guard let position = spectrum.position,
-              let offset = file.scanOffset,
-              let range = file.scanRange,
-              range.x > 0,
-              range.y > 0 else {
+              let transform = scanCoordinateTransform(
+                  for: file
+              ),
+              let physical = PhysicalScanCoordinate(
+                  x: position.x,
+                  y: position.y
+              ),
+              let normalized =
+                transform.normalizedCoordinate(
+                    for: physical
+                ) else {
             return nil
         }
-
-        let dx = position.x - offset.x
-        let dy = position.y - offset.y
-        let angle = (file.scanAngle ?? 0) * .pi / 180
-        let scanX = cos(angle) * dx - sin(angle) * dy
-        let scanY = sin(angle) * dx + cos(angle) * dy
-        let u = 0.5 + scanX / range.x
-        let scanDir = file.scanDir?.lowercased() ?? ""
-        let v = scanDir.contains("up") ? 0.5 + scanY / range.y : 0.5 - scanY / range.y
-        guard u.isFinite, v.isFinite else { return nil }
-        return CGPoint(x: u, y: v)
+        return CGPoint(x: normalized.u, y: normalized.v)
     }
 
     func controlsChanged(resetScale: Bool = false) {
@@ -3572,6 +3655,7 @@ final class AppModel: ObservableObject {
                 return
             }
             clearRenderFailureNotice()
+            clearProbeReading()
             renderedFrame = nil
             selectedRenderState = .loading(fileID: request.fileID)
             let filename = files.first {
@@ -3609,6 +3693,7 @@ final class AppModel: ObservableObject {
                         .imageConfiguration else {
                 return
             }
+            clearProbeReading()
             renderedFrame = nil
             selectedRenderState = .failed(
                 fileID: failure.request.fileID,
@@ -3624,6 +3709,7 @@ final class AppModel: ObservableObject {
 
         case .cleared:
             clearRenderFailureNotice()
+            clearProbeReading()
             renderedFrame = nil
             selectedRenderState = .idle
         }
@@ -3657,6 +3743,23 @@ final class AppModel: ObservableObject {
 
     private func clearSelectedRender() {
         invalidateActiveRender(clearFrame: true)
+    }
+
+    private func scanCoordinateTransform(
+        for file: SXMMetadata
+    ) -> ScanCoordinateTransform? {
+        guard let range = file.scanRange,
+              let offset = file.scanOffset else {
+            return nil
+        }
+        return ScanCoordinateTransform(
+            rangeX: range.x,
+            rangeY: range.y,
+            offsetX: offset.x,
+            offsetY: offset.y,
+            angleDegrees: file.scanAngle ?? 0,
+            scanDirection: file.scanDir
+        )
     }
 
     private func nextViewerScale(

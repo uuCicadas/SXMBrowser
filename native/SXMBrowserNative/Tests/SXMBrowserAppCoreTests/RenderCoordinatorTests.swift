@@ -128,14 +128,17 @@ private actor TestMatrixReader: SXMMatrixReading {
     private let gate:
         SuspensionGate<MatrixReadCall, Matrix>?
     private let failure: TestCoordinatorError?
+    private let fixedMatrix: Matrix?
     private(set) var invocationCount = 0
 
     init(
         gate: SuspensionGate<MatrixReadCall, Matrix>? = nil,
-        failure: TestCoordinatorError? = nil
+        failure: TestCoordinatorError? = nil,
+        fixedMatrix: Matrix? = nil
     ) {
         self.gate = gate
         self.failure = failure
+        self.fixedMatrix = fixedMatrix
     }
 
     func loadMatrix(
@@ -150,6 +153,9 @@ private actor TestMatrixReader: SXMMatrixReading {
             return try await gate.invoke(
                 MatrixReadCall(metadata: metadata, key: key)
             )
+        }
+        if let fixedMatrix {
+            return fixedMatrix
         }
         let marker = Float(metadata.header["marker"] ?? "1")
             ?? 1
@@ -193,6 +199,7 @@ private actor TestRenderBackend: RenderBackend {
         SuspensionGate<HistogramCall, HistogramDistribution>?
     private let nilStatistics: Bool
     private let failureStage: RenderFailureStage?
+    private let processingDelta: Float
     private var histogramFailuresRemaining: Int
 
     private var processCount = 0
@@ -213,13 +220,15 @@ private actor TestRenderBackend: RenderBackend {
             >? = nil,
         nilStatistics: Bool = false,
         failureStage: RenderFailureStage? = nil,
-        histogramFailures: Int = 0
+        histogramFailures: Int = 0,
+        processingDelta: Float = 0
     ) {
         self.processGate = processGate
         self.imageGate = imageGate
         self.histogramGate = histogramGate
         self.nilStatistics = nilStatistics
         self.failureStage = failureStage
+        self.processingDelta = processingDelta
         histogramFailuresRemaining = histogramFailures
     }
 
@@ -236,7 +245,11 @@ private actor TestRenderBackend: RenderBackend {
                 ProcessCall(matrix: matrix, mode: mode)
             )
         }
-        return matrix
+        return Matrix(
+            width: matrix.width,
+            height: matrix.height,
+            values: matrix.values.map { $0 + processingDelta }
+        )
     }
 
     func statistics(
@@ -587,6 +600,244 @@ private func histogramDistribution(
 
 @Test
 @MainActor
+func probeReadsCachedSourceAndProcessedValuesWithoutMoreWork()
+    async throws
+{
+    let source = Matrix(
+        width: 2,
+        height: 2,
+        values: [1, .nan, 3, 4]
+    )
+    let reader = TestMatrixReader(fixedMatrix: source)
+    let backend = TestRenderBackend(processingDelta: 100)
+    let probe = CoordinatorProbe()
+    let coordinator = coordinator(
+        reader: reader,
+        backend: backend,
+        probe: probe
+    )
+
+    let request = coordinator.render(
+        file: metadata(),
+        configuration: renderConfiguration(
+            processing: .lineMean
+        )
+    )
+    await probe.waitForImages(1)
+
+    let countsBeforeProbing = await backend.counts()
+    for _ in 0..<100 {
+        #expect(
+            coordinator.probePixelValues(
+                for: request,
+                x: 1,
+                y: 1
+            )
+                == ProbePixelValues(
+                    rawValue: 4,
+                    processedValue: 104
+                )
+        )
+    }
+
+    #expect(
+        coordinator.probePixelValues(
+            for: request,
+            x: 0,
+            y: 1
+        )
+            == ProbePixelValues(
+                rawValue: 3,
+                processedValue: 103
+            )
+    )
+    #expect(
+        coordinator.probePixelValues(
+            for: request,
+            x: 1,
+            y: 0
+        )
+            == ProbePixelValues(
+                rawValue: nil,
+                processedValue: nil
+            )
+    )
+    #expect(
+        coordinator.probePixelValues(
+            for: request,
+            x: -1,
+            y: 0
+        ) == nil
+    )
+    #expect(
+        coordinator.probePixelValues(
+            for: request,
+            x: 2,
+            y: 0
+        ) == nil
+    )
+    #expect(
+        coordinator.probePixelValues(
+            for: request,
+            x: 0,
+            y: 2
+        ) == nil
+    )
+    #expect(await backend.counts() == countsBeforeProbing)
+    #expect(await reader.invocationCount == 1)
+}
+
+@Test
+@MainActor
+func probeRejectsStaleIdentitiesAndPendingReplacementFrame()
+    async throws
+{
+    let imageGate = SuspensionGate<ImageCall, NSImage>()
+    let reader = TestMatrixReader(
+        fixedMatrix: Matrix(
+            width: 2,
+            height: 1,
+            values: [7, 8]
+        )
+    )
+    let backend = TestRenderBackend(
+        imageGate: imageGate,
+        processingDelta: 10
+    )
+    let probe = CoordinatorProbe()
+    let coordinator = coordinator(
+        reader: reader,
+        backend: backend,
+        probe: probe
+    )
+    let file = metadata()
+    var imageStarts = imageGate.starts.makeAsyncIterator()
+
+    let firstRequest = coordinator.render(
+        file: file,
+        configuration: renderConfiguration()
+    )
+    let firstImage = try #require(await imageStarts.next())
+    await imageGate.succeed(
+        id: firstImage.id,
+        with: NSImage(size: NSSize(width: 2, height: 1))
+    )
+    await probe.waitForImages(1)
+
+    #expect(
+        coordinator.probePixelValues(
+            for: firstRequest,
+            x: 1,
+            y: 0
+        )
+            == ProbePixelValues(
+                rawValue: 8,
+                processedValue: 18
+            )
+    )
+
+    let wrongFile = RenderRequestIdentity(
+        requestID: firstRequest.requestID,
+        datasetRevision: firstRequest.datasetRevision,
+        fileID: metadata(marker: 2).id,
+        configuration: firstRequest.configuration
+    )
+    let wrongConfiguration = RenderRequestIdentity(
+        requestID: firstRequest.requestID,
+        datasetRevision: firstRequest.datasetRevision,
+        fileID: firstRequest.fileID,
+        configuration:
+            renderConfiguration(palette: .gold)
+                .imageConfiguration
+    )
+    let wrongDataset = RenderRequestIdentity(
+        requestID: firstRequest.requestID,
+        datasetRevision: UUID(),
+        fileID: firstRequest.fileID,
+        configuration: firstRequest.configuration
+    )
+    #expect(
+        coordinator.probePixelValues(
+            for: wrongFile,
+            x: 1,
+            y: 0
+        ) == nil
+    )
+    #expect(
+        coordinator.probePixelValues(
+            for: wrongConfiguration,
+            x: 1,
+            y: 0
+        ) == nil
+    )
+    #expect(
+        coordinator.probePixelValues(
+            for: wrongDataset,
+            x: 1,
+            y: 0
+        ) == nil
+    )
+
+    let secondRequest = coordinator.render(
+        file: file,
+        configuration: renderConfiguration(palette: .gold)
+    )
+    let secondImage = try #require(await imageStarts.next())
+    #expect(
+        coordinator.probePixelValues(
+            for: firstRequest,
+            x: 1,
+            y: 0
+        ) == nil
+    )
+    #expect(
+        coordinator.probePixelValues(
+            for: secondRequest,
+            x: 1,
+            y: 0
+        ) == nil
+    )
+
+    await imageGate.succeed(
+        id: secondImage.id,
+        with: NSImage(size: NSSize(width: 2, height: 1))
+    )
+    await probe.waitForImages(2)
+    #expect(
+        coordinator.probePixelValues(
+            for: secondRequest,
+            x: 1,
+            y: 0
+        )
+            == ProbePixelValues(
+                rawValue: 8,
+                processedValue: 18
+            )
+    )
+    #expect(
+        coordinator.probePixelValues(
+            for: firstRequest,
+            x: 1,
+            y: 0
+        ) == nil
+    )
+    #expect(await reader.invocationCount == 1)
+    #expect(
+        await backend.counts().process == 1
+    )
+
+    coordinator.beginDataset(revision: UUID())
+    #expect(
+        coordinator.probePixelValues(
+            for: secondRequest,
+            x: 1,
+            y: 0
+        ) == nil
+    )
+}
+
+@Test
+@MainActor
 func rapidImageChangesUseOneProcessingPipelineAndPublishNewest()
     async throws
 {
@@ -819,6 +1070,26 @@ func au1110419ToAu1110420LateRenderNeverPublishesStaleIdentity()
     #expect(visible.metadataIdentity == secondFilename)
     #expect(visible.titleIdentity == secondFilename)
     #expect(visible.imageMarker == CGFloat(secondMarker))
+    #expect(
+        coordinator.probePixelValues(
+            for: expectedRequest,
+            x: 0,
+            y: 0
+        )
+            == ProbePixelValues(
+                rawValue: Double(secondMarker),
+                processedValue: Double(secondMarker)
+            )
+    )
+    #expect(
+        requests.dropLast().allSatisfy {
+            coordinator.probePixelValues(
+                for: $0,
+                x: 0,
+                y: 0
+            ) == nil
+        }
+    )
     #expect(
         await backend.counts()
             == BackendCounts(
