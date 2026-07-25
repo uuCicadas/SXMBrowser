@@ -193,6 +193,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var scanIssues: [ScanIssue] = []
     @Published private(set) var metadataWarnings =
         MetadataWarningPresentationState()
+    @Published private(set) var noticePresentation =
+        NoticePresentationState()
     @Published private(set) var activeDatasetSession:
         ActiveDatasetSession?
     @Published private(set) var tags: [DatasetTagV1] = []
@@ -256,6 +258,8 @@ final class AppModel: ObservableObject {
     private var metadataTransferID: UUID?
     private var filenameSearchTask: Task<Void, Never>?
     private var filenameSearchRequestGate = FilenameSearchRequestGate()
+    private var toastDismissTask: Task<Void, Never>?
+    private var renderFailureNoticeID: UUID?
     private var datasetInventoryRevisionID: UUID?
     private var manualTargetPathByDATPath:
         [DatasetRelativePath: DatasetRelativePath] = [:]
@@ -686,6 +690,38 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([path])
     }
 
+    func dismissNoticeBanner(id: UUID) {
+        var next = noticePresentation
+        guard next.dismissBanner(id: id) else { return }
+        noticePresentation = next
+        if renderFailureNoticeID == id {
+            renderFailureNoticeID = nil
+        }
+    }
+
+    func dismissNoticeToast(id: UUID) {
+        var next = noticePresentation
+        guard next.dismissToast(id: id) else { return }
+        noticePresentation = next
+        toastDismissTask?.cancel()
+        toastDismissTask = nil
+    }
+
+    func performNoticeAction(_ action: NoticeAction) {
+        switch action {
+        case .retryFolder:
+            retryCurrentFolder()
+        case .retryRender:
+            retrySelectedRender()
+        case .showInFinder:
+            revealSelectedFileInFinder()
+        case .showScanIssues:
+            showScanIssues()
+        case .showMetadataDetails:
+            showMetadataWarningDetails()
+        }
+    }
+
     func exportMetadata() {
         guard canExportMetadata,
               let session = activeDatasetSession else {
@@ -759,6 +795,12 @@ final class AppModel: ObservableObject {
                     "Exported metadata to "
                     + "\(destination.lastPathComponent) "
                     + "(\(byteCount) bytes)."
+                presentToast(
+                    title: "Metadata exported",
+                    message:
+                        "\(destination.lastPathComponent) "
+                        + "(\(byteCount) bytes)"
+                )
             } catch is CancellationError {
                 return
             } catch {
@@ -771,6 +813,11 @@ final class AppModel: ObservableObject {
                 status =
                     "Metadata export failed: "
                     + error.localizedDescription
+                _ = presentBanner(
+                    title: "Metadata export failed",
+                    message: error.localizedDescription,
+                    severity: .error
+                )
             }
         }
     }
@@ -1066,6 +1113,10 @@ final class AppModel: ObservableObject {
                 completedWorkflow.phase = .completed(report)
                 metadataImportWorkflow = completedWorkflow
                 status = report
+                presentToast(
+                    title: "Metadata imported",
+                    message: report
+                )
             } catch is CancellationError {
                 return
             } catch {
@@ -1195,6 +1246,7 @@ final class AppModel: ObservableObject {
         cancelMetadataMutation()
         invalidateActiveRender(clearFrame: true)
         stopSecurityScopedFolderAccess()
+        clearUserNotices()
 
         let sessionID = datasetSessionGate.begin()
         renderCoordinator.beginDataset(revision: sessionID)
@@ -1356,6 +1408,53 @@ final class AppModel: ObservableObject {
                     : " Axis preference issues: "
                         + "\(presentedSpectrumAxisRestoreIssues.count)."
                 status = "Loaded \(scanned.0.items.count) SXM files and \(scanned.1.items.count) spectra in \(groupCount) plots. Scan issues: \(scanIssues.count).\(axisIssueText)"
+                let loadedSummary =
+                    "\(scanned.0.items.count) SXM files, "
+                    + "\(scanned.1.items.count) spectra, "
+                    + "\(groupCount) plots."
+                if !scanIssues.isEmpty
+                    || !presentedSpectrumAxisRestoreIssues.isEmpty {
+                    var issueLabels: [String] = []
+                    if !scanIssues.isEmpty {
+                        issueLabels.append(
+                            "\(scanIssues.count) scan issue"
+                                + (scanIssues.count == 1 ? "" : "s")
+                        )
+                    }
+                    if !presentedSpectrumAxisRestoreIssues.isEmpty {
+                        issueLabels.append(
+                            "\(presentedSpectrumAxisRestoreIssues.count) "
+                                + "axis preference issue"
+                                + (
+                                    presentedSpectrumAxisRestoreIssues.count
+                                        == 1
+                                    ? ""
+                                    : "s"
+                                )
+                        )
+                    }
+                    var actions: [NoticeAction] = []
+                    if !scanIssues.isEmpty {
+                        actions.append(.showScanIssues)
+                    }
+                    if shouldPresentMetadataWarning {
+                        actions.append(.showMetadataDetails)
+                    }
+                    _ = presentBanner(
+                        title: "Some files need attention",
+                        message:
+                            "\(loadedSummary) "
+                            + issueLabels.joined(separator: " and ")
+                            + " need attention.",
+                        severity: .warning,
+                        actions: actions
+                    )
+                } else if !scanned.0.items.isEmpty {
+                    presentToast(
+                        title: "Folder loaded",
+                        message: loadedSummary
+                    )
+                }
                 if opensDroppedFileInSingleMode {
                     setMode(.single)
                 } else if mode == .single {
@@ -1371,6 +1470,12 @@ final class AppModel: ObservableObject {
                 let message = error.localizedDescription
                 datasetLoadState = .failed(message: message)
                 status = message
+                _ = presentBanner(
+                    title: "Folder could not be opened",
+                    message: message,
+                    severity: .error,
+                    actions: [.retryFolder]
+                )
             }
         }
     }
@@ -1686,6 +1791,71 @@ final class AppModel: ObservableObject {
         self.securityScopedFolderURL = nil
     }
 
+    @discardableResult
+    private func presentBanner(
+        title: String,
+        message: String,
+        severity: NoticeSeverity,
+        actions: [NoticeAction] = []
+    ) -> UUID {
+        let notice = UserNotice(
+            title: title,
+            message: message,
+            severity: severity,
+            actions: actions
+        )
+        var next = noticePresentation
+        next.presentBanner(notice)
+        noticePresentation = next
+        return notice.id
+    }
+
+    private func presentToast(
+        title: String,
+        message: String
+    ) {
+        toastDismissTask?.cancel()
+        let notice = UserNotice(
+            title: title,
+            message: message,
+            severity: .success
+        )
+        var next = noticePresentation
+        next.presentToast(notice)
+        noticePresentation = next
+
+        toastDismissTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(3))
+            } catch {
+                return
+            }
+            guard let self else { return }
+            var current = self.noticePresentation
+            guard current.dismissToast(id: notice.id) else { return }
+            self.noticePresentation = current
+            self.toastDismissTask = nil
+        }
+    }
+
+    private func clearRenderFailureNotice() {
+        guard let renderFailureNoticeID else { return }
+        var next = noticePresentation
+        if next.dismissBanner(id: renderFailureNoticeID) {
+            noticePresentation = next
+        }
+        self.renderFailureNoticeID = nil
+    }
+
+    private func clearUserNotices() {
+        toastDismissTask?.cancel()
+        toastDismissTask = nil
+        renderFailureNoticeID = nil
+        var next = noticePresentation
+        next.clear()
+        noticePresentation = next
+    }
+
     private func resetMetadataWarnings(
         to collection: MetadataWarningCollection =
             MetadataWarningCollection()
@@ -1780,6 +1950,11 @@ final class AppModel: ObservableObject {
         workflow.phase = .failed(message)
         metadataImportWorkflow = workflow
         status = message
+        _ = presentBanner(
+            title: prefix,
+            message: error.localizedDescription,
+            severity: .error
+        )
     }
 
     private func makeMetadataImportInventory(
@@ -2410,6 +2585,14 @@ final class AppModel: ObservableObject {
         guard !trashedIDs.isEmpty else {
             status = failedNames.isEmpty ? "No files deleted." : "Could not delete \(failedNames.count) files."
             if !failedNames.isEmpty {
+                _ = presentBanner(
+                    title: "Files could not be moved to Trash",
+                    message:
+                        "\(failedNames.count) file"
+                        + (failedNames.count == 1 ? "" : "s")
+                        + " could not be deleted.",
+                    severity: .error
+                )
                 showDeletionResult(trashedNames: [], failedNames: failedNames)
             }
             return
@@ -2434,7 +2617,21 @@ final class AppModel: ObservableObject {
 
         let deletedText = trashedIDs.count == 1 ? "Moved 1 file to Trash." : "Moved \(trashedIDs.count) files to Trash."
         status = failedNames.isEmpty ? deletedText : "\(deletedText) Could not delete \(failedNames.count)."
-        if !failedNames.isEmpty {
+        if failedNames.isEmpty {
+            presentToast(
+                title: "Moved to Trash",
+                message:
+                    "\(trashedIDs.count) file"
+                    + (trashedIDs.count == 1 ? "" : "s")
+            )
+        } else {
+            _ = presentBanner(
+                title: "Some files could not be moved to Trash",
+                message:
+                    "\(trashedIDs.count) succeeded; "
+                    + "\(failedNames.count) failed.",
+                severity: .warning
+            )
             showDeletionResult(trashedNames: trashedNames, failedNames: failedNames)
         }
     }
@@ -3012,8 +3209,17 @@ final class AppModel: ObservableObject {
                 }
                 try data.write(to: destination)
                 status = "Exported \(destination.lastPathComponent)"
+                presentToast(
+                    title: "PNG exported",
+                    message: destination.lastPathComponent
+                )
             } catch {
                 status = error.localizedDescription
+                _ = presentBanner(
+                    title: "PNG export failed",
+                    message: error.localizedDescription,
+                    severity: .error
+                )
             }
         }
     }
@@ -3086,6 +3292,7 @@ final class AppModel: ObservableObject {
             ) else {
                 return
             }
+            clearRenderFailureNotice()
             renderedFrame = nil
             selectedRenderState = .loading(fileID: request.fileID)
             let filename = files.first {
@@ -3095,6 +3302,7 @@ final class AppModel: ObservableObject {
 
         case .imageReady(let frame):
             guard acceptsCoordinatorFrame(frame) else { return }
+            clearRenderFailureNotice()
             renderedFrame = frame
             selectedRenderState = .ready(
                 fileID: frame.request.fileID
@@ -3128,8 +3336,15 @@ final class AppModel: ObservableObject {
                 message: failure.message
             )
             status = failure.message
+            renderFailureNoticeID = presentBanner(
+                title: "Image could not be rendered",
+                message: failure.message,
+                severity: .error,
+                actions: [.retryRender, .showInFinder]
+            )
 
         case .cleared:
+            clearRenderFailureNotice()
             renderedFrame = nil
             selectedRenderState = .idle
         }
@@ -3424,6 +3639,10 @@ final class AppModel: ObservableObject {
                 onVerified(updatedSession)
                 if let successMessage {
                     status = successMessage
+                    presentToast(
+                        title: "Metadata updated",
+                        message: successMessage
+                    )
                 }
             } catch is CancellationError {
                 return
@@ -3433,6 +3652,14 @@ final class AppModel: ObservableObject {
                     return
                 }
                 status = "\(failurePrefix): \(error.localizedDescription)"
+                _ = presentBanner(
+                    title: failurePrefix,
+                    message: error.localizedDescription,
+                    severity: .error,
+                    actions: shouldPresentMetadataWarning
+                        ? [.showMetadataDetails]
+                        : []
+                )
             }
         }
     }

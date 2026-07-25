@@ -30,6 +30,19 @@ struct ContentView: View {
             )
 
             VStack(spacing: 0) {
+                if let banner = model.noticePresentation.banner {
+                    UserNoticeBanner(
+                        notice: banner,
+                        onAction: model.performNoticeAction,
+                        onDismiss: {
+                            model.dismissNoticeBanner(id: banner.id)
+                        }
+                    )
+                    .transition(
+                        .move(edge: .top).combined(with: .opacity)
+                    )
+                }
+
                 if model.shouldPresentMetadataWarning {
                     MetadataWarningStrip(model: model)
                         .transition(
@@ -66,6 +79,26 @@ struct ContentView: View {
                     .padding(8)
             }
         }
+        .overlay(alignment: .bottom) {
+            if let toast = model.noticePresentation.toast {
+                UserNoticeToast(
+                    notice: toast,
+                    onDismiss: {
+                        model.dismissNoticeToast(id: toast.id)
+                    }
+                )
+                .padding(.horizontal, 18)
+                .padding(.bottom, 18)
+                .transition(
+                    .move(edge: .bottom).combined(with: .opacity)
+                )
+                .zIndex(10)
+            }
+        }
+        .animation(
+            .easeInOut(duration: 0.18),
+            value: model.noticePresentation
+        )
         .frame(minWidth: 760, maxWidth: .infinity, minHeight: 740, maxHeight: .infinity, alignment: .leading)
         .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted) { providers in
             handleFileDrop(providers)
@@ -248,6 +281,168 @@ struct ContentView: View {
             }
         }
         return true
+    }
+}
+
+private struct UserNoticeBanner: View {
+    let notice: UserNotice
+    let onAction: (NoticeAction) -> Void
+    let onDismiss: () -> Void
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: notice.severity.symbolName)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(accent)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(notice.title)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(notice.message)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(notice.title)
+            .accessibilityValue(notice.message)
+
+            ForEach(notice.actions, id: \.self) { action in
+                Button(action.label) {
+                    onAction(action)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help(action.helpText)
+            }
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.borderless)
+            .help("Dismiss notification")
+            .accessibilityLabel("Dismiss notification")
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background(AppTheme.sidebar)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(accent)
+                .frame(width: contrast == .increased ? 5 : 4)
+                .accessibilityHidden(true)
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(AppTheme.separator)
+                .frame(height: contrast == .increased ? 2 : 1)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var accent: Color {
+        if contrast == .increased {
+            return .primary
+        }
+        return notice.severity.accentColor
+    }
+}
+
+private struct UserNoticeToast: View {
+    let notice: UserNotice
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: notice.severity.symbolName)
+                .foregroundStyle(notice.severity.accentColor)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(notice.title)
+                    .font(.callout.weight(.semibold))
+                Text(notice.message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.borderless)
+            .help("Dismiss notification")
+            .accessibilityLabel("Dismiss notification")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .overlay(
+            RoundedRectangle(cornerRadius: 9)
+                .stroke(AppTheme.separator, lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.18), radius: 10, y: 3)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private extension NoticeSeverity {
+    var symbolName: String {
+        switch self {
+        case .information: "info.circle.fill"
+        case .success: "checkmark.circle.fill"
+        case .warning: "exclamationmark.triangle.fill"
+        case .error: "xmark.octagon.fill"
+        }
+    }
+
+    var accentColor: Color {
+        switch self {
+        case .information: .blue
+        case .success: .green
+        case .warning: .orange
+        case .error: .red
+        }
+    }
+}
+
+private extension NoticeAction {
+    var label: String {
+        switch self {
+        case .retryFolder, .retryRender:
+            "Retry"
+        case .showInFinder:
+            "Show in Finder"
+        case .showScanIssues, .showMetadataDetails:
+            "Details"
+        }
+    }
+
+    var helpText: String {
+        switch self {
+        case .retryFolder:
+            "Scan the current folder again"
+        case .retryRender:
+            "Render the selected file again"
+        case .showInFinder:
+            "Reveal the selected file in Finder"
+        case .showScanIssues:
+            "Review skipped or partially read files"
+        case .showMetadataDetails:
+            "Review metadata issues"
+        }
     }
 }
 

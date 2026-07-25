@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 61 (2026-07-25): add window banners and success toasts
 - Build 60 (2026-07-25): 建立文件夹与单图 idle、loading、ready、failed 状态和恢复操作
 - Build 59 (2026-07-25): 以 120、160 和 220pt 密度自适应网格并同步键盘列步长
 - Build 58 (2026-07-25): 为 SXM 与关联 DAT 搜索增加 100ms 防抖、结果计数和 Escape 清空
