@@ -1,4 +1,5 @@
 import AppKit
+import SXMBrowserAppCore
 import SXMBrowserCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -301,6 +302,7 @@ struct SidebarView: View {
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
+                        .disabled(!model.canModifyTags)
                         .help("Create tag")
                     }
                 }
@@ -381,12 +383,12 @@ struct TagSidebarFileList: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 6) {
-                if model.tagNames.isEmpty {
+                if model.tags.isEmpty {
                     Text("No tags")
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, minHeight: 160)
                 } else {
-                    ForEach(model.tagNames, id: \.self) { tag in
+                    ForEach(model.tags) { tag in
                         TagGroupView(model: model, tag: tag)
                     }
                 }
@@ -400,19 +402,19 @@ struct TagSidebarFileList: View {
 struct TagGroupView: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var model: AppModel
-    let tag: String
+    let tag: DatasetTagV1
 
     private var files: [SXMMetadata] {
-        model.visibleFiles(forTag: tag)
+        model.visibleFiles(forTagID: tag.id)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Button {
-                    model.toggleTagExpansion(tag)
+                    model.toggleTagExpansion(tag.id)
                 } label: {
-                    Image(systemName: model.expandedTagNames.contains(tag) ? "chevron.down" : "chevron.right")
+                    Image(systemName: model.expandedTagIDs.contains(tag.id) ? "chevron.down" : "chevron.right")
                         .font(.system(size: 10, weight: .semibold))
                         .frame(width: 16, height: 22)
                 }
@@ -420,13 +422,13 @@ struct TagGroupView: View {
                 .foregroundStyle(.secondary)
 
                 Button {
-                    model.selectTag(tag)
+                    model.selectTag(tag.id)
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "tag")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(.secondary)
-                    Text(tag)
+                    Text(tag.name)
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1)
                     Spacer()
@@ -438,17 +440,17 @@ struct TagGroupView: View {
                     .padding(.vertical, 6)
                     .background(
                         RoundedRectangle(cornerRadius: 6)
-                            .fill(model.activeTagName == tag ? AppTheme.selectedTile(for: colorScheme) : AppTheme.subtleFill.opacity(0.75))
+                            .fill(model.activeTagID == tag.id ? AppTheme.selectedTile(for: colorScheme) : AppTheme.subtleFill.opacity(0.75))
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
-                            .stroke(model.activeTagName == tag ? Color.accentColor.opacity(0.9) : Color.clear, lineWidth: 1)
+                            .stroke(model.activeTagID == tag.id ? Color.accentColor.opacity(0.9) : Color.clear, lineWidth: 1)
                     )
                 }
                 .buttonStyle(.plain)
             }
 
-            if model.expandedTagNames.contains(tag) {
+            if model.expandedTagIDs.contains(tag.id) {
                 if files.isEmpty {
                     Text("No files")
                         .font(.caption)
@@ -457,7 +459,7 @@ struct TagGroupView: View {
                         .padding(.vertical, 6)
                 } else {
                     ForEach(files) { file in
-                        SXMFileSidebarItem(model: model, file: file, tagContext: tag)
+                        SXMFileSidebarItem(model: model, file: file, tagContext: tag.id)
                     }
                 }
             }
@@ -468,7 +470,7 @@ struct TagGroupView: View {
 struct SXMFileSidebarItem: View {
     @ObservedObject var model: AppModel
     let file: SXMMetadata
-    var tagContext: String? = nil
+    var tagContext: UUID? = nil
     @State private var isDropTargeted = false
 
     var body: some View {
@@ -540,7 +542,7 @@ struct SXMFileSidebarItem: View {
 struct SpectroscopySidebarRow: View {
     @ObservedObject var model: AppModel
     let spectrum: SpectroscopyFile
-    var tagContext: String? = nil
+    var tagContext: UUID? = nil
 
     var body: some View {
         HStack(spacing: 7) {
@@ -697,7 +699,7 @@ struct FileRow: View {
 struct FileContextMenu: View {
     @ObservedObject var model: AppModel
     let file: SXMMetadata
-    var tagContext: String? = nil
+    var tagContext: UUID? = nil
 
     var body: some View {
         Button {
@@ -713,14 +715,14 @@ struct FileContextMenu: View {
         }
 
         Menu {
-            if model.tagNames.isEmpty {
+            if model.tags.isEmpty {
                 Button("New Tag...") {
                     model.promptForNewTag(toContextContaining: file, tagContext: tagContext)
                 }
             } else {
-                ForEach(model.tagNames, id: \.self) { tag in
-                    Button(tag) {
-                        model.addTag(tag, toContextContaining: file, tagContext: tagContext)
+                ForEach(model.tags) { tag in
+                    Button(tag.name) {
+                        model.addTag(tag.id, toContextContaining: file, tagContext: tagContext)
                     }
                 }
                 Divider()
@@ -731,6 +733,7 @@ struct FileContextMenu: View {
         } label: {
             Label("Add Tag", systemImage: "tag")
         }
+        .disabled(!model.canModifyTags)
 
         Menu {
             let removableTags = model.removableTagsForContext(
@@ -740,10 +743,10 @@ struct FileContextMenu: View {
             if removableTags.isEmpty {
                 Text("No Tags")
             } else {
-                ForEach(removableTags, id: \.self) { tag in
-                    Button(tag) {
+                ForEach(removableTags) { tag in
+                    Button(tag.name) {
                         model.removeTag(
-                            tag,
+                            tag.id,
                             fromContextContaining: file,
                             tagContext: tagContext
                         )
@@ -753,6 +756,7 @@ struct FileContextMenu: View {
         } label: {
             Label("Remove Tag", systemImage: "tag.slash")
         }
+        .disabled(!model.canModifyTags)
 
         Button {
             model.revealInFinderForContext(containing: file, tagContext: tagContext)
@@ -1008,7 +1012,7 @@ struct GridBrowserView: View {
                 .onChange(of: model.gridColumns) { _, _ in
                     scrollToSelection(with: proxy)
                 }
-                .onChange(of: model.activeTagName) { _, _ in
+                .onChange(of: model.activeTagID) { _, _ in
                     scrollToSelection(with: proxy)
                 }
             }

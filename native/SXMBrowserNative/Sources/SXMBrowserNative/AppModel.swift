@@ -121,7 +121,7 @@ final class AppModel: ObservableObject {
     @Published var areSpectraVisible = true
     @Published private(set) var selection = SelectionState<SXMMetadata.ID>()
     @Published var sidebarMode: SidebarMode = .all
-    @Published var activeTagName: String?
+    @Published private(set) var activeTagID: UUID?
     @Published private(set) var filenameSearch = ""
     @Published private(set) var mode: BrowserMode = .grid
     @Published var sortMode: SortMode = AppModel.loadSortMode() {
@@ -144,6 +144,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var metadataWarning: String?
     @Published private(set) var activeDatasetSession:
         ActiveDatasetSession?
+    @Published private(set) var tags: [DatasetTagV1] = []
+    @Published private(set) var expandedTagIDs: Set<UUID> = []
+    @Published private(set) var isMetadataMutationInFlight = false
 
     @Published var selectedChannel = ""
     @Published var selectedDirection: ScanDirection = .fwd
@@ -168,13 +171,10 @@ final class AppModel: ObservableObject {
     @Published var scaleLocked = false
     @Published var scaleMin: Double?
     @Published var scaleMax: Double?
-    @Published var tagNames: [String] = []
-    @Published var taggedFilePathsByTag: [String: Set<String>] = [:]
-    @Published var expandedTagNames: Set<String> = []
-
     private let parser = SXMParser()
     private let spectroscopyParser = SpectroscopyParser()
     private let metadataStore: DatasetMetadataStore
+    private let legacyTagMigrator: LegacyTagMigrator
     private let folderBookmarker: any FolderBookmarking
     private var matrixCache = MatrixLoadCache()
     private let thumbnailCache = NSCache<NSString, NSImage>()
@@ -189,6 +189,8 @@ final class AppModel: ObservableObject {
     private var renderRequestGate = RenderRequestGate<SXMMetadata.ID>()
     private var histogramRequestGate = HistogramRequestGate<SXMMetadata.ID>()
     private var datasetSessionGate = DatasetSessionGate()
+    private var metadataMutationTask: Task<Void, Never>?
+    private var metadataMutationID: UUID?
     private var processedRenderCache: ProcessedRenderCache?
     private var spectrumDragPayloads: [String: [SpectroscopyFile.ID]] = [:]
     private var securityScopedFolderURL: URL?
@@ -198,6 +200,7 @@ final class AppModel: ObservableObject {
         folderBookmarker: any FolderBookmarking = MacOSFolderBookmarker()
     ) {
         self.metadataStore = metadataStore
+        legacyTagMigrator = LegacyTagMigrator(metadataStore: metadataStore)
         self.folderBookmarker = folderBookmarker
         thumbnailCache.countLimit = 180
         thumbnailCache.totalCostLimit = 64 * 1024 * 1024
@@ -238,7 +241,13 @@ final class AppModel: ObservableObject {
     }
 
     var canDeleteSelection: Bool {
-        !selectedFiles.isEmpty && !isLoading
+        !selectedFiles.isEmpty && !isLoading && !isMetadataMutationInFlight
+    }
+
+    var canModifyTags: Bool {
+        activeDatasetSession != nil
+            && !isLoading
+            && !isMetadataMutationInFlight
     }
 
     var sortedFiles: [SXMMetadata] {
@@ -268,10 +277,11 @@ final class AppModel: ObservableObject {
         case .all:
             scopedFiles = sortedFiles
         case .tag:
-            guard let activeTagName, tagNames.contains(activeTagName) else {
+            guard let activeTagID,
+                  tags.contains(where: { $0.id == activeTagID }) else {
                 return []
             }
-            scopedFiles = files(forTag: activeTagName)
+            scopedFiles = files(forTagID: activeTagID)
         }
         return filesMatchingSearch(in: scopedFiles)
     }
@@ -299,24 +309,41 @@ final class AppModel: ObservableObject {
         return "\(index + 1) / \(list.count)"
     }
 
-    func files(forTag tag: String) -> [SXMMetadata] {
-        guard let taggedPaths = taggedFilePathsByTag[tag] else { return [] }
-        return sortedFiles.filter { taggedPaths.contains(fileKey($0.path)) }
+    func files(forTagID tagID: UUID) -> [SXMMetadata] {
+        guard let session = activeDatasetSession,
+              let tag = tags.first(where: { $0.id == tagID }) else {
+            return []
+        }
+        let taggedPaths = Set(tag.sxmPaths)
+        return sortedFiles.filter { file in
+            guard let path = session.pathIndex.sxmPath(for: file.id) else {
+                return false
+            }
+            return taggedPaths.contains(path)
+        }
     }
 
-    func visibleFiles(forTag tag: String) -> [SXMMetadata] {
-        filesMatchingSearch(in: files(forTag: tag))
+    func visibleFiles(forTagID tagID: UUID) -> [SXMMetadata] {
+        filesMatchingSearch(in: files(forTagID: tagID))
     }
 
     func setSidebarMode(_ mode: SidebarMode) {
+        if mode == .tag, activeDatasetSession == nil {
+            sidebarMode = .all
+            activeTagID = nil
+            status = metadataUnavailableForTagChangesMessage
+            ensureSelectionIsVisible()
+            return
+        }
         sidebarMode = mode
         if mode == .all {
-            activeTagName = nil
+            activeTagID = nil
             ensureSelectionIsVisible()
-        } else if let activeTagName, tagNames.contains(activeTagName) {
-            selectTag(activeTagName)
-        } else if let firstTag = tagNames.first {
-            selectTag(firstTag)
+        } else if let activeTagID,
+                  tags.contains(where: { $0.id == activeTagID }) {
+            selectTag(activeTagID)
+        } else if let firstTagID = tags.first?.id {
+            selectTag(firstTagID)
         } else {
             ensureSelectionIsVisible()
         }
@@ -412,6 +439,7 @@ final class AppModel: ObservableObject {
         initialMetadataWarning: String? = nil
     ) {
         scanTask?.cancel()
+        cancelMetadataMutation()
         invalidateActiveRender(clearFrame: true)
         stopSecurityScopedFolderAccess()
 
@@ -432,6 +460,9 @@ final class AppModel: ObservableObject {
         status = "Scanning folder..."
         metadataWarning = initialMetadataWarning
         activeDatasetSession = nil
+        tags = []
+        activeTagID = nil
+        expandedTagIDs = []
         files.removeAll()
         spectra.removeAll()
         scanIssues.removeAll()
@@ -443,7 +474,6 @@ final class AppModel: ObservableObject {
         spectrumDragPayloads.removeAll()
         selection.clear()
         sidebarMode = .all
-        activeTagName = nil
         filenameSearch = ""
         spectrumAxisState.clear()
         processedRenderCache = nil
@@ -454,7 +484,6 @@ final class AppModel: ObservableObject {
         }
         thumbnailCache.removeAllObjects()
         cancelThumbnailTasks()
-        loadTags(for: openedURL)
 
         scanTask = Task {
             let metadataPreparation: DatasetMetadataPreparation
@@ -525,8 +554,13 @@ final class AppModel: ObservableObject {
                             return
                         }
                         activeDatasetSession = session
+                        publishInitialTagPresentation(for: session)
                     } catch {
                         activeDatasetSession = nil
+                        tags = []
+                        activeTagID = nil
+                        expandedTagIDs = []
+                        sidebarMode = .all
                         metadataWarning = Self.appendingMetadataWarning(
                             metadataPreparation.warning,
                             "Metadata session is unavailable: "
@@ -535,6 +569,10 @@ final class AppModel: ObservableObject {
                     }
                 } else {
                     activeDatasetSession = nil
+                    tags = []
+                    activeTagID = nil
+                    expandedTagIDs = []
+                    sidebarMode = .all
                 }
 
                 guard datasetSessionGate.acceptsOpeningResult(
@@ -584,6 +622,21 @@ final class AppModel: ObservableObject {
     ) async throws -> DatasetMetadataPreparation {
         var warning = initialWarning
         var bookmark = existingBookmark
+
+        let migrationReport = await legacyTagMigrator.migrateIfNeeded()
+        if migrationReport.status == .incomplete {
+            var migrationMessage =
+                "Legacy tag migration is incomplete; the original tag data "
+                + "was preserved and migration will retry."
+            if !migrationReport.issues.isEmpty {
+                migrationMessage += " Issues: \(migrationReport.issues.count)."
+            }
+            warning = Self.appendingMetadataWarning(
+                warning,
+                migrationMessage
+            )
+        }
+        try Task.checkCancellation()
 
         if bookmark == nil {
             do {
@@ -894,7 +947,7 @@ final class AppModel: ObservableObject {
         return "\(existing)\n\(message)"
     }
 
-    func select(_ file: SXMMetadata, tagContext: String? = nil) {
+    func select(_ file: SXMMetadata, tagContext: UUID? = nil) {
         activateTagContextIfNeeded(tagContext)
         updateSelection { state, visibleIDs in
             state.selectOnly(file.id, in: visibleIDs)
@@ -904,7 +957,7 @@ final class AppModel: ObservableObject {
     func select(
         _ file: SXMMetadata,
         modifiers: NSEvent.ModifierFlags,
-        tagContext: String? = nil
+        tagContext: UUID? = nil
     ) {
         activateTagContextIfNeeded(tagContext)
         let relevantModifiers = modifiers.intersection([.command, .shift])
@@ -1001,16 +1054,28 @@ final class AppModel: ObservableObject {
 
     func deleteFilesForContext(
         containing file: SXMMetadata,
-        tagContext: String? = nil
+        tagContext: UUID? = nil
     ) {
         deleteFiles(contextFiles(containing: file, tagContext: tagContext))
     }
 
     func contextFiles(
         containing file: SXMMetadata,
-        tagContext: String? = nil
+        tagContext: UUID? = nil
     ) -> [SXMMetadata] {
-        let scopedFiles = tagContext.map(visibleFiles(forTag:)) ?? visibleFiles
+        let scopedFiles: [SXMMetadata]
+        if let tagContext {
+            guard tags.contains(where: { $0.id == tagContext }),
+                  activeDatasetSession != nil else {
+                return []
+            }
+            scopedFiles = visibleFiles(forTagID: tagContext)
+            guard scopedFiles.contains(where: { $0.id == file.id }) else {
+                return []
+            }
+        } else {
+            scopedFiles = visibleFiles
+        }
         return selectedIDs.contains(file.id)
             ? scopedFiles.filter { selectedIDs.contains($0.id) }
             : [file]
@@ -1018,7 +1083,7 @@ final class AppModel: ObservableObject {
 
     func revealInFinderForContext(
         containing file: SXMMetadata,
-        tagContext: String? = nil
+        tagContext: UUID? = nil
     ) {
         let urls = contextFiles(containing: file, tagContext: tagContext).map(\.path)
         NSWorkspace.shared.activateFileViewerSelecting(urls)
@@ -1026,7 +1091,7 @@ final class AppModel: ObservableObject {
 
     func openFilesForContext(
         containing file: SXMMetadata,
-        tagContext: String? = nil
+        tagContext: UUID? = nil
     ) {
         for target in contextFiles(containing: file, tagContext: tagContext) {
             NSWorkspace.shared.open(target.path)
@@ -1034,40 +1099,74 @@ final class AppModel: ObservableObject {
     }
 
     func addTag(
-        _ tag: String,
+        _ tagID: UUID,
         toContextContaining file: SXMMetadata,
-        tagContext: String? = nil
+        tagContext: UUID? = nil
     ) {
-        addTag(tag, to: contextFiles(containing: file, tagContext: tagContext))
+        guard activeDatasetSession != nil else {
+            status = metadataUnavailableForTagChangesMessage
+            return
+        }
+        let targetFiles = contextFiles(
+            containing: file,
+            tagContext: tagContext
+        )
+        guard !targetFiles.isEmpty else {
+            status = "The tag context is no longer available."
+            return
+        }
+        addTag(
+            tagID,
+            to: targetFiles
+        )
     }
 
     func removableTagsForContext(
         containing file: SXMMetadata,
-        tagContext: String? = nil
-    ) -> [String] {
+        tagContext: UUID? = nil
+    ) -> [DatasetTagV1] {
+        guard let session = activeDatasetSession else { return [] }
         let targetPaths = Set(
             contextFiles(containing: file, tagContext: tagContext)
-                .map { fileKey($0.path) }
+                .compactMap { session.pathIndex.sxmPath(for: $0.id) }
         )
         guard !targetPaths.isEmpty else { return [] }
-        return tagNames.filter { tag in
-            guard let taggedPaths = taggedFilePathsByTag[tag] else { return false }
-            return !taggedPaths.intersection(targetPaths).isEmpty
+        return tags.filter { tag in
+            !Set(tag.sxmPaths).intersection(targetPaths).isEmpty
         }
     }
 
     func removeTag(
-        _ tag: String,
+        _ tagID: UUID,
         fromContextContaining file: SXMMetadata,
-        tagContext: String? = nil
+        tagContext: UUID? = nil
     ) {
-        removeTag(tag, from: contextFiles(containing: file, tagContext: tagContext))
+        guard activeDatasetSession != nil else {
+            status = metadataUnavailableForTagChangesMessage
+            return
+        }
+        let targetFiles = contextFiles(
+            containing: file,
+            tagContext: tagContext
+        )
+        guard !targetFiles.isEmpty else {
+            status = "The tag context is no longer available."
+            return
+        }
+        removeTag(
+            tagID,
+            from: targetFiles
+        )
     }
 
     func promptForNewTag(
         toContextContaining file: SXMMetadata? = nil,
-        tagContext: String? = nil
+        tagContext: UUID? = nil
     ) {
+        guard canModifyTags else {
+            status = metadataUnavailableForTagChangesMessage
+            return
+        }
         let alert = NSAlert()
         alert.messageText = file == nil ? "Create Tag" : "Create and Add Tag"
         alert.informativeText = "Enter a tag name."
@@ -1082,36 +1181,59 @@ final class AppModel: ObservableObject {
         let name = normalizedTagName(field.stringValue)
         guard !name.isEmpty else { return }
 
-        createTag(named: name)
         if let file {
-            addTag(name, toContextContaining: file, tagContext: tagContext)
-        }
-    }
-
-    func toggleTagExpansion(_ tag: String) {
-        if expandedTagNames.contains(tag) {
-            expandedTagNames.remove(tag)
+            let targetFiles = contextFiles(
+                containing: file,
+                tagContext: tagContext
+            )
+            guard !targetFiles.isEmpty else {
+                status = "The tag context is no longer available."
+                return
+            }
+            createTag(named: name, adding: targetFiles)
         } else {
-            expandedTagNames.insert(tag)
+            createTag(named: name, adding: [])
         }
-        saveTags()
     }
 
-    func selectTag(_ tag: String) {
-        sidebarMode = .tag
-        activeTagName = tag
-        expandedTagNames.insert(tag)
-        saveTags()
+    func toggleTagExpansion(_ tagID: UUID) {
+        guard let session = activeDatasetSession,
+              tags.contains(where: { $0.id == tagID }) else {
+            status = metadataUnavailableForTagChangesMessage
+            return
+        }
+        if expandedTagIDs.contains(tagID) {
+            expandedTagIDs.remove(tagID)
+        } else {
+            expandedTagIDs.insert(tagID)
+        }
+        saveExpandedTagIDs(for: session.datasetID)
+    }
 
-        let tagFiles = files(forTag: tag)
+    func selectTag(_ tagID: UUID) {
+        guard let tag = tags.first(where: { $0.id == tagID }),
+              let session = activeDatasetSession else {
+            status = metadataUnavailableForTagChangesMessage
+            return
+        }
+        sidebarMode = .tag
+        activeTagID = tagID
+        expandedTagIDs.insert(tagID)
+        saveExpandedTagIDs(for: session.datasetID)
+
+        let tagFiles = files(forTagID: tagID)
         updateSelection { state, visibleIDs in
             state.reconcile(with: visibleIDs, fallbackToFirst: true)
         }
-        status = "Showing \(tagFiles.count) files in \(tag)."
+        status = "Showing \(tagFiles.count) files in \(tag.name)."
     }
 
     private func deleteFiles(_ targets: [SXMMetadata]) {
         guard !targets.isEmpty else { return }
+        guard !isMetadataMutationInFlight else {
+            status = "Wait for the current metadata update before deleting files."
+            return
+        }
 
         let alert = NSAlert()
         alert.messageText = targets.count == 1 ? "Delete this SXM file?" : "Delete \(targets.count) SXM files?"
@@ -1379,7 +1501,7 @@ final class AppModel: ObservableObject {
     func selectSpectrumRow(
         _ spectrum: SpectroscopyFile,
         modifiers: NSEvent.ModifierFlags,
-        tagContext: String? = nil
+        tagContext: UUID? = nil
     ) {
         let relevantModifiers = modifiers.intersection([.command, .shift])
         if relevantModifiers.contains(.command) || relevantModifiers.contains(.shift) {
@@ -1414,7 +1536,7 @@ final class AppModel: ObservableObject {
     func assignSpectra(
         fromDragToken token: String,
         to file: SXMMetadata,
-        tagContext: String? = nil
+        tagContext: UUID? = nil
     ) -> Bool {
         guard let ids = spectrumDragPayloads.removeValue(forKey: token), !ids.isEmpty else {
             return false
@@ -2032,12 +2154,16 @@ final class AppModel: ObservableObject {
         invalidateActiveRender(clearFrame: true)
     }
 
-    private func activateTagContextIfNeeded(_ tag: String?) {
-        guard let tag, tagNames.contains(tag) else { return }
+    private func activateTagContextIfNeeded(_ tagID: UUID?) {
+        guard let tagID,
+              let session = activeDatasetSession,
+              tags.contains(where: { $0.id == tagID }) else {
+            return
+        }
         sidebarMode = .tag
-        activeTagName = tag
-        expandedTagNames.insert(tag)
-        saveTags()
+        activeTagID = tagID
+        expandedTagIDs.insert(tagID)
+        saveExpandedTagIDs(for: session.datasetID)
     }
 
     private func filesMatchingSearch(in candidates: [SXMMetadata]) -> [SXMMetadata] {
@@ -2069,79 +2195,291 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func createTag(named rawName: String) {
+    private func createTag(
+        named rawName: String,
+        adding targetFiles: [SXMMetadata]
+    ) {
         let name = normalizedTagName(rawName)
         guard !name.isEmpty else { return }
-        if !tagNames.contains(name) {
-            tagNames.append(name)
-            var updatedTags = taggedFilePathsByTag
-            updatedTags[name] = updatedTags[name] ?? []
-            taggedFilePathsByTag = updatedTags
+        guard let session = activeDatasetSession else {
+            status = metadataUnavailableForTagChangesMessage
+            return
         }
-        expandedTagNames.insert(name)
-        saveTags()
-        status = "Created tag \(name)."
-    }
-
-    private func addTag(_ rawName: String, to targetFiles: [SXMMetadata]) {
-        let name = normalizedTagName(rawName)
-        guard !name.isEmpty else { return }
-        createTag(named: name)
-        var paths = taggedFilePathsByTag[name] ?? []
-        for file in targetFiles {
-            paths.insert(fileKey(file.path))
+        let paths = targetFiles.compactMap {
+            session.pathIndex.sxmPath(for: $0.id)
         }
-        var updatedTags = taggedFilePathsByTag
-        updatedTags[name] = paths
-        taggedFilePathsByTag = updatedTags
-        expandedTagNames.insert(name)
-        saveTags()
-        if targetFiles.isEmpty {
-            status = "Created tag \(name)."
+        let tagID = UUID()
+        let successMessage: String
+        if paths.isEmpty {
+            successMessage = "Created tag \(name)."
         } else {
-            status = "Added \(targetFiles.count) file\(targetFiles.count == 1 ? "" : "s") to \(name)."
+            successMessage =
+                "Created \(name) and added \(paths.count) file"
+                + (paths.count == 1 ? "." : "s.")
+        }
+        performTagMutation(
+            expandingTagID: tagID,
+            successMessage: successMessage
+        ) { record in
+            _ = try record.createTag(
+                id: tagID,
+                name: name,
+                sxmPaths: paths
+            )
         }
     }
 
-    private func removeTag(_ tag: String, from targetFiles: [SXMMetadata]) {
-        guard !targetFiles.isEmpty else { return }
-        let pathsToRemove = Set(targetFiles.map { fileKey($0.path) })
-        guard var taggedPaths = taggedFilePathsByTag[tag] else { return }
-
-        let beforeCount = taggedPaths.count
-        taggedPaths.subtract(pathsToRemove)
-        var updatedTags = taggedFilePathsByTag
-        updatedTags[tag] = taggedPaths
-        taggedFilePathsByTag = updatedTags
-        saveTags()
-
-        let removedCount = beforeCount - taggedPaths.count
-        if activeTagName == tag {
-            ensureSelectionIsVisible()
+    private func addTag(_ tagID: UUID, to targetFiles: [SXMMetadata]) {
+        guard let session = activeDatasetSession,
+              let tag = tags.first(where: { $0.id == tagID }) else {
+            status = metadataUnavailableForTagChangesMessage
+            return
         }
+        let paths = targetFiles.compactMap {
+            session.pathIndex.sxmPath(for: $0.id)
+        }
+        guard !paths.isEmpty else { return }
+        let additions = Set(paths).subtracting(tag.sxmPaths)
+        let addedCount = additions.count
+        guard addedCount > 0 else {
+            expandedTagIDs.insert(tagID)
+            saveExpandedTagIDs(for: session.datasetID)
+            status = "The selected files are already in \(tag.name)."
+            return
+        }
+        let successMessage = addedCount == 1
+            ? "Added 1 file to \(tag.name)."
+            : "Added \(addedCount) files to \(tag.name)."
+        performTagMutation(
+            expandingTagID: tagID,
+            successMessage: successMessage
+        ) { record in
+            guard let storedTag = record.tags.first(where: {
+                $0.id == tagID
+            }) else {
+                throw DatasetMetadataValidationError.tagNotFound(tagID)
+            }
+            try record.replaceTagMembers(
+                id: tagID,
+                with: storedTag.sxmPaths + paths
+            )
+        }
+    }
 
-        status = removedCount == 1 ? "Removed 1 file from \(tag)." : "Removed \(removedCount) files from \(tag)."
+    private func removeTag(_ tagID: UUID, from targetFiles: [SXMMetadata]) {
+        guard let session = activeDatasetSession,
+              let tag = tags.first(where: { $0.id == tagID }) else {
+            status = metadataUnavailableForTagChangesMessage
+            return
+        }
+        let pathsToRemove = Set(targetFiles.compactMap {
+            session.pathIndex.sxmPath(for: $0.id)
+        })
+        guard !pathsToRemove.isEmpty else { return }
+        let removedCount = Set(tag.sxmPaths)
+            .intersection(pathsToRemove)
+            .count
+        guard removedCount > 0 else {
+            status = "The selected files are not in \(tag.name)."
+            return
+        }
+        let successMessage = removedCount == 1
+            ? "Removed 1 file from \(tag.name)."
+            : "Removed \(removedCount) files from \(tag.name)."
+        performTagMutation(successMessage: successMessage) { record in
+            guard let storedTag = record.tags.first(where: {
+                $0.id == tagID
+            }) else {
+                throw DatasetMetadataValidationError.tagNotFound(tagID)
+            }
+            try record.replaceTagMembers(
+                id: tagID,
+                with: storedTag.sxmPaths.filter {
+                    !pathsToRemove.contains($0)
+                }
+            )
+        }
     }
 
     private func removeTags(forDeletedFiles deletedFiles: [SXMMetadata]) {
-        guard !deletedFiles.isEmpty else { return }
-        let deletedPaths = Set(deletedFiles.map { fileKey($0.path) })
-        var updatedTags = taggedFilePathsByTag
-        for tag in tagNames {
-            updatedTags[tag]?.subtract(deletedPaths)
+        guard !deletedFiles.isEmpty,
+              let session = activeDatasetSession else {
+            return
         }
-        taggedFilePathsByTag = updatedTags
-        saveTags()
+        let deletedPaths = Set(deletedFiles.compactMap {
+            session.pathIndex.sxmPath(for: $0.id)
+        })
+        guard !deletedPaths.isEmpty else { return }
+        performTagMutation(
+            failurePrefix: "Files were deleted, but tag metadata cleanup failed"
+        ) { record in
+            for tag in record.tags {
+                try record.replaceTagMembers(
+                    id: tag.id,
+                    with: tag.sxmPaths.filter {
+                        !deletedPaths.contains($0)
+                    }
+                )
+            }
+        }
     }
 
-    private func pruneTagsToCurrentFiles() {
-        let validPaths = Set(files.map { fileKey($0.path) })
-        var updatedTags = taggedFilePathsByTag
-        for tag in tagNames {
-            updatedTags[tag] = updatedTags[tag, default: []].intersection(validPaths)
+    private func performTagMutation(
+        expandingTagID: UUID? = nil,
+        successMessage: String? = nil,
+        failurePrefix: String = "Tag metadata could not be updated",
+        mutation: @escaping @Sendable (
+            inout DatasetRecordV1
+        ) throws -> Void
+    ) {
+        guard let session = activeDatasetSession else {
+            status = metadataUnavailableForTagChangesMessage
+            return
         }
-        taggedFilePathsByTag = updatedTags
-        saveTags()
+        guard !isMetadataMutationInFlight else {
+            status = "Wait for the current metadata update to finish."
+            return
+        }
+
+        let identity = session.identity
+        let datasetID = session.datasetID
+        let mutationID = UUID()
+        metadataMutationID = mutationID
+        isMetadataMutationInFlight = true
+
+        metadataMutationTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                finishMetadataMutation(id: mutationID)
+            }
+            do {
+                let verifiedRecord = try await metadataStore.updateDataset(
+                    id: datasetID,
+                    mutation: mutation
+                )
+                try Task.checkCancellation()
+                guard metadataMutationID == mutationID,
+                      datasetSessionGate.accepts(identity),
+                      let currentSession = activeDatasetSession,
+                      currentSession.matches(identity) else {
+                    return
+                }
+                let updatedSession = try ActiveDatasetSession(
+                    sessionID: currentSession.sessionID,
+                    datasetID: currentSession.datasetID,
+                    folderURL: currentSession.folderURL,
+                    verifiedRecord: verifiedRecord,
+                    pathIndex: currentSession.pathIndex
+                )
+                guard datasetSessionGate.activate(updatedSession) else {
+                    return
+                }
+                activeDatasetSession = updatedSession
+                publishUpdatedTagPresentation(
+                    tags: verifiedRecord.tags,
+                    expandingTagID: expandingTagID,
+                    datasetID: datasetID
+                )
+                if let successMessage {
+                    status = successMessage
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard metadataMutationID == mutationID,
+                      datasetSessionGate.accepts(identity) else {
+                    return
+                }
+                status = "\(failurePrefix): \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func finishMetadataMutation(id: UUID) {
+        guard metadataMutationID == id else { return }
+        metadataMutationID = nil
+        metadataMutationTask = nil
+        isMetadataMutationInFlight = false
+    }
+
+    private func cancelMetadataMutation() {
+        metadataMutationID = nil
+        metadataMutationTask?.cancel()
+        metadataMutationTask = nil
+        isMetadataMutationInFlight = false
+    }
+
+    private func publishInitialTagPresentation(
+        for session: ActiveDatasetSession
+    ) {
+        tags = session.verifiedRecord.tags
+        activeTagID = nil
+        let storedExpandedIDs = Set(
+            UserDefaults.standard
+                .stringArray(
+                    forKey: expandedTagIDsDefaultsKey(
+                        datasetID: session.datasetID
+                    )
+                )?
+                .compactMap(UUID.init(uuidString:)) ?? []
+        )
+        expandedTagIDs = TagPresentationProjection
+            .filteredExpandedTagIDs(
+                storedExpandedIDs,
+                tags: tags
+            )
+    }
+
+    private func publishUpdatedTagPresentation(
+        tags updatedTags: [DatasetTagV1],
+        expandingTagID: UUID?,
+        datasetID: UUID
+    ) {
+        tags = updatedTags
+        activeTagID = TagPresentationProjection.reconciledActiveTagID(
+            activeTagID,
+            tags: updatedTags
+        )
+        expandedTagIDs = TagPresentationProjection.filteredExpandedTagIDs(
+            expandedTagIDs,
+            tags: updatedTags
+        )
+        if let expandingTagID,
+           updatedTags.contains(where: { $0.id == expandingTagID }) {
+            expandedTagIDs.insert(expandingTagID)
+        }
+        if sidebarMode == .tag {
+            if activeTagID == nil {
+                if let firstTagID = updatedTags.first?.id {
+                    activeTagID = firstTagID
+                } else {
+                    sidebarMode = .all
+                }
+            }
+            if sidebarMode == .tag {
+                ensureSelectionIsVisible()
+            }
+        }
+        saveExpandedTagIDs(for: datasetID)
+    }
+
+    private func saveExpandedTagIDs(for datasetID: UUID) {
+        let values = expandedTagIDs
+            .map { $0.uuidString.lowercased() }
+            .sorted()
+        UserDefaults.standard.set(
+            values,
+            forKey: expandedTagIDsDefaultsKey(datasetID: datasetID)
+        )
+    }
+
+    private func expandedTagIDsDefaultsKey(datasetID: UUID) -> String {
+        "\(Defaults.expandedTagIDsByDataset)."
+            + datasetID.uuidString.lowercased()
+    }
+
+    private var metadataUnavailableForTagChangesMessage: String {
+        "Tag metadata is unavailable for this folder. Reopen the folder to retry."
     }
 
     private func rebuildSpectrumGroups() {
@@ -2253,42 +2591,8 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func loadTags(for folder: URL) {
-        guard let data = UserDefaults.standard.data(forKey: tagsDefaultsKey(for: folder)),
-              let store = try? JSONDecoder().decode(TagStore.self, from: data) else {
-            tagNames = []
-            taggedFilePathsByTag = [:]
-            expandedTagNames = []
-            return
-        }
-
-        tagNames = store.tagNames
-        taggedFilePathsByTag = store.taggedFilePathsByTag.mapValues { Set($0) }
-        expandedTagNames = Set(store.expandedTagNames)
-    }
-
-    private func saveTags() {
-        guard let folder else { return }
-        let store = TagStore(
-            tagNames: tagNames,
-            taggedFilePathsByTag: taggedFilePathsByTag.mapValues { Array($0).sorted() },
-            expandedTagNames: Array(expandedTagNames).sorted()
-        )
-        guard let data = try? JSONEncoder().encode(store) else { return }
-        UserDefaults.standard.set(data, forKey: tagsDefaultsKey(for: folder))
-    }
-
     private func normalizedTagName(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func fileKey(_ url: URL) -> String {
-        url.standardizedFileURL.path
-    }
-
-    private func tagsDefaultsKey(for folder: URL) -> String {
-        let encoded = Data(folder.standardizedFileURL.path.utf8).base64EncodedString()
-        return "\(Defaults.tagsByFolder).\(encoded)"
     }
 
     private func generateThumbnail(
@@ -2372,13 +2676,8 @@ final class AppModel: ObservableObject {
         static let lastFolder = "native.lastFolder"
         static let histogramBins = "native.histogramBins"
         static let gridColumns = "native.gridColumns"
-        static let tagsByFolder = "native.tagsByFolder"
-    }
-
-    private struct TagStore: Codable {
-        let tagNames: [String]
-        let taggedFilePathsByTag: [String: [String]]
-        let expandedTagNames: [String]
+        static let expandedTagIDsByDataset =
+            "native.expandedTagIDsByDataset"
     }
 
     private static func loadSortMode() -> SortMode {

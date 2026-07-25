@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 36 (2026-07-25): migrate and persist tags with stable identities
 - Build 35 (2026-07-25): connect stable bookmark-backed folder sessions
 - Build 34 (2026-07-25): add stable dataset path and session coordination core
 - Build 33 (2026-07-25): add safe idempotent legacy tag migration core
