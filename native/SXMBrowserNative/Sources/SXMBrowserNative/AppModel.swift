@@ -261,8 +261,8 @@ final class AppModel: ObservableObject {
         guard let file = selectedFile else { return [] }
         var columns: [String] = []
         var seen: Set<String> = []
-        for spectrum in spectra(for: file) {
-            for column in spectrum.curve.columns where !seen.contains(column) {
+        for group in spectrumGroups(for: file) {
+            for column in group.availableColumns where !seen.contains(column) {
                 columns.append(column)
                 seen.insert(column)
             }
@@ -878,11 +878,11 @@ final class AppModel: ObservableObject {
     }
 
     func spectrumXAxis(for group: SpectroscopyGroup) -> String {
-        group.availableColumns.contains(selectedSpectrumXColumn) ? selectedSpectrumXColumn : group.xLabel
+        group.canonicalColumn(matching: selectedSpectrumXColumn) ?? group.xLabel
     }
 
     func spectrumYAxis(for group: SpectroscopyGroup) -> String {
-        group.availableColumns.contains(selectedSpectrumYColumn) ? selectedSpectrumYColumn : group.yLabel
+        group.canonicalColumn(matching: selectedSpectrumYColumn) ?? group.yLabel
     }
 
     func spectrumAxisChanged() {
@@ -1491,12 +1491,10 @@ final class AppModel: ObservableObject {
             let visibleSpectra = spectra.filter {
                 spectrumParentIDBySpectrumID[$0.id] == parentID && !hiddenSpectrumIDs.contains($0.id)
             }
-            let buckets = Dictionary(grouping: visibleSpectra, by: \.kind)
-            let groups = buckets
-                .map { SpectroscopyGroup(sxm: file, kind: $0.key, spectra: $0.value) }
-                .sorted { lhs, rhs in
-                    spectroscopyKindSortRank(lhs.kind) < spectroscopyKindSortRank(rhs.kind)
-                }
+            let groups = SpectroscopyGroup.compatibleGroups(
+                sxm: file,
+                spectra: visibleSpectra
+            )
             if groups.isEmpty {
                 updatedGroups.removeValue(forKey: parentID)
             } else {
@@ -1518,7 +1516,7 @@ final class AppModel: ObservableObject {
         }
         guard !sxmByTime.isEmpty else { return ([:], [:]) }
 
-        var buckets: [SXMMetadata.ID: [SpectroscopyKind: [SpectroscopyFile]]] = [:]
+        var buckets: [SXMMetadata.ID: [SpectroscopyFile]] = [:]
         var parents: [SpectroscopyFile.ID: SXMMetadata.ID] = [:]
         for spectrum in spectra.sorted(by: { lhs, rhs in
             lhs.filename.localizedStandardCompare(rhs.filename) == .orderedAscending
@@ -1530,18 +1528,17 @@ final class AppModel: ObservableObject {
             guard let parent else { continue }
             parents[spectrum.id] = parent.id
             if !hiddenSpectrumIDs.contains(spectrum.id) {
-                buckets[parent.id, default: [:]][spectrum.kind, default: []].append(spectrum)
+                buckets[parent.id, default: []].append(spectrum)
             }
         }
 
         var output: [SXMMetadata.ID: [SpectroscopyGroup]] = [:]
         for file in sxmFiles {
-            guard let kindBuckets = buckets[file.id] else { continue }
-            output[file.id] = kindBuckets
-                .map { SpectroscopyGroup(sxm: file, kind: $0.key, spectra: $0.value) }
-                .sorted { lhs, rhs in
-                    spectroscopyKindSortRank(lhs.kind) < spectroscopyKindSortRank(rhs.kind)
-                }
+            guard let fileSpectra = buckets[file.id] else { continue }
+            output[file.id] = SpectroscopyGroup.compatibleGroups(
+                sxm: file,
+                spectra: fileSpectra
+            )
         }
         return (output, parents)
     }
@@ -1555,14 +1552,6 @@ final class AppModel: ObservableObject {
 
     private func sxmBasename(_ file: SXMMetadata) -> String {
         file.path.deletingPathExtension().lastPathComponent
-    }
-
-    private func spectroscopyKindSortRank(_ kind: SpectroscopyKind) -> Int {
-        switch kind {
-        case .z: 0
-        case .bias: 1
-        case .other: 2
-        }
     }
 
     private func nearestSXM(to spectrum: SpectroscopyFile, in sxmFiles: [SXMMetadata]) -> SXMMetadata? {

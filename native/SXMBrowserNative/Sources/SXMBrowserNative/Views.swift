@@ -1328,7 +1328,13 @@ struct SpectroscopyPlotView: View {
 
     private func drawCurves(context: inout GraphicsContext, plot: CGRect, ranges: (xMin: Double, xMax: Double, yMin: Double, yMax: Double)) {
         for spectrum in group.spectra {
-            let points = spectrum.curve.points(xColumn: xColumn, yColumn: yColumn)
+            guard let points = group.points(
+                for: spectrum,
+                xColumn: xColumn,
+                yColumn: yColumn
+            ) else {
+                continue
+            }
             var path = Path()
             var didMove = false
             for pointValue in points where pointValue.x.isFinite && pointValue.y.isFinite {
@@ -1349,7 +1355,13 @@ struct SpectroscopyPlotView: View {
     }
 
     private func dataRanges() -> (xMin: Double, xMax: Double, yMin: Double, yMax: Double) {
-        let points = group.spectra.flatMap { $0.curve.points(xColumn: xColumn, yColumn: yColumn) }
+        let points = group.spectra.flatMap {
+            group.points(
+                for: $0,
+                xColumn: xColumn,
+                yColumn: yColumn
+            ) ?? []
+        }
         let xs = points.map { $0.x }.filter(\.isFinite)
         let ys = points.map { $0.y }.filter(\.isFinite)
         let xMin = xs.min() ?? 0

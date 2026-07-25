@@ -15,6 +15,47 @@ public enum SpectroscopyKind: String, Codable, Sendable {
     }
 }
 
+public struct SpectroscopyColumnSchema: Codable, Hashable, Sendable {
+    public let normalizedColumns: [String]
+    public let fingerprint: String
+
+    public init(columns: [String]) {
+        let normalizedColumns = columns.map(Self.normalize)
+        self.normalizedColumns = normalizedColumns
+        self.fingerprint = Self.makeFingerprint(for: normalizedColumns)
+    }
+
+    public static func normalize(_ column: String) -> String {
+        column
+            .precomposedStringWithCanonicalMapping
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+            .lowercased(with: Locale(identifier: "en_US_POSIX"))
+    }
+
+    private static func makeFingerprint(for columns: [String]) -> String {
+        let identity = columns
+            .map { "\($0.utf8.count):\($0)" }
+            .joined(separator: "|")
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in identity.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(format: "%016llx", hash)
+    }
+}
+
+public struct SpectroscopyGroupKey: Codable, Hashable, Sendable {
+    public let kind: SpectroscopyKind
+    public let columnSchema: SpectroscopyColumnSchema
+
+    public init(kind: SpectroscopyKind, columnSchema: SpectroscopyColumnSchema) {
+        self.kind = kind
+        self.columnSchema = columnSchema
+    }
+}
+
 public struct SpectroscopyCurve: Identifiable, Hashable, Sendable {
     public let id: UUID
     public let filename: String
@@ -42,12 +83,40 @@ public struct SpectroscopyCurve: Identifiable, Hashable, Sendable {
         self.y = y
     }
 
-    public func points(xColumn: String, yColumn: String) -> [(x: Double, y: Double)] {
-        guard let xs = valuesByColumn[xColumn],
-              let ys = valuesByColumn[yColumn] else {
-            return Array(zip(x, y)).map { (x: $0.0, y: $0.1) }
+    public var columnSchema: SpectroscopyColumnSchema {
+        SpectroscopyColumnSchema(columns: columns)
+    }
+
+    public func points(xColumn: String, yColumn: String) -> [(x: Double, y: Double)]? {
+        guard let xKey = columnKey(matching: xColumn),
+              let yKey = columnKey(matching: yColumn),
+              let xs = valuesByColumn[xKey],
+              let ys = valuesByColumn[yKey] else {
+            return nil
         }
         return Array(zip(xs, ys)).map { (x: $0.0, y: $0.1) }
+    }
+
+    fileprivate func points(xColumnIndex: Int, yColumnIndex: Int) -> [(x: Double, y: Double)]? {
+        guard columns.indices.contains(xColumnIndex),
+              columns.indices.contains(yColumnIndex),
+              let xs = valuesByColumn[columns[xColumnIndex]],
+              let ys = valuesByColumn[columns[yColumnIndex]] else {
+            return nil
+        }
+        return Array(zip(xs, ys)).map { (x: $0.0, y: $0.1) }
+    }
+
+    private func columnKey(matching requestedColumn: String) -> String? {
+        if valuesByColumn[requestedColumn] != nil {
+            return requestedColumn
+        }
+        let normalizedRequested = SpectroscopyColumnSchema.normalize(requestedColumn)
+        let matches = columns.filter {
+            SpectroscopyColumnSchema.normalize($0) == normalizedRequested
+        }
+        guard matches.count == 1 else { return nil }
+        return matches[0]
     }
 }
 
@@ -107,24 +176,48 @@ public struct SpectroscopyGroup: Identifiable, Hashable, Sendable {
     public let sxmID: SXMMetadata.ID
     public let sxmFilename: String
     public let kind: SpectroscopyKind
+    public let columnSchema: SpectroscopyColumnSchema
     public let xLabel: String
     public let yLabel: String
     public let spectra: [SpectroscopyFile]
     public let renderID: String
 
-    public init(sxm: SXMMetadata, kind: SpectroscopyKind, spectra: [SpectroscopyFile]) {
+    public init?(sxm: SXMMetadata, key: SpectroscopyGroupKey, spectra: [SpectroscopyFile]) {
+        guard !spectra.isEmpty,
+              spectra.allSatisfy({
+                  $0.kind == key.kind && $0.curve.columnSchema == key.columnSchema
+              }) else {
+            return nil
+        }
         let ordered = spectra.sorted { lhs, rhs in
             lhs.filename.localizedStandardCompare(rhs.filename) == .orderedAscending
         }
-        let stableID = "\(sxm.id.uuidString)-\(kind.rawValue)"
+        let stableID = "\(sxm.id.uuidString)-\(key.kind.rawValue)-\(key.columnSchema.fingerprint)"
         self.id = stableID
         self.sxmID = sxm.id
         self.sxmFilename = sxm.filename
-        self.kind = kind
+        self.kind = key.kind
+        self.columnSchema = key.columnSchema
         self.xLabel = ordered.first?.xLabel ?? "X"
         self.yLabel = ordered.first?.yLabel ?? "Y"
         self.spectra = ordered
         self.renderID = "\(stableID)-\(ordered.map { $0.id.uuidString }.joined(separator: ","))"
+    }
+
+    public static func compatibleGroups(
+        sxm: SXMMetadata,
+        spectra: [SpectroscopyFile]
+    ) -> [SpectroscopyGroup] {
+        let buckets = Dictionary(grouping: spectra) { spectrum in
+            SpectroscopyGroupKey(
+                kind: spectrum.kind,
+                columnSchema: spectrum.curve.columnSchema
+            )
+        }
+        return buckets.compactMap { key, spectra in
+            SpectroscopyGroup(sxm: sxm, key: key, spectra: spectra)
+        }
+        .sorted(by: groupOrderedBefore)
     }
 
     public var title: String {
@@ -136,15 +229,39 @@ public struct SpectroscopyGroup: Identifiable, Hashable, Sendable {
     }
 
     public var availableColumns: [String] {
-        var columns: [String] = []
-        var seen: Set<String> = []
-        for spectrum in spectra {
-            for column in spectrum.curve.columns where !seen.contains(column) {
-                columns.append(column)
-                seen.insert(column)
-            }
+        spectra.first?.curve.columns ?? []
+    }
+
+    public func canonicalColumn(matching column: String) -> String? {
+        if availableColumns.contains(column) {
+            return column
         }
-        return columns
+        let normalizedColumn = SpectroscopyColumnSchema.normalize(column)
+        let matches = availableColumns.filter {
+            SpectroscopyColumnSchema.normalize($0) == normalizedColumn
+        }
+        guard matches.count == 1 else { return nil }
+        return matches[0]
+    }
+
+    public func points(
+        for spectrum: SpectroscopyFile,
+        xColumn: String,
+        yColumn: String
+    ) -> [(x: Double, y: Double)]? {
+        guard spectra.contains(where: { $0.id == spectrum.id }),
+              spectrum.kind == kind,
+              spectrum.curve.columnSchema == columnSchema,
+              let canonicalX = canonicalColumn(matching: xColumn),
+              let canonicalY = canonicalColumn(matching: yColumn),
+              let xIndex = availableColumns.firstIndex(of: canonicalX),
+              let yIndex = availableColumns.firstIndex(of: canonicalY) else {
+            return nil
+        }
+        return spectrum.curve.points(
+            xColumnIndex: xIndex,
+            yColumnIndex: yIndex
+        )
     }
 
     public static func == (lhs: SpectroscopyGroup, rhs: SpectroscopyGroup) -> Bool {
@@ -153,5 +270,30 @@ public struct SpectroscopyGroup: Identifiable, Hashable, Sendable {
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(renderID)
+    }
+}
+
+private func groupOrderedBefore(
+    _ lhs: SpectroscopyGroup,
+    _ rhs: SpectroscopyGroup
+) -> Bool {
+    let lhsRank = spectroscopyKindRank(lhs.kind)
+    let rhsRank = spectroscopyKindRank(rhs.kind)
+    if lhsRank != rhsRank {
+        return lhsRank < rhsRank
+    }
+    if lhs.columnSchema.normalizedColumns != rhs.columnSchema.normalizedColumns {
+        return lhs.columnSchema.normalizedColumns.lexicographicallyPrecedes(
+            rhs.columnSchema.normalizedColumns
+        )
+    }
+    return lhs.id < rhs.id
+}
+
+private func spectroscopyKindRank(_ kind: SpectroscopyKind) -> Int {
+    switch kind {
+    case .z: 0
+    case .bias: 1
+    case .other: 2
     }
 }
