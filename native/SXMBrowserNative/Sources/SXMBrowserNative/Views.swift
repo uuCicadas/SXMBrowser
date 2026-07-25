@@ -678,6 +678,7 @@ struct SpectroscopySidebarRow: View {
             .labelsHidden()
             .controlSize(.mini)
             .frame(width: 16)
+            .disabled(!model.canModifySpectrumVisibility)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(spectrum.filename)

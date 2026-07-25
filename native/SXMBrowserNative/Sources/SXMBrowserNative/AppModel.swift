@@ -120,7 +120,8 @@ final class AppModel: ObservableObject {
     @Published var spectra: [SpectroscopyFile] = []
     @Published var spectrumGroupsByFileID: [SXMMetadata.ID: [SpectroscopyGroup]] = [:]
     @Published var spectrumParentIDBySpectrumID: [SpectroscopyFile.ID: SXMMetadata.ID] = [:]
-    @Published var hiddenSpectrumIDs: Set<SpectroscopyFile.ID> = []
+    @Published private(set) var hiddenSpectrumIDs:
+        Set<SpectroscopyFile.ID> = []
     @Published var sidebarSelectedSpectrumIDs: Set<SpectroscopyFile.ID> = []
     @Published private(set) var manuallyAssignedSXMIDBySpectrumID:
         [SpectroscopyFile.ID: SXMMetadata.ID] = [:]
@@ -263,6 +264,12 @@ final class AppModel: ObservableObject {
     }
 
     var canAssociateSpectra: Bool {
+        activeDatasetSession != nil
+            && !isLoading
+            && !isMetadataMutationInFlight
+    }
+
+    var canModifySpectrumVisibility: Bool {
         activeDatasetSession != nil
             && !isLoading
             && !isMetadataMutationInFlight
@@ -620,6 +627,7 @@ final class AppModel: ObservableObject {
                 spectra = scanned.1.items
                 scanIssues = scanned.0.issues + scanned.1.issues
                 restoreManualSpectrumAssociations()
+                restoreHiddenSpectrumVisibility()
                 rebuildSpectrumGroups()
                 var opensDroppedFileInSingleMode = false
                 if let selectedPath,
@@ -1673,17 +1681,65 @@ final class AppModel: ObservableObject {
     }
 
     func setSpectrum(_ spectrum: SpectroscopyFile, visible: Bool) {
-        if visible {
-            hiddenSpectrumIDs.remove(spectrum.id)
-        } else {
-            hiddenSpectrumIDs.insert(spectrum.id)
+        guard let session = activeDatasetSession else {
+            status = metadataUnavailableForSpectrumVisibilityMessage
+            return
         }
-        if let parentID = spectrumParentIDBySpectrumID[spectrum.id] {
-            rebuildSpectrumGroups(for: [parentID])
-        } else {
-            rebuildSpectrumGroups()
+        guard !isLoading else {
+            status = "Wait for the folder scan to finish."
+            return
         }
-        status = visible ? "Showing \(spectrum.filename)." : "Hidden \(spectrum.filename)."
+        guard !isMetadataMutationInFlight else {
+            status = "Wait for the current metadata update to finish."
+            return
+        }
+        guard spectra.contains(where: { $0.id == spectrum.id }) else {
+            status = "The spectrum is no longer available."
+            return
+        }
+        guard visible != isSpectrumVisible(spectrum) else { return }
+
+        let plan: HiddenSpectrumUpdatePlan
+        do {
+            plan = try HiddenSpectrumUpdatePlan(
+                datID: spectrum.id,
+                visible: visible,
+                pathIndex: session.pathIndex
+            )
+        } catch {
+            status = "Spectrum visibility could not be updated: "
+                + error.localizedDescription
+            return
+        }
+
+        let parentID = spectrumParentIDBySpectrumID[spectrum.id]
+        let updatedAt = Date()
+        performMetadataMutation(
+            unavailableMessage:
+                metadataUnavailableForSpectrumVisibilityMessage,
+            successMessage: visible
+                ? "Showing \(spectrum.filename)."
+                : "Hidden \(spectrum.filename).",
+            failurePrefix: "Spectrum visibility could not be updated",
+            mutation: { record in
+                let updated = try plan.applying(
+                    to: record.hiddenDATPaths
+                )
+                try record.replaceHiddenDATPaths(
+                    with: updated,
+                    updatedAt: updatedAt
+                )
+            },
+            onVerified: { [weak self] _ in
+                guard let self else { return }
+                restoreHiddenSpectrumVisibility()
+                if let parentID {
+                    rebuildSpectrumGroups(for: [parentID])
+                } else {
+                    rebuildSpectrumGroups()
+                }
+            }
+        )
     }
 
     func selectSpectrumRow(
@@ -2755,6 +2811,11 @@ final class AppModel: ObservableObject {
             + "Reopen the folder to retry."
     }
 
+    private var metadataUnavailableForSpectrumVisibilityMessage: String {
+        "Spectrum visibility metadata is unavailable for this folder. "
+            + "Reopen the folder to retry."
+    }
+
     private func restoreManualSpectrumAssociations() {
         guard let session = activeDatasetSession else {
             manualTargetPathByDATPath = [:]
@@ -2771,6 +2832,18 @@ final class AppModel: ObservableObject {
         manualAssociationProjection = projection
         manuallyAssignedSXMIDBySpectrumID =
             projection.resolvedSXMIDByDATID
+    }
+
+    private func restoreHiddenSpectrumVisibility() {
+        guard let session = activeDatasetSession else {
+            hiddenSpectrumIDs = []
+            return
+        }
+        let projection = HiddenSpectrumProjection(
+            hiddenDATPaths: session.verifiedRecord.hiddenDATPaths,
+            pathIndex: session.pathIndex
+        )
+        hiddenSpectrumIDs = projection.hiddenDATIDs
     }
 
     private func rebuildSpectrumGroups() {
