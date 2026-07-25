@@ -86,11 +86,11 @@ struct RenderedFrame {
 }
 
 private struct ProcessedRenderCache {
-    let key: String
+    let key: ProcessedRenderKey<SXMMetadata.ID>
     let matrix: Matrix
     let statistics: MatrixStatistics?
     let histogram: HistogramStats?
-    let histogramBins: Int
+    let histogramBins: Int?
 }
 
 @MainActor
@@ -144,7 +144,9 @@ final class AppModel: ObservableObject {
     @Published var histogramBins: Int = AppModel.loadInt(Defaults.histogramBins, fallback: 256, range: 64...1024) {
         didSet {
             UserDefaults.standard.set(histogramBins, forKey: Defaults.histogramBins)
-            controlsChanged()
+            if histogramBins != oldValue {
+                histogramBinsChanged()
+            }
         }
     }
     @Published var gridColumns: Int = AppModel.loadInt(Defaults.gridColumns, fallback: 3, range: 2...8) {
@@ -167,8 +169,10 @@ final class AppModel: ObservableObject {
     private let thumbnailLimiter = AsyncLimiter(limit: 4)
     private var scanTask: Task<Void, Never>?
     private var imageTask: Task<Void, Never>?
+    private var histogramTask: Task<Void, Never>?
     private var scaleRenderTask: Task<Void, Never>?
     private var renderRequestGate = RenderRequestGate<SXMMetadata.ID>()
+    private var histogramRequestGate = HistogramRequestGate<SXMMetadata.ID>()
     private var processedRenderCache: ProcessedRenderCache?
     private var spectrumDragPayloads: [String: [SpectroscopyFile.ID]] = [:]
 
@@ -191,7 +195,10 @@ final class AppModel: ObservableObject {
     }
 
     var selectedStats: HistogramStats? {
-        guard renderedFrame?.request.fileID == selectedID else { return nil }
+        guard renderedFrame?.request.fileID == selectedID,
+              renderedFrame?.stats?.bins == histogramBins else {
+            return nil
+        }
         return renderedFrame?.stats
     }
 
@@ -394,7 +401,9 @@ final class AppModel: ObservableObject {
     func openFolder(_ url: URL, selecting selectedPath: URL? = nil) {
         scanTask?.cancel()
         invalidateActiveRender(clearFrame: true)
-        renderRequestGate.beginNewDataset()
+        let datasetRevision = UUID()
+        renderRequestGate.beginNewDataset(revision: datasetRevision)
+        histogramRequestGate.beginNewDataset(revision: datasetRevision)
         folder = url
         UserDefaults.standard.set(url.path, forKey: Defaults.lastFolder)
         isLoading = true
@@ -849,7 +858,11 @@ final class AppModel: ObservableObject {
             refreshSelectedImage(resetScale: false)
         case .grid:
             imageTask?.cancel()
+            histogramTask?.cancel()
+            histogramTask = nil
             scaleRenderTask?.cancel()
+            renderRequestGate.invalidate()
+            histogramRequestGate.invalidate()
         }
     }
 
@@ -1153,12 +1166,21 @@ final class AppModel: ObservableObject {
         let processing = configuration.processing
         let palette = configuration.palette
         let invert = configuration.invert
-        let bins = configuration.histogramBins
-        let cacheKey = processedKey(file: file, channel: channel, direction: direction, processing: processing)
+        let processedKey = ProcessedRenderKey(
+            datasetRevision: renderRequestGate.datasetRevision,
+            fileID: file.id,
+            configuration: configuration.processedConfiguration
+        )
+        if processedRenderCache?.key != processedKey {
+            histogramTask?.cancel()
+            histogramTask = nil
+            histogramRequestGate.invalidate()
+            processedRenderCache = nil
+        }
 
         imageTask = Task {
             do {
-                let cached = processedRenderCache?.key == cacheKey
+                let cached = processedRenderCache?.key == processedKey
                     ? processedRenderCache
                     : nil
                 let processed: Matrix
@@ -1189,25 +1211,19 @@ final class AppModel: ObservableObject {
                 }
                 guard !Task.isCancelled, acceptsRenderRequest(request) else { return }
 
-                let stats: HistogramStats?
-                if let cached, cached.histogramBins == bins {
-                    stats = cached.histogram
-                } else if let statistics {
-                    let distribution = await Task.detached(priority: .userInitiated) {
-                        SXMRenderer.histogram(
-                            processed,
-                            statistics: statistics,
-                            bins: bins
-                        )
-                    }.value
-                    stats = HistogramStats(
+                if cached == nil {
+                    processedRenderCache = ProcessedRenderCache(
+                        key: processedKey,
+                        matrix: processed,
                         statistics: statistics,
-                        distribution: distribution
+                        histogram: nil,
+                        histogramBins: statistics == nil ? histogramBins : nil
                     )
-                } else {
-                    stats = nil
                 }
-                guard !Task.isCancelled, acceptsRenderRequest(request) else { return }
+                refreshHistogram(
+                    for: processedKey,
+                    fileID: file.id
+                )
 
                 let autoScale = statistics.map {
                     SXMRenderer.automaticScale($0)
@@ -1236,16 +1252,17 @@ final class AppModel: ObservableObject {
                 }.value
                 guard !Task.isCancelled, acceptsRenderRequest(request) else { return }
 
-                processedRenderCache = ProcessedRenderCache(
-                    key: cacheKey,
-                    matrix: processed,
-                    statistics: statistics,
-                    histogram: stats,
-                    histogramBins: bins
-                )
                 if case .automatic = configuration.scale {
                     scaleMin = autoScale?.vmin
                     scaleMax = autoScale?.vmax
+                }
+                let stats: HistogramStats?
+                if let currentCache = processedRenderCache,
+                   currentCache.key == processedKey,
+                   currentCache.histogramBins == histogramBins {
+                    stats = currentCache.histogram
+                } else {
+                    stats = nil
                 }
                 renderedFrame = RenderedFrame(
                     request: request,
@@ -1371,6 +1388,132 @@ final class AppModel: ObservableObject {
         )
     }
 
+    private func histogramBinsChanged() {
+        guard mode == .single, let file = selectedFile else {
+            histogramTask?.cancel()
+            histogramTask = nil
+            histogramRequestGate.invalidate()
+            return
+        }
+        let processedKey = ProcessedRenderKey(
+            datasetRevision: renderRequestGate.datasetRevision,
+            fileID: file.id,
+            configuration: currentRenderConfiguration.processedConfiguration
+        )
+        refreshHistogram(for: processedKey, fileID: file.id)
+    }
+
+    private func refreshHistogram(
+        for processedKey: ProcessedRenderKey<SXMMetadata.ID>,
+        fileID: SXMMetadata.ID
+    ) {
+        let configuration = currentRenderConfiguration
+        guard mode == .single,
+              selectedID == fileID,
+              let cache = processedRenderCache,
+              cache.key == processedKey else {
+            histogramTask?.cancel()
+            histogramTask = nil
+            histogramRequestGate.invalidate()
+            return
+        }
+
+        if let activeRequest = histogramRequestGate.activeRequest,
+           activeRequest.processedKey == processedKey,
+           histogramRequestGate.accepts(
+               activeRequest,
+               currentFileID: selectedID,
+               currentConfiguration: configuration
+           ) {
+            return
+        }
+
+        histogramTask?.cancel()
+        histogramTask = nil
+
+        if cache.histogramBins == configuration.histogramBins {
+            histogramRequestGate.invalidate()
+            publishHistogram(cache.histogram, for: processedKey)
+            return
+        }
+
+        guard let statistics = cache.statistics else {
+            processedRenderCache = ProcessedRenderCache(
+                key: cache.key,
+                matrix: cache.matrix,
+                statistics: nil,
+                histogram: nil,
+                histogramBins: configuration.histogramBins
+            )
+            histogramRequestGate.invalidate()
+            publishHistogram(nil, for: processedKey)
+            return
+        }
+
+        let request = histogramRequestGate.begin(
+            fileID: fileID,
+            configuration: configuration
+        )
+        let matrix = cache.matrix
+        histogramTask = Task {
+            let distribution = await Task.detached(priority: .userInitiated) {
+                SXMRenderer.histogram(
+                    matrix,
+                    statistics: statistics,
+                    bins: request.configuration.bins
+                )
+            }.value
+            guard !Task.isCancelled,
+                  acceptsHistogramRequest(request),
+                  let currentCache = processedRenderCache,
+                  currentCache.key == request.processedKey else {
+                return
+            }
+
+            let stats = HistogramStats(
+                statistics: statistics,
+                distribution: distribution
+            )
+            processedRenderCache = ProcessedRenderCache(
+                key: currentCache.key,
+                matrix: currentCache.matrix,
+                statistics: currentCache.statistics,
+                histogram: stats,
+                histogramBins: request.configuration.bins
+            )
+            publishHistogram(stats, for: request.processedKey)
+        }
+    }
+
+    private func acceptsHistogramRequest(
+        _ request: HistogramRequestIdentity<SXMMetadata.ID>
+    ) -> Bool {
+        mode == .single
+            && histogramRequestGate.accepts(
+                request,
+                currentFileID: selectedID,
+                currentConfiguration: currentRenderConfiguration
+            )
+    }
+
+    private func publishHistogram(
+        _ stats: HistogramStats?,
+        for processedKey: ProcessedRenderKey<SXMMetadata.ID>
+    ) {
+        guard let frame = renderedFrame,
+              frame.request.processedKey == processedKey,
+              acceptsRenderRequest(frame.request) else {
+            return
+        }
+        renderedFrame = RenderedFrame(
+            request: frame.request,
+            image: frame.image,
+            stats: stats,
+            automaticScaleMin: frame.automaticScaleMin,
+            automaticScaleMax: frame.automaticScaleMax
+        )
+    }
+
     private func acceptsRenderRequest(
         _ request: RenderRequestIdentity<SXMMetadata.ID>
     ) -> Bool {
@@ -1388,14 +1531,20 @@ final class AppModel: ObservableObject {
     ) {
         guard acceptsRenderRequest(request) else { return }
         renderRequestGate.invalidate()
+        histogramTask?.cancel()
+        histogramTask = nil
+        histogramRequestGate.invalidate()
         renderedFrame = nil
         status = message
     }
 
     private func invalidateActiveRender(clearFrame: Bool) {
         imageTask?.cancel()
+        histogramTask?.cancel()
+        histogramTask = nil
         scaleRenderTask?.cancel()
         renderRequestGate.invalidate()
+        histogramRequestGate.invalidate()
         if clearFrame {
             renderedFrame = nil
         }
@@ -1720,15 +1869,6 @@ final class AppModel: ObservableObject {
         let base = file.filename.replacingOccurrences(of: ".sxm", with: "", options: [.caseInsensitive, .anchored], range: nil)
         let channel = selectedChannel.replacingOccurrences(of: "/", with: "-")
         return "\(base)__\(channel)__\(selectedDirection.rawValue)__\(selectedProcessing.rawValue).png"
-    }
-
-    private func processedKey(
-        file: SXMMetadata,
-        channel: String,
-        direction: ScanDirection,
-        processing: ProcessingMode
-    ) -> String {
-        "\(file.path.path)|\(channel)|\(direction.rawValue)|\(processing.rawValue)"
     }
 
     private enum Defaults {

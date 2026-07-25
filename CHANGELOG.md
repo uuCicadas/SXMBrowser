@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 26 (2026-07-25): rebin histograms without rerendering images
 - Build 25 (2026-07-25): reuse matrix statistics across histogram bins
 - Build 24 (2026-07-25): bundle immutable machine-independent palettes
 - Build 23 (2026-07-25): keep independent spectroscopy axes per group
