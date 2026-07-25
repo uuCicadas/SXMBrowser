@@ -1735,11 +1735,7 @@ struct MainImageView: View {
 
             Divider()
 
-            if model.mode == .grid {
-                GridBrowserView(model: model)
-            } else {
-                SingleImageView(model: model)
-            }
+            browserContent
         }
         .background(AppTheme.page)
         .overlay {
@@ -1749,6 +1745,201 @@ struct MainImageView: View {
         }
         .onMoveCommand { direction in
             model.moveSelectionForArrow(direction)
+        }
+    }
+
+    @ViewBuilder
+    private var browserContent: some View {
+        switch model.browserContentState {
+        case .openFolder:
+            BrowserStateView(
+                icon: "folder.badge.plus",
+                title: "Open an SXM Folder",
+                message:
+                    "Choose a folder containing SXM files to begin."
+            ) {
+                Button("Open Folder") {
+                    model.chooseFolder()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
+        case .loadingFolder:
+            BrowserStateView(
+                icon: "folder",
+                title: "Scanning Folder",
+                message:
+                    "Reading SXM files, spectra, and saved metadata.",
+                showsProgress: true
+            )
+
+        case .folderFailed(let message):
+            BrowserStateView(
+                icon: "exclamationmark.triangle",
+                title: "Folder Could Not Be Read",
+                message: message
+            ) {
+                Button("Retry") {
+                    model.retryCurrentFolder()
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Open Another Folder") {
+                    model.chooseFolder()
+                }
+                .buttonStyle(.bordered)
+            }
+
+        case .emptyFolder:
+            BrowserStateView(
+                icon: "tray",
+                title: "No SXM Files",
+                message:
+                    "This folder contains no readable SXM files."
+            ) {
+                Button("Open Another Folder") {
+                    model.chooseFolder()
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Retry") {
+                    model.retryCurrentFolder()
+                }
+                .buttonStyle(.bordered)
+            }
+
+        case .noSearchResults:
+            BrowserStateView(
+                icon: "magnifyingglass",
+                title: "No Matching Files",
+                message:
+                    "No SXM or associated DAT filename matches this search."
+            ) {
+                Button("Clear Search") {
+                    model.clearFilenameSearch()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
+        case .noVisibleFiles:
+            BrowserStateView(
+                icon: "line.3.horizontal.decrease.circle",
+                title: "No Files in This View",
+                message:
+                    "Choose another tag or return to All files."
+            )
+
+        case .gridReady:
+            GridBrowserView(model: model)
+
+        case .noSelection:
+            BrowserStateView(
+                icon: "cursorarrow.click",
+                title: "No File Selected",
+                message:
+                    "Select an SXM file, or return to Grid to browse."
+            ) {
+                Button("Show Grid") {
+                    model.setMode(.grid)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
+        case .renderLoading:
+            BrowserStateView(
+                icon: "photo",
+                title: "Rendering Image",
+                message:
+                    "Preparing the selected channel and statistics.",
+                showsProgress: true
+            )
+
+        case .renderReady:
+            SingleImageView(model: model)
+
+        case .renderFailed(_, let message):
+            BrowserStateView(
+                icon: "exclamationmark.octagon",
+                title: "Image Could Not Be Rendered",
+                message: message
+            ) {
+                Button("Retry") {
+                    model.retrySelectedRender()
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Show in Finder") {
+                    model.revealSelectedFileInFinder()
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+}
+
+struct BrowserStateView<Actions: View>: View {
+    let icon: String
+    let title: String
+    let message: String
+    var showsProgress = false
+    @ViewBuilder let actions: Actions
+
+    init(
+        icon: String,
+        title: String,
+        message: String,
+        showsProgress: Bool = false,
+        @ViewBuilder actions: () -> Actions
+    ) {
+        self.icon = icon
+        self.title = title
+        self.message = message
+        self.showsProgress = showsProgress
+        self.actions = actions()
+    }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            if showsProgress {
+                ProgressView()
+                    .controlSize(.large)
+            } else {
+                Image(systemName: icon)
+                    .font(.system(size: 34, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(title)
+                .font(.title3.weight(.semibold))
+            Text(message)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .textSelection(.enabled)
+                .frame(maxWidth: 460)
+
+            HStack(spacing: 8) {
+                actions
+            }
+            .controlSize(.large)
+        }
+        .padding(28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(AppTheme.stage)
+    }
+}
+
+extension BrowserStateView where Actions == EmptyView {
+    init(
+        icon: String,
+        title: String,
+        message: String,
+        showsProgress: Bool = false
+    ) {
+        self.init(
+            icon: icon,
+            title: title,
+            message: message,
+            showsProgress: showsProgress
+        ) {
+            EmptyView()
         }
     }
 }

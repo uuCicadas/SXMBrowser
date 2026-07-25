@@ -187,7 +187,8 @@ final class AppModel: ObservableObject {
     @Published var isInspectorVisible = AppModel.loadBool(Defaults.inspectorVisible, fallback: true) {
         didSet { UserDefaults.standard.set(isInspectorVisible, forKey: Defaults.inspectorVisible) }
     }
-    @Published var isLoading = false
+    @Published private(set) var datasetLoadState: DatasetLoadState =
+        .idle
     @Published var status = "Choose a folder with .sxm files."
     @Published private(set) var scanIssues: [ScanIssue] = []
     @Published private(set) var metadataWarnings =
@@ -212,6 +213,8 @@ final class AppModel: ObservableObject {
 
     @Published private(set) var renderedFrame:
         CoordinatorRenderedFrame?
+    @Published private(set) var selectedRenderState:
+        SelectedRenderState<SXMMetadata.ID> = .idle
     @Published var scalePreset: ScalePreset = .percentile
     @Published var histogramBins: Int = AppModel.loadInt(Defaults.histogramBins, fallback: 256, range: 64...1024) {
         didSet {
@@ -310,6 +313,26 @@ final class AppModel: ObservableObject {
 
     var selectedCount: Int {
         selectedIDs.count
+    }
+
+    var isLoading: Bool {
+        datasetLoadState.isLoading
+    }
+
+    var browserContentState: BrowserContentState<SXMMetadata.ID> {
+        BrowserContentProjection.resolve(
+            datasetState: datasetLoadState,
+            totalFileCount: files.count,
+            visibleFileCount: visibleFiles.count,
+            searchIsActive: !appliedFilenameSearch
+                .trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+                .isEmpty,
+            isSingleMode: mode == .single,
+            selectedFileID: selectedID,
+            renderState: selectedRenderState
+        )
     }
 
     var isMetadataBusy: Bool {
@@ -639,6 +662,28 @@ final class AppModel: ObservableObject {
         if panel.runModal() == .OK, let url = panel.url {
             openFolder(url)
         }
+    }
+
+    func retryCurrentFolder() {
+        guard let folder else {
+            chooseFolder()
+            return
+        }
+        openFolder(folder, selecting: selectedFile?.path)
+    }
+
+    func retrySelectedRender() {
+        guard mode == .single, selectedFile != nil else {
+            return
+        }
+        refreshSelectedImage(resetScale: false)
+    }
+
+    func revealSelectedFileInFinder() {
+        guard let path = selectedFile?.path else {
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([path])
     }
 
     func exportMetadata() {
@@ -1163,7 +1208,8 @@ final class AppModel: ObservableObject {
             openedURL.path,
             forKey: Defaults.lastFolder
         )
-        isLoading = true
+        datasetLoadState = .loading
+        selectedRenderState = .idle
         status = "Scanning folder..."
         resetMetadataWarnings(to: initialMetadataWarnings)
         activeDatasetSession = nil
@@ -1302,7 +1348,7 @@ final class AppModel: ObservableObject {
                     selection.selectOnly(firstID, in: visibleFiles.map(\.id))
                 }
                 applyDefaultsFromSelection()
-                isLoading = false
+                datasetLoadState = .ready
                 let groupCount = spectrumGroupsByFileID.values.reduce(0) { $0 + $1.count }
                 let axisIssueText =
                     presentedSpectrumAxisRestoreIssues.isEmpty
@@ -1322,8 +1368,9 @@ final class AppModel: ObservableObject {
                       ) else {
                     return
                 }
-                isLoading = false
-                status = error.localizedDescription
+                let message = error.localizedDescription
+                datasetLoadState = .failed(message: message)
+                status = message
             }
         }
     }
@@ -2904,6 +2951,7 @@ final class AppModel: ObservableObject {
 
     func refreshSelectedImage(resetScale: Bool) {
         guard let file = selectedFile, !selectedChannel.isEmpty else {
+            selectedRenderState = .idle
             invalidateActiveRender(clearFrame: true)
             return
         }
@@ -3039,6 +3087,7 @@ final class AppModel: ObservableObject {
                 return
             }
             renderedFrame = nil
+            selectedRenderState = .loading(fileID: request.fileID)
             let filename = files.first {
                 $0.id == request.fileID
             }?.filename ?? "image"
@@ -3047,6 +3096,9 @@ final class AppModel: ObservableObject {
         case .imageReady(let frame):
             guard acceptsCoordinatorFrame(frame) else { return }
             renderedFrame = frame
+            selectedRenderState = .ready(
+                fileID: frame.request.fileID
+            )
             if case .automatic = frame.configuration.scale {
                 scaleMin = frame.automaticScaleMin
                 scaleMax = frame.automaticScaleMax
@@ -3058,6 +3110,9 @@ final class AppModel: ObservableObject {
         case .histogramReady(let frame):
             guard acceptsCoordinatorFrame(frame) else { return }
             renderedFrame = frame
+            selectedRenderState = .ready(
+                fileID: frame.request.fileID
+            )
 
         case .failed(let failure):
             guard mode == .single,
@@ -3068,10 +3123,15 @@ final class AppModel: ObservableObject {
                 return
             }
             renderedFrame = nil
+            selectedRenderState = .failed(
+                fileID: failure.request.fileID,
+                message: failure.message
+            )
             status = failure.message
 
         case .cleared:
             renderedFrame = nil
+            selectedRenderState = .idle
         }
     }
 
