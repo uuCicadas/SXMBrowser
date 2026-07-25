@@ -78,14 +78,6 @@ enum ScalePreset: String, CaseIterable, Identifiable {
     }
 }
 
-struct RenderedFrame {
-    let request: RenderRequestIdentity<SXMMetadata.ID>
-    let image: NSImage
-    let stats: HistogramStats?
-    let automaticScaleMin: Double?
-    let automaticScaleMax: Double?
-}
-
 enum MetadataImportWorkflowPhase: Equatable {
     case loading
     case preview
@@ -138,14 +130,6 @@ private enum MetadataTransferWorkflowError: LocalizedError {
             "The open dataset changed. Start the metadata operation again."
         }
     }
-}
-
-private struct ProcessedRenderCache {
-    let key: ProcessedRenderKey<SXMMetadata.ID>
-    let matrix: Matrix
-    let statistics: MatrixStatistics?
-    let histogram: HistogramStats?
-    let histogramBins: Int?
 }
 
 @MainActor
@@ -225,7 +209,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var spectrumAxisRestoreIssues:
         [SpectrumAxisPreferenceRestoreIssue] = []
 
-    @Published private(set) var renderedFrame: RenderedFrame?
+    @Published private(set) var renderedFrame:
+        CoordinatorRenderedFrame?
     @Published var scalePreset: ScalePreset = .percentile
     @Published var histogramBins: Int = AppModel.loadInt(Defaults.histogramBins, fallback: 256, range: 64...1024) {
         didSet {
@@ -246,18 +231,14 @@ final class AppModel: ObservableObject {
     private let metadataStore: DatasetMetadataStore
     private let legacyTagMigrator: LegacyTagMigrator
     private let folderBookmarker: any FolderBookmarking
-    private var matrixCache = MatrixLoadCache()
+    private let renderCoordinator: RenderCoordinator
     private let thumbnailCache = NSCache<NSString, NSImage>()
     private var thumbnailTasks: [String: ThumbnailTaskEntry] = [:]
     private let thumbnailLimiter = AsyncLimiter(limit: 4)
     private var startupTask: Task<Void, Never>?
     private var startupRequestID: UUID?
     private var scanTask: Task<Void, Never>?
-    private var imageTask: Task<Void, Never>?
-    private var histogramTask: Task<Void, Never>?
     private var scaleRenderTask: Task<Void, Never>?
-    private var renderRequestGate = RenderRequestGate<SXMMetadata.ID>()
-    private var histogramRequestGate = HistogramRequestGate<SXMMetadata.ID>()
     private var datasetSessionGate = DatasetSessionGate()
     private var metadataMutationTask: Task<Void, Never>?
     private var metadataMutationID: UUID?
@@ -268,19 +249,24 @@ final class AppModel: ObservableObject {
         [DatasetRelativePath: DatasetRelativePath] = [:]
     private var manualAssociationProjection:
         ManualSpectrumAssociationProjection?
-    private var processedRenderCache: ProcessedRenderCache?
     private var spectrumDragPayloads: [String: [SpectroscopyFile.ID]] = [:]
     private var securityScopedFolderURL: URL?
 
     init(
         metadataStore: DatasetMetadataStore = DatasetMetadataStore(),
-        folderBookmarker: any FolderBookmarking = MacOSFolderBookmarker()
+        folderBookmarker: any FolderBookmarking =
+            MacOSFolderBookmarker(),
+        renderCoordinator: RenderCoordinator = RenderCoordinator()
     ) {
         self.metadataStore = metadataStore
         legacyTagMigrator = LegacyTagMigrator(metadataStore: metadataStore)
         self.folderBookmarker = folderBookmarker
+        self.renderCoordinator = renderCoordinator
         thumbnailCache.countLimit = 180
         thumbnailCache.totalCostLimit = 64 * 1024 * 1024
+        renderCoordinator.onEvent = { [weak self] event in
+            self?.handleRenderCoordinatorEvent(event)
+        }
     }
 
     var selectedID: SXMMetadata.ID? {
@@ -1078,8 +1064,7 @@ final class AppModel: ObservableObject {
         stopSecurityScopedFolderAccess()
 
         let sessionID = datasetSessionGate.begin()
-        renderRequestGate.beginNewDataset(revision: sessionID)
-        histogramRequestGate.beginNewDataset(revision: sessionID)
+        renderCoordinator.beginDataset(revision: sessionID)
         let openedURL = url.standardizedFileURL
         if openedURL.startAccessingSecurityScopedResource() {
             securityScopedFolderURL = openedURL
@@ -1115,12 +1100,6 @@ final class AppModel: ObservableObject {
         spectrumAxisState.clear()
         spectrumAxisRestoreIssues.removeAll()
         datasetInventoryRevisionID = nil
-        processedRenderCache = nil
-        let previousMatrixCache = matrixCache
-        matrixCache = MatrixLoadCache()
-        Task {
-            await previousMatrixCache.clear()
-        }
         thumbnailCache.removeAllObjects()
         cancelThumbnailTasks()
 
@@ -2389,7 +2368,7 @@ final class AppModel: ObservableObject {
         scaleLocked = false
         scaleMin = nil
         scaleMax = nil
-        processedRenderCache = nil
+        renderCoordinator.discardProcessedData()
     }
 
     func setMode(_ newMode: BrowserMode) {
@@ -2404,12 +2383,8 @@ final class AppModel: ObservableObject {
         case .single:
             refreshSelectedImage(resetScale: false)
         case .grid:
-            imageTask?.cancel()
-            histogramTask?.cancel()
-            histogramTask = nil
             scaleRenderTask?.cancel()
-            renderRequestGate.invalidate()
-            histogramRequestGate.invalidate()
+            renderCoordinator.invalidate(clearFrame: false)
         }
     }
 
@@ -2830,7 +2805,6 @@ final class AppModel: ObservableObject {
     }
 
     func refreshSelectedImage(resetScale: Bool) {
-        imageTask?.cancel()
         guard let file = selectedFile, !selectedChannel.isEmpty else {
             invalidateActiveRender(clearFrame: true)
             return
@@ -2841,160 +2815,10 @@ final class AppModel: ObservableObject {
             scaleMax = nil
         }
 
-        let configuration = currentRenderConfiguration
-        let request = renderRequestGate.begin(
-            fileID: file.id,
-            configuration: configuration
+        renderCoordinator.render(
+            file: file,
+            configuration: currentRenderConfiguration
         )
-        renderedFrame = nil
-        status = "Rendering \(file.filename)..."
-
-        let channel = configuration.channel
-        let direction = configuration.direction
-        let processing = configuration.processing
-        let palette = configuration.palette
-        let invert = configuration.invert
-        let processedKey = ProcessedRenderKey(
-            datasetRevision: renderRequestGate.datasetRevision,
-            fileID: file.id,
-            configuration: configuration.processedConfiguration
-        )
-        if processedRenderCache?.key != processedKey {
-            histogramTask?.cancel()
-            histogramTask = nil
-            histogramRequestGate.invalidate()
-            processedRenderCache = nil
-        }
-
-        imageTask = Task {
-            do {
-                let cached = processedRenderCache?.key == processedKey
-                    ? processedRenderCache
-                    : nil
-                let processed: Matrix
-                if let cached {
-                    processed = cached.matrix
-                } else {
-                    let matrixKey = MatrixKey(
-                        channel: channel,
-                        direction: direction
-                    )
-                    let matrix: Matrix
-                    do {
-                        matrix = try await loadMatrix(
-                            for: file,
-                            key: matrixKey,
-                            priority: .userInitiated
-                        )
-                    } catch let error as SXMParserError {
-                        guard case .matrixNotFound = error else {
-                            throw error
-                        }
-                        publishRenderFailure(
-                            request,
-                            message: "Direction is not available for this channel."
-                        )
-                        return
-                    }
-                    processed = try await runDetachedCancellable(
-                        priority: .userInitiated
-                    ) {
-                        try SXMRenderer.processedMatrix(
-                            matrix,
-                            processing: processing,
-                            cancellation: .task
-                        )
-                    }
-                }
-                guard !Task.isCancelled, acceptsRenderRequest(request) else { return }
-
-                let statistics: MatrixStatistics?
-                if let cached {
-                    statistics = cached.statistics
-                } else {
-                    statistics = try await runDetachedCancellable(
-                        priority: .userInitiated
-                    ) {
-                        try SXMRenderer.statistics(
-                            processed,
-                            cancellation: .task
-                        )
-                    }
-                }
-                guard !Task.isCancelled, acceptsRenderRequest(request) else { return }
-
-                if cached == nil {
-                    processedRenderCache = ProcessedRenderCache(
-                        key: processedKey,
-                        matrix: processed,
-                        statistics: statistics,
-                        histogram: nil,
-                        histogramBins: statistics == nil ? histogramBins : nil
-                    )
-                }
-                refreshHistogram(
-                    for: processedKey,
-                    fileID: file.id
-                )
-
-                let autoScale = statistics.map {
-                    SXMRenderer.automaticScale($0)
-                }
-                let renderMin: Double?
-                let renderMax: Double?
-                switch configuration.scale {
-                case .automatic:
-                    renderMin = autoScale?.vmin
-                    renderMax = autoScale?.vmax
-                case .locked(let min, let max):
-                    renderMin = min
-                    renderMax = max
-                }
-                let options = RenderOptions(
-                    channel: channel,
-                    direction: direction,
-                    processing: processing,
-                    palette: palette,
-                    vmin: renderMin,
-                    vmax: renderMax,
-                    invert: invert
-                )
-                let image = try await runDetachedCancellable(
-                    priority: .userInitiated
-                ) {
-                    try SXMRenderer.renderProcessedImage(
-                        matrix: processed,
-                        options: options,
-                        cancellation: .task
-                    )
-                }
-                guard !Task.isCancelled, acceptsRenderRequest(request) else { return }
-
-                if case .automatic = configuration.scale {
-                    scaleMin = autoScale?.vmin
-                    scaleMax = autoScale?.vmax
-                }
-                let stats: HistogramStats?
-                if let currentCache = processedRenderCache,
-                   currentCache.key == processedKey,
-                   currentCache.histogramBins == histogramBins {
-                    stats = currentCache.histogram
-                } else {
-                    stats = nil
-                }
-                renderedFrame = RenderedFrame(
-                    request: request,
-                    image: image,
-                    stats: stats,
-                    automaticScaleMin: autoScale?.vmin,
-                    automaticScaleMax: autoScale?.vmax
-                )
-                status = file.filename
-            } catch {
-                guard !Task.isCancelled else { return }
-                publishRenderFailure(request, message: error.localizedDescription)
-            }
-        }
     }
 
     func exportPNG() {
@@ -3014,7 +2838,7 @@ final class AppModel: ObservableObject {
 
         Task {
             do {
-                let matrix = try await loadMatrix(
+                let matrix = try await renderCoordinator.matrix(
                     for: file,
                     key: MatrixKey(
                         channel: channel,
@@ -3045,28 +2869,6 @@ final class AppModel: ObservableObject {
             } catch {
                 status = error.localizedDescription
             }
-        }
-    }
-
-    private func loadMatrix(
-        for metadata: SXMMetadata,
-        key: MatrixKey,
-        priority: TaskPriority?
-    ) async throws -> Matrix {
-        let cache = matrixCache
-        let cacheKey = MatrixCacheKey(
-            datasetRevision: renderRequestGate.datasetRevision,
-            fileID: metadata.id,
-            path: metadata.path,
-            modifiedTime: metadata.modifiedTime,
-            matrixKey: key
-        )
-        let parser = self.parser
-        return try await cache.matrix(
-            for: cacheKey,
-            priority: priority
-        ) {
-            try parser.loadMatrix(metadata, key: key)
         }
     }
 
@@ -3119,172 +2921,86 @@ final class AppModel: ObservableObject {
 
     private func histogramBinsChanged() {
         guard mode == .single, let file = selectedFile else {
-            histogramTask?.cancel()
-            histogramTask = nil
-            histogramRequestGate.invalidate()
             return
         }
-        let processedKey = ProcessedRenderKey(
-            datasetRevision: renderRequestGate.datasetRevision,
+        renderCoordinator.updateHistogram(
             fileID: file.id,
-            configuration: currentRenderConfiguration.processedConfiguration
+            configuration: currentRenderConfiguration
         )
-        refreshHistogram(for: processedKey, fileID: file.id)
     }
 
-    private func refreshHistogram(
-        for processedKey: ProcessedRenderKey<SXMMetadata.ID>,
-        fileID: SXMMetadata.ID
+    private func handleRenderCoordinatorEvent(
+        _ event: RenderCoordinatorEvent
     ) {
-        let configuration = currentRenderConfiguration
-        guard mode == .single,
-              selectedID == fileID,
-              let cache = processedRenderCache,
-              cache.key == processedKey else {
-            histogramTask?.cancel()
-            histogramTask = nil
-            histogramRequestGate.invalidate()
-            return
-        }
-
-        if let activeRequest = histogramRequestGate.activeRequest,
-           activeRequest.processedKey == processedKey,
-           histogramRequestGate.accepts(
-               activeRequest,
-               currentFileID: selectedID,
-               currentConfiguration: configuration
-           ) {
-            return
-        }
-
-        histogramTask?.cancel()
-        histogramTask = nil
-
-        if cache.histogramBins == configuration.histogramBins {
-            histogramRequestGate.invalidate()
-            publishHistogram(cache.histogram, for: processedKey)
-            return
-        }
-
-        guard let statistics = cache.statistics else {
-            processedRenderCache = ProcessedRenderCache(
-                key: cache.key,
-                matrix: cache.matrix,
-                statistics: nil,
-                histogram: nil,
-                histogramBins: configuration.histogramBins
-            )
-            histogramRequestGate.invalidate()
-            publishHistogram(nil, for: processedKey)
-            return
-        }
-
-        let request = histogramRequestGate.begin(
-            fileID: fileID,
-            configuration: configuration
-        )
-        let matrix = cache.matrix
-        histogramTask = Task {
-            let distribution: HistogramDistribution
-            do {
-                distribution = try await runDetachedCancellable(
-                    priority: .userInitiated
-                ) {
-                    try SXMRenderer.histogram(
-                        matrix,
-                        statistics: statistics,
-                        bins: request.configuration.bins,
-                        cancellation: .task
-                    )
-                }
-            } catch {
+        switch event {
+        case .started(let request, let configuration):
+            guard acceptsCoordinatorRequest(
+                request,
+                configuration: configuration
+            ) else {
                 return
             }
-            guard !Task.isCancelled,
-                  acceptsHistogramRequest(request),
-                  let currentCache = processedRenderCache,
-                  currentCache.key == request.processedKey else {
+            renderedFrame = nil
+            let filename = files.first {
+                $0.id == request.fileID
+            }?.filename ?? "image"
+            status = "Rendering \(filename)..."
+
+        case .imageReady(let frame):
+            guard acceptsCoordinatorFrame(frame) else { return }
+            renderedFrame = frame
+            if case .automatic = frame.configuration.scale {
+                scaleMin = frame.automaticScaleMin
+                scaleMax = frame.automaticScaleMax
+            }
+            status = files.first {
+                $0.id == frame.request.fileID
+            }?.filename ?? "Image rendered."
+
+        case .histogramReady(let frame):
+            guard acceptsCoordinatorFrame(frame) else { return }
+            renderedFrame = frame
+
+        case .failed(let failure):
+            guard mode == .single,
+                  selectedID == failure.request.fileID,
+                  failure.request.configuration
+                    == currentRenderConfiguration
+                        .imageConfiguration else {
                 return
             }
+            renderedFrame = nil
+            status = failure.message
 
-            let stats = HistogramStats(
-                statistics: statistics,
-                distribution: distribution
-            )
-            processedRenderCache = ProcessedRenderCache(
-                key: currentCache.key,
-                matrix: currentCache.matrix,
-                statistics: currentCache.statistics,
-                histogram: stats,
-                histogramBins: request.configuration.bins
-            )
-            publishHistogram(stats, for: request.processedKey)
+        case .cleared:
+            renderedFrame = nil
         }
     }
 
-    private func acceptsHistogramRequest(
-        _ request: HistogramRequestIdentity<SXMMetadata.ID>
-    ) -> Bool {
-        mode == .single
-            && histogramRequestGate.accepts(
-                request,
-                currentFileID: selectedID,
-                currentConfiguration: currentRenderConfiguration
-            )
-    }
-
-    private func publishHistogram(
-        _ stats: HistogramStats?,
-        for processedKey: ProcessedRenderKey<SXMMetadata.ID>
-    ) {
-        guard let frame = renderedFrame,
-              frame.request.processedKey == processedKey,
-              acceptsRenderRequest(frame.request) else {
-            return
-        }
-        renderedFrame = RenderedFrame(
-            request: frame.request,
-            image: frame.image,
-            stats: stats,
-            automaticScaleMin: frame.automaticScaleMin,
-            automaticScaleMax: frame.automaticScaleMax
-        )
-    }
-
-    private func acceptsRenderRequest(
-        _ request: RenderRequestIdentity<SXMMetadata.ID>
-    ) -> Bool {
-        mode == .single
-            && renderRequestGate.accepts(
-                request,
-                currentFileID: selectedID,
-                currentConfiguration: currentRenderConfiguration
-            )
-    }
-
-    private func publishRenderFailure(
+    private func acceptsCoordinatorRequest(
         _ request: RenderRequestIdentity<SXMMetadata.ID>,
-        message: String
-    ) {
-        guard acceptsRenderRequest(request) else { return }
-        renderRequestGate.invalidate()
-        histogramTask?.cancel()
-        histogramTask = nil
-        histogramRequestGate.invalidate()
-        renderedFrame = nil
-        status = message
+        configuration: SelectedRenderConfiguration
+    ) -> Bool {
+        mode == .single
+            && selectedID == request.fileID
+            && configuration == currentRenderConfiguration
+            && request.configuration
+                == configuration.imageConfiguration
+    }
+
+    private func acceptsCoordinatorFrame(
+        _ frame: CoordinatorRenderedFrame
+    ) -> Bool {
+        acceptsCoordinatorRequest(
+            frame.request,
+            configuration: frame.configuration
+        )
     }
 
     private func invalidateActiveRender(clearFrame: Bool) {
-        imageTask?.cancel()
-        histogramTask?.cancel()
-        histogramTask = nil
         scaleRenderTask?.cancel()
-        renderRequestGate.invalidate()
-        histogramRequestGate.invalidate()
-        if clearFrame {
-            renderedFrame = nil
-        }
+        scaleRenderTask = nil
+        renderCoordinator.invalidate(clearFrame: clearFrame)
     }
 
     private func clearSelectedRender() {
@@ -3316,12 +3032,13 @@ final class AppModel: ObservableObject {
     }
 
     private func removeCachedData(for url: URL) {
-        let cache = matrixCache
         let path = url.standardizedFileURL.path
-        Task {
-            await cache.removeEntries(forStandardizedPath: path)
+        renderCoordinator.removeMatrixEntries(
+            forStandardizedPath: path
+        )
+        if selectedFile?.path.standardizedFileURL.path == path {
+            renderCoordinator.discardProcessedData()
         }
-        processedRenderCache = nil
         thumbnailCache.removeAllObjects()
         cancelThumbnailTasks()
     }
@@ -3874,7 +3591,7 @@ final class AppModel: ObservableObject {
 
         do {
             if Task.isCancelled { return nil }
-            let matrix = try await loadMatrix(
+            let matrix = try await renderCoordinator.matrix(
                 for: file,
                 key: MatrixKey(
                     channel: channel,

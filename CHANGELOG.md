@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 47 (2026-07-25): route app rendering through the shared coordinator
 - Build 46 (2026-07-25): add injectable single-flight render coordinator
 - Build 45 (2026-07-25): surface persistent metadata warnings with retry and details
 - Build 44 (2026-07-25): add metadata export import preview and atomic apply workflow
