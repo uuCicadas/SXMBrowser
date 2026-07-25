@@ -100,17 +100,27 @@ public final class SXMParser: Sendable {
     }
 
     public func loadMetadata(_ url: URL) throws -> SXMMetadata {
+        try Task.checkCancellation()
         let headerRead = try readHeader(url)
+        try Task.checkCancellation()
         return try metadata(
             from: url,
             header: headerRead.header,
-            specs: parseDataInfo(headerRead.header["DATA_INFO"] ?? "")
+            specs: try parseDataInfo(
+                headerRead.header["DATA_INFO"] ?? "",
+                cancellation: .task
+            )
         )
     }
 
     public func loadFullFile(_ metadata: SXMMetadata) throws -> SXMFullFile {
+        try Task.checkCancellation()
         let headerRead = try readHeader(metadata.path)
-        let specs = parseDataInfo(headerRead.header["DATA_INFO"] ?? "")
+        try Task.checkCancellation()
+        let specs = try parseDataInfo(
+            headerRead.header["DATA_INFO"] ?? "",
+            cancellation: .task
+        )
         let currentMetadata = try self.metadata(
             from: metadata.path,
             header: headerRead.header,
@@ -121,6 +131,7 @@ public final class SXMParser: Sendable {
             headerRead.header["SCANIT_TYPE"],
             url: metadata.path
         )
+        try Task.checkCancellation()
         let matrices = try readMatrices(
             url: metadata.path,
             offset: headerRead.bodyOffset,
@@ -129,6 +140,7 @@ public final class SXMParser: Sendable {
             specs: specs,
             encoding: encoding
         )
+        try Task.checkCancellation()
         let channels = channelsFromSpecs(specs, matrices: matrices)
         let refreshed = SXMMetadata(
             id: metadata.id,
@@ -158,12 +170,14 @@ public final class SXMParser: Sendable {
         specs: [ChannelSpec],
         id: UUID = UUID()
     ) throws -> SXMMetadata {
+        try Task.checkCancellation()
         let pixels = try parsePixels(header["SCAN_PIXELS"], url: url)
         guard !specs.isEmpty else { throw SXMParserError.missingChannels(url) }
         var channelNames: Set<String> = []
         for spec in specs where !channelNames.insert(spec.name).inserted {
             throw SXMParserError.duplicateChannel(url, name: spec.name)
         }
+        try Task.checkCancellation()
         _ = try storageEncoding(header["SCANIT_TYPE"], url: url)
 
         let resourceValues = try? url.resourceValues(forKeys: [.contentModificationDateKey])
@@ -190,6 +204,7 @@ public final class SXMParser: Sendable {
     }
 
     private func readHeader(_ url: URL) throws -> (text: String, header: [String: String], bodyOffset: UInt64) {
+        try Task.checkCancellation()
         guard let handle = try? FileHandle(forReadingFrom: url) else {
             throw SXMParserError.cannotOpen(url)
         }
@@ -198,13 +213,19 @@ public final class SXMParser: Sendable {
         var buffer = Data()
         var totalOffset: UInt64 = 0
         while true {
+            try Task.checkCancellation()
             let chunk = try handle.read(upToCount: 64 * 1024) ?? Data()
             if chunk.isEmpty { break }
             buffer.append(chunk)
             if let range = buffer.range(of: dataMarker) {
                 let headerData = buffer.subdata(in: 0..<range.lowerBound)
                 let text = String(data: headerData, encoding: .isoLatin1) ?? String(decoding: headerData, as: UTF8.self)
-                return (text, parseHeader(text), UInt64(range.upperBound))
+                try Task.checkCancellation()
+                return (
+                    text,
+                    try parseHeader(text, cancellation: .task),
+                    UInt64(range.upperBound)
+                )
             }
             totalOffset += UInt64(chunk.count)
             if totalOffset > 16 * 1024 * 1024 {
@@ -222,6 +243,7 @@ public final class SXMParser: Sendable {
         specs: [ChannelSpec],
         encoding: SXMStorageEncoding
     ) throws -> [MatrixKey: Matrix] {
+        try Task.checkCancellation()
         guard let handle = try? FileHandle(forReadingFrom: url) else {
             throw SXMParserError.cannotOpen(url)
         }
@@ -248,6 +270,7 @@ public final class SXMParser: Sendable {
 
         var matrixCount = 0
         for spec in specs {
+            try Task.checkCancellation()
             let (nextCount, overflowed) = matrixCount.addingReportingOverflow(
                 spec.directions.count
             )
@@ -270,6 +293,7 @@ public final class SXMParser: Sendable {
             )
         }
 
+        try Task.checkCancellation()
         let fileLength = try handle.seekToEnd()
         let availablePayloadBytes = fileLength >= offset ? fileLength - offset : 0
         let expectedPayloadBytes64 = UInt64(expectedPayloadBytes)
@@ -287,6 +311,7 @@ public final class SXMParser: Sendable {
 
         for spec in specs {
             for direction in spec.directions {
+                try Task.checkCancellation()
                 let chunk = try readExactly(handle, count: byteCount)
                 if chunk.count < byteCount {
                     throw SXMParserError.shortData(
@@ -297,9 +322,12 @@ public final class SXMParser: Sendable {
                 }
                 consumedPayloadBytes += chunk.count
                 var values = [Float](repeating: 0, count: itemCount)
-                chunk.withUnsafeBytes { rawBuffer in
+                try chunk.withUnsafeBytes { rawBuffer in
                     guard let bytes = rawBuffer.bindMemory(to: UInt8.self).baseAddress else { return }
                     for idx in 0..<itemCount {
+                        if idx.isMultiple(of: 4_096) {
+                            try Task.checkCancellation()
+                        }
                         let j = idx * 4
                         let bits: UInt32
                         switch encoding {
@@ -313,8 +341,13 @@ public final class SXMParser: Sendable {
                     }
                 }
                 if direction == .bwd {
-                    values = flipHorizontally(values: values, width: width, height: height)
+                    values = try flipHorizontally(
+                        values: values,
+                        width: width,
+                        height: height
+                    )
                 }
+                try Task.checkCancellation()
                 matrices[MatrixKey(channel: spec.name, direction: direction)] = Matrix(width: width, height: height, values: values)
             }
         }
@@ -325,6 +358,7 @@ public final class SXMParser: Sendable {
         var output = Data()
         output.reserveCapacity(count)
         while output.count < count {
+            try Task.checkCancellation()
             let chunk = try handle.read(upToCount: count - output.count) ?? Data()
             guard !chunk.isEmpty else { break }
             output.append(chunk)
@@ -345,11 +379,25 @@ private func scanURLOrderedBefore(_ lhs: URL, _ rhs: URL) -> Bool {
 }
 
 public func parseHeader(_ headerText: String) -> [String: String] {
+    try! parseHeader(headerText, cancellation: .none)
+}
+
+private func parseHeader(
+    _ headerText: String,
+    cancellation: CancellationCheckpoint
+) throws -> [String: String] {
+    try cancellation.check()
     var header: [String: String] = [:]
     var currentKey: String?
     var currentLines: [String] = []
 
-    for rawLine in headerText.split(whereSeparator: \.isNewline).map(String.init) {
+    for (lineIndex, rawLine) in headerText
+        .split(whereSeparator: \.isNewline)
+        .enumerated() {
+        if lineIndex.isMultiple(of: 128) {
+            try cancellation.check()
+        }
+        let rawLine = String(rawLine)
         let line = rawLine.trimmingCharacters(in: CharacterSet(charactersIn: "\r"))
         if line.hasPrefix(":") && line.hasSuffix(":") && line.count > 2 {
             if let key = currentKey {
@@ -371,10 +419,19 @@ public func parseHeader(_ headerText: String) -> [String: String] {
     if let key = currentKey {
         header[key] = currentLines.joined(separator: "\n").trimmingCharacters(in: CharacterSet(charactersIn: "\n"))
     }
+    try cancellation.check()
     return header
 }
 
 func parseDataInfo(_ value: String) -> [ChannelSpec] {
+    try! parseDataInfo(value, cancellation: .none)
+}
+
+private func parseDataInfo(
+    _ value: String,
+    cancellation: CancellationCheckpoint
+) throws -> [ChannelSpec] {
+    try cancellation.check()
     let lines = value
         .split(whereSeparator: \.isNewline)
         .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -383,7 +440,10 @@ func parseDataInfo(_ value: String) -> [ChannelSpec] {
 
     let header = splitDataLine(lines[0]).map { $0.lowercased() }
     var specs: [ChannelSpec] = []
-    for line in lines.dropFirst() {
+    for (lineIndex, line) in lines.dropFirst().enumerated() {
+        if lineIndex.isMultiple(of: 128) {
+            try cancellation.check()
+        }
         let parts = splitDataLine(line)
         if parts.count < 2 { continue }
         var row: [String: String] = [:]
@@ -395,6 +455,7 @@ func parseDataInfo(_ value: String) -> [ChannelSpec] {
         let directionValue = (row["direction"] ?? parts[safe: 3] ?? "both").lowercased()
         specs.append(ChannelSpec(name: name, unit: unit, directions: directions(for: directionValue)))
     }
+    try cancellation.check()
     return specs
 }
 
@@ -569,10 +630,18 @@ private func findChannel(_ channels: [SXMChannel], keywords: [String]) -> String
     return nil
 }
 
-private func flipHorizontally(values: [Float], width: Int, height: Int) -> [Float] {
+private func flipHorizontally(
+    values: [Float],
+    width: Int,
+    height: Int
+) throws -> [Float] {
     var output = values
     for y in 0..<height {
+        try Task.checkCancellation()
         for x in 0..<width {
+            if x.isMultiple(of: 4_096) {
+                try Task.checkCancellation()
+            }
             output[y * width + x] = values[y * width + (width - 1 - x)]
         }
     }

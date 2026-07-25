@@ -75,16 +75,19 @@ public final class SpectroscopyParser: Sendable {
     }
 
     public func loadFile(_ url: URL) throws -> SpectroscopyFile {
-        try loadFileWithDiagnostics(url).file
+        try Task.checkCancellation()
+        return try loadFileWithDiagnostics(url).file
     }
 
     private func loadFileWithDiagnostics(
         _ url: URL
     ) throws -> (file: SpectroscopyFile, badLineCount: Int) {
+        try Task.checkCancellation()
         guard let data = try? Data(contentsOf: url),
               let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else {
             throw SpectroscopyParserError.cannotRead(url)
         }
+        try Task.checkCancellation()
         guard let dataRange = text.range(of: "[DATA]") else {
             throw SpectroscopyParserError.missingData(url)
         }
@@ -114,7 +117,10 @@ public final class SpectroscopyParser: Sendable {
 
         var valuesByColumn = Dictionary(uniqueKeysWithValues: columns.map { ($0, [Double]()) })
         var badLineCount = 0
-        for line in dataLines.dropFirst() {
+        for (lineIndex, line) in dataLines.dropFirst().enumerated() {
+            if lineIndex.isMultiple(of: 256) {
+                try Task.checkCancellation()
+            }
             let values = splitSpectroscopyLine(line)
             guard values.count == columns.count else {
                 badLineCount += 1
@@ -139,6 +145,7 @@ public final class SpectroscopyParser: Sendable {
                 valuesByColumn[column, default: []].append(parsedValues[index])
             }
         }
+        try Task.checkCancellation()
         let xs = valuesByColumn[columns[xIndex]] ?? []
         let ys = valuesByColumn[columns[yIndex]] ?? []
         guard xs.count >= 2, ys.count == xs.count else {

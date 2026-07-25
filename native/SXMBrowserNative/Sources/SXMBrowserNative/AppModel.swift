@@ -95,6 +95,11 @@ private struct ProcessedRenderCache {
 
 @MainActor
 final class AppModel: ObservableObject {
+    private struct ThumbnailTaskEntry {
+        let token: UUID
+        let task: Task<NSImage?, Never>
+    }
+
     static let defaultSidebarWidth: CGFloat = 300
     static let defaultInspectorWidth: CGFloat = 320
     static let sidebarWidthRange: ClosedRange<CGFloat> = 220...460
@@ -165,7 +170,7 @@ final class AppModel: ObservableObject {
     private var fullCacheOrder: [URL] = []
     private let fullCacheLimit = 24
     private let thumbnailCache = NSCache<NSString, NSImage>()
-    private var thumbnailTasks: [String: Task<NSImage?, Never>] = [:]
+    private var thumbnailTasks: [String: ThumbnailTaskEntry] = [:]
     private let thumbnailLimiter = AsyncLimiter(limit: 4)
     private var scanTask: Task<Void, Never>?
     private var imageTask: Task<Void, Never>?
@@ -433,11 +438,11 @@ final class AppModel: ObservableObject {
             do {
                 let parser = self.parser
                 let spectroscopyParser = self.spectroscopyParser
-                let scanned = try await Task.detached(priority: .userInitiated) {
+                let scanned = try await runDetachedCancellable(priority: .userInitiated) {
                     let sxmReport = try parser.scanFolder(url)
                     let spectroscopyReport = try spectroscopyParser.scanFolder(url)
                     return (sxmReport, spectroscopyReport)
-                }.value
+                }
                 guard !Task.isCancelled, folder == url else { return }
                 files = scanned.0.items
                 spectra = scanned.1.items
@@ -1121,9 +1126,10 @@ final class AppModel: ObservableObject {
         }
 
         if let existing = thumbnailTasks[key] {
-            return await existing.value
+            return await existing.task.value
         }
 
+        let token = UUID()
         let task = Task { @MainActor [weak self] in
             await self?.generateThumbnail(
                 for: file,
@@ -1135,9 +1141,11 @@ final class AppModel: ObservableObject {
                 invert: invert
             )
         }
-        thumbnailTasks[key] = task
+        thumbnailTasks[key] = ThumbnailTaskEntry(token: token, task: task)
         let image = await task.value
-        thumbnailTasks.removeValue(forKey: key)
+        if thumbnailTasks[key]?.token == token {
+            thumbnailTasks.removeValue(forKey: key)
+        }
         return image
     }
 
@@ -1195,9 +1203,15 @@ final class AppModel: ObservableObject {
                         )
                         return
                     }
-                    processed = await Task.detached(priority: .userInitiated) {
-                        SXMRenderer.processedMatrix(matrix, processing: processing)
-                    }.value
+                    processed = try await runDetachedCancellable(
+                        priority: .userInitiated
+                    ) {
+                        try SXMRenderer.processedMatrix(
+                            matrix,
+                            processing: processing,
+                            cancellation: .task
+                        )
+                    }
                 }
                 guard !Task.isCancelled, acceptsRenderRequest(request) else { return }
 
@@ -1205,9 +1219,14 @@ final class AppModel: ObservableObject {
                 if let cached {
                     statistics = cached.statistics
                 } else {
-                    statistics = await Task.detached(priority: .userInitiated) {
-                        SXMRenderer.statistics(processed)
-                    }.value
+                    statistics = try await runDetachedCancellable(
+                        priority: .userInitiated
+                    ) {
+                        try SXMRenderer.statistics(
+                            processed,
+                            cancellation: .task
+                        )
+                    }
                 }
                 guard !Task.isCancelled, acceptsRenderRequest(request) else { return }
 
@@ -1247,9 +1266,15 @@ final class AppModel: ObservableObject {
                     vmax: renderMax,
                     invert: invert
                 )
-                let image = try await Task.detached(priority: .userInitiated) {
-                    try SXMRenderer.renderProcessedImage(matrix: processed, options: options)
-                }.value
+                let image = try await runDetachedCancellable(
+                    priority: .userInitiated
+                ) {
+                    try SXMRenderer.renderProcessedImage(
+                        matrix: processed,
+                        options: options,
+                        cancellation: .task
+                    )
+                }
                 guard !Task.isCancelled, acceptsRenderRequest(request) else { return }
 
                 if case .automatic = configuration.scale {
@@ -1307,9 +1332,15 @@ final class AppModel: ObservableObject {
                     vmax: vmax,
                     invert: invert
                 )
-                let data = try await Task.detached(priority: .userInitiated) {
-                    try SXMRenderer.pngData(matrix: matrix, options: options)
-                }.value
+                let data = try await runDetachedCancellable(
+                    priority: .userInitiated
+                ) {
+                    try SXMRenderer.pngData(
+                        matrix: matrix,
+                        options: options,
+                        cancellation: .task
+                    )
+                }
                 try data.write(to: destination)
                 status = "Exported \(destination.lastPathComponent)"
             } catch {
@@ -1324,9 +1355,9 @@ final class AppModel: ObservableObject {
             return cached
         }
         let parser = self.parser
-        let full = try await Task.detached(priority: .userInitiated) {
+        let full = try await runDetachedCancellable(priority: .userInitiated) {
             try parser.loadFullFile(metadata)
-        }.value
+        }
         fullCache[metadata.path] = full
         fullCacheOrder.append(metadata.path)
         while fullCacheOrder.count > fullCacheLimit {
@@ -1456,13 +1487,21 @@ final class AppModel: ObservableObject {
         )
         let matrix = cache.matrix
         histogramTask = Task {
-            let distribution = await Task.detached(priority: .userInitiated) {
-                SXMRenderer.histogram(
-                    matrix,
-                    statistics: statistics,
-                    bins: request.configuration.bins
-                )
-            }.value
+            let distribution: HistogramDistribution
+            do {
+                distribution = try await runDetachedCancellable(
+                    priority: .userInitiated
+                ) {
+                    try SXMRenderer.histogram(
+                        matrix,
+                        statistics: statistics,
+                        bins: request.configuration.bins,
+                        cancellation: .task
+                    )
+                }
+            } catch {
+                return
+            }
             guard !Task.isCancelled,
                   acceptsHistogramRequest(request),
                   let currentCache = processedRenderCache,
@@ -1841,9 +1880,13 @@ final class AppModel: ObservableObject {
                 outputSize: 260,
                 invert: invert
             )
-            let image = try await Task.detached(priority: .utility) {
-                try SXMRenderer.renderImage(matrix: matrix, options: options)
-            }.value
+            let image = try await runDetachedCancellable(priority: .utility) {
+                try SXMRenderer.renderImage(
+                    matrix: matrix,
+                    options: options,
+                    cancellation: .task
+                )
+            }
             if Task.isCancelled { return nil }
             thumbnailCache.setObject(image, forKey: cacheKey as NSString, cost: estimatedImageCost(image))
             return image
@@ -1853,8 +1896,8 @@ final class AppModel: ObservableObject {
     }
 
     private func cancelThumbnailTasks() {
-        for task in thumbnailTasks.values {
-            task.cancel()
+        for entry in thumbnailTasks.values {
+            entry.task.cancel()
         }
         thumbnailTasks.removeAll()
     }

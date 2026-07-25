@@ -16,34 +16,63 @@ public enum SXMRenderError: LocalizedError {
 
 public enum SXMRenderer {
     public static func processedMatrix(_ matrix: Matrix, processing: ProcessingMode) -> Matrix {
+        try! processedMatrix(
+            matrix,
+            processing: processing,
+            cancellation: .none
+        )
+    }
+
+    public static func processedMatrix(
+        _ matrix: Matrix,
+        processing: ProcessingMode,
+        cancellation: CancellationCheckpoint
+    ) throws -> Matrix {
+        try cancellation.check()
         switch processing {
         case .raw:
             return matrix
         case .lineMean:
-            return lineMeanSubtract(matrix)
+            return try lineMeanSubtract(matrix, cancellation: cancellation)
         case .lineLinear:
-            return lineLinearFit(matrix)
+            return try lineLinearFit(matrix, cancellation: cancellation)
         case .planeLinear:
-            return planeLinearFit(matrix)
+            return try planeLinearFit(matrix, cancellation: cancellation)
         }
     }
 
     public static func statistics(_ matrix: Matrix) -> MatrixStatistics? {
-        var finite = matrix.values.filter(\.isFinite)
-        guard !finite.isEmpty else { return nil }
+        try! statistics(matrix, cancellation: .none)
+    }
+
+    public static func statistics(
+        _ matrix: Matrix,
+        cancellation: CancellationCheckpoint
+    ) throws -> MatrixStatistics? {
+        try cancellation.check()
+        var finite: [Float] = []
+        finite.reserveCapacity(matrix.values.count)
 
         var mean = 0.0
         var sumOfSquaredDeviations = 0.0
-        for (index, sample) in finite.enumerated() {
+        for (index, sample) in matrix.values.enumerated() {
+            if index.isMultiple(of: 4_096) {
+                try cancellation.check()
+            }
+            guard sample.isFinite else { continue }
+            finite.append(sample)
             let value = Double(sample)
-            let count = Double(index + 1)
+            let count = Double(finite.count)
             let delta = value - mean
             mean += delta / count
             let adjustedDelta = value - mean
             sumOfSquaredDeviations += delta * adjustedDelta
         }
+        guard !finite.isEmpty else { return nil }
 
+        try cancellation.check()
         finite.sort()
+        try cancellation.check()
         let minValue = Double(finite[0])
         let maxValue = Double(finite[finite.count - 1])
         let variance = max(
@@ -67,10 +96,34 @@ public enum SXMRenderer {
         statistics: MatrixStatistics,
         bins requestedBins: Int = 256
     ) -> HistogramDistribution {
+        try! histogram(
+            matrix,
+            statistics: statistics,
+            bins: requestedBins,
+            cancellation: .none
+        )
+    }
+
+    public static func histogram(
+        _ matrix: Matrix,
+        statistics: MatrixStatistics,
+        bins requestedBins: Int = 256,
+        cancellation: CancellationCheckpoint
+    ) throws -> HistogramDistribution {
+        try cancellation.check()
         let bins = max(16, min(2048, requestedBins))
         if statistics.max == statistics.min {
             var hist = [Int](repeating: 0, count: bins)
-            hist[bins / 2] = matrix.values.lazy.filter(\.isFinite).count
+            var finiteCount = 0
+            for (index, sample) in matrix.values.enumerated() {
+                if index.isMultiple(of: 4_096) {
+                    try cancellation.check()
+                }
+                if sample.isFinite {
+                    finiteCount += 1
+                }
+            }
+            hist[bins / 2] = finiteCount
             return HistogramDistribution(
                 bins: bins,
                 counts: hist,
@@ -83,7 +136,11 @@ public enum SXMRenderer {
 
         let width = (statistics.max - statistics.min) / Double(bins)
         var hist = [Int](repeating: 0, count: bins)
-        for sample in matrix.values where sample.isFinite {
+        for (index, sample) in matrix.values.enumerated() {
+            if index.isMultiple(of: 4_096) {
+                try cancellation.check()
+            }
+            guard sample.isFinite else { continue }
             let value = Double(sample)
             let idx = min(
                 bins - 1,
@@ -91,6 +148,7 @@ public enum SXMRenderer {
             )
             hist[idx] += 1
         }
+        try cancellation.check()
         let edges = (0...bins).map {
             statistics.min + Double($0) * width
         }
@@ -106,52 +164,115 @@ public enum SXMRenderer {
         _ matrix: Matrix,
         bins requestedBins: Int = 256
     ) -> HistogramStats? {
-        guard let statistics = statistics(matrix) else { return nil }
+        try! histogram(
+            matrix,
+            bins: requestedBins,
+            cancellation: .none
+        )
+    }
+
+    public static func histogram(
+        _ matrix: Matrix,
+        bins requestedBins: Int = 256,
+        cancellation: CancellationCheckpoint
+    ) throws -> HistogramStats? {
+        guard let statistics = try statistics(
+            matrix,
+            cancellation: cancellation
+        ) else {
+            return nil
+        }
         return HistogramStats(
             statistics: statistics,
-            distribution: histogram(
+            distribution: try histogram(
                 matrix,
                 statistics: statistics,
-                bins: requestedBins
+                bins: requestedBins,
+                cancellation: cancellation
             )
         )
     }
 
-    public static func renderImage(matrix: Matrix, options: RenderOptions) throws -> NSImage {
-        let processed = processedMatrix(matrix, processing: options.processing)
-        return try renderProcessedImage(matrix: processed, options: options)
+    public static func renderImage(
+        matrix: Matrix,
+        options: RenderOptions,
+        cancellation: CancellationCheckpoint = .none
+    ) throws -> NSImage {
+        let processed = try processedMatrix(
+            matrix,
+            processing: options.processing,
+            cancellation: cancellation
+        )
+        return try renderProcessedImage(
+            matrix: processed,
+            options: options,
+            cancellation: cancellation
+        )
     }
 
-    public static func renderProcessedImage(matrix: Matrix, options: RenderOptions) throws -> NSImage {
-        let rgba = colorize(
+    public static func renderProcessedImage(
+        matrix: Matrix,
+        options: RenderOptions,
+        cancellation: CancellationCheckpoint = .none
+    ) throws -> NSImage {
+        let rgba = try colorize(
             matrix: matrix,
             palette: options.palette,
             vmin: options.vmin,
             vmax: options.vmax,
-            invert: options.invert
+            invert: options.invert,
+            cancellation: cancellation
         )
+        try cancellation.check()
         guard let cgImage = makeCGImage(rgba: rgba, width: matrix.width, height: matrix.height) else {
             throw SXMRenderError.imageCreationFailed
         }
+        try cancellation.check()
         let image = NSImage(cgImage: cgImage, size: NSSize(width: matrix.width, height: matrix.height))
         if let outputSize = options.outputSize {
-            return resized(image, maxSide: CGFloat(outputSize))
+            return try resized(
+                image,
+                maxSide: CGFloat(outputSize),
+                cancellation: cancellation
+            )
         }
         return image
     }
 
-    public static func pngData(matrix: Matrix, options: RenderOptions) throws -> Data {
-        let image = try renderImage(matrix: matrix, options: options)
+    public static func pngData(
+        matrix: Matrix,
+        options: RenderOptions,
+        cancellation: CancellationCheckpoint = .none
+    ) throws -> Data {
+        let image = try renderImage(
+            matrix: matrix,
+            options: options,
+            cancellation: cancellation
+        )
+        try cancellation.check()
         guard let tiff = image.tiffRepresentation,
               let rep = NSBitmapImageRep(data: tiff),
               let png = rep.representation(using: .png, properties: [:]) else {
             throw SXMRenderError.imageCreationFailed
         }
+        try cancellation.check()
         return png
     }
 
     public static func automaticScale(_ matrix: Matrix) -> (vmin: Double, vmax: Double)? {
-        guard let statistics = statistics(matrix) else { return nil }
+        try! automaticScale(matrix, cancellation: .none)
+    }
+
+    public static func automaticScale(
+        _ matrix: Matrix,
+        cancellation: CancellationCheckpoint
+    ) throws -> (vmin: Double, vmax: Double)? {
+        guard let statistics = try statistics(
+            matrix,
+            cancellation: cancellation
+        ) else {
+            return nil
+        }
         return automaticScale(statistics)
     }
 
@@ -174,14 +295,38 @@ public enum SXMRenderer {
         vmax: Double?,
         invert: Bool
     ) -> [UInt8] {
-        let auto = (vmin == nil || vmax == nil) ? automaticScale(matrix) : nil
+        try! colorize(
+            matrix: matrix,
+            palette: palette,
+            vmin: vmin,
+            vmax: vmax,
+            invert: invert,
+            cancellation: .none
+        )
+    }
+
+    public static func colorize(
+        matrix: Matrix,
+        palette: PaletteName,
+        vmin: Double?,
+        vmax: Double?,
+        invert: Bool,
+        cancellation: CancellationCheckpoint
+    ) throws -> [UInt8] {
+        let auto = try (vmin == nil || vmax == nil)
+            ? automaticScale(matrix, cancellation: cancellation)
+            : nil
         let lo = vmin ?? auto?.vmin ?? 0
         let hi = vmax ?? auto?.vmax ?? 1
         let hasSpan = lo.isFinite && hi.isFinite && hi > lo
 
+        try cancellation.check()
         let stops = PaletteStore.shared.stops(for: palette)
         var rgba = [UInt8](repeating: 255, count: matrix.width * matrix.height * 4)
         for idx in matrix.values.indices {
+            if idx.isMultiple(of: 4_096) {
+                try cancellation.check()
+            }
             let value = matrix.values[idx]
             var scaled = value.isFinite
                 ? (hasSpan ? (Double(value) - lo) / (hi - lo) : 0.5)
@@ -195,16 +340,24 @@ public enum SXMRenderer {
             rgba[base + 2] = UInt8(min(255, max(0, round(color.b * 255))))
             rgba[base + 3] = 255
         }
+        try cancellation.check()
         return rgba
     }
 }
 
-private func lineMeanSubtract(_ matrix: Matrix) -> Matrix {
+private func lineMeanSubtract(
+    _ matrix: Matrix,
+    cancellation: CancellationCheckpoint
+) throws -> Matrix {
     var output = matrix
     for y in 0..<matrix.height {
+        try cancellation.check()
         var sum = 0.0
         var count = 0.0
         for x in 0..<matrix.width {
+            if x.isMultiple(of: 4_096) {
+                try cancellation.check()
+            }
             let value = matrix[x, y]
             if value.isFinite {
                 sum += Double(value)
@@ -214,25 +367,35 @@ private func lineMeanSubtract(_ matrix: Matrix) -> Matrix {
         guard count > 0 else { continue }
         let mean = Float(sum / count)
         for x in 0..<matrix.width {
+            if x.isMultiple(of: 4_096) {
+                try cancellation.check()
+            }
             output[x, y] = matrix[x, y] - mean
         }
     }
     return output
 }
 
-private func lineLinearFit(_ matrix: Matrix) -> Matrix {
+private func lineLinearFit(
+    _ matrix: Matrix,
+    cancellation: CancellationCheckpoint
+) throws -> Matrix {
     var output = matrix
     let n = Double(matrix.width)
     let sumX = Double(matrix.width - 1) * n / 2
     let sumXX = Double(matrix.width - 1) * Double(matrix.width) * Double(2 * matrix.width - 1) / 6
 
     for y in 0..<matrix.height {
+        try cancellation.check()
         var valid = 0.0
         var sx = 0.0
         var sy = 0.0
         var sxx = 0.0
         var sxy = 0.0
         for x in 0..<matrix.width {
+            if x.isMultiple(of: 4_096) {
+                try cancellation.check()
+            }
             let value = matrix[x, y]
             if value.isFinite {
                 let dx = Double(x)
@@ -249,6 +412,9 @@ private func lineLinearFit(_ matrix: Matrix) -> Matrix {
         let slope = abs(denominator) < .ulpOfOne ? 0 : (valid * sxy - sx * sy) / denominator
         let intercept = (sy - slope * sx) / valid
         for x in 0..<matrix.width {
+            if x.isMultiple(of: 4_096) {
+                try cancellation.check()
+            }
             output[x, y] = matrix[x, y] - Float(slope * Double(x) + intercept)
         }
 
@@ -257,13 +423,20 @@ private func lineLinearFit(_ matrix: Matrix) -> Matrix {
     return output
 }
 
-private func planeLinearFit(_ matrix: Matrix) -> Matrix {
+private func planeLinearFit(
+    _ matrix: Matrix,
+    cancellation: CancellationCheckpoint
+) throws -> Matrix {
     var normal = [[Double]](repeating: [Double](repeating: 0, count: 3), count: 3)
     var rhs = [Double](repeating: 0, count: 3)
     var count = 0
 
     for y in 0..<matrix.height {
+        try cancellation.check()
         for x in 0..<matrix.width {
+            if x.isMultiple(of: 4_096) {
+                try cancellation.check()
+            }
             let value = matrix[x, y]
             guard value.isFinite else { continue }
             let row = [Double(x), Double(y), 1.0]
@@ -280,7 +453,11 @@ private func planeLinearFit(_ matrix: Matrix) -> Matrix {
 
     var output = matrix
     for y in 0..<matrix.height {
+        try cancellation.check()
         for x in 0..<matrix.width {
+            if x.isMultiple(of: 4_096) {
+                try cancellation.check()
+            }
             output[x, y] = matrix[x, y] - Float(coeff[0] * Double(x) + coeff[1] * Double(y) + coeff[2])
         }
     }
@@ -363,7 +540,12 @@ private func makeCGImage(rgba: [UInt8], width: Int, height: Int) -> CGImage? {
     )
 }
 
-private func resized(_ image: NSImage, maxSide: CGFloat) -> NSImage {
+private func resized(
+    _ image: NSImage,
+    maxSide: CGFloat,
+    cancellation: CancellationCheckpoint
+) throws -> NSImage {
+    try cancellation.check()
     let size = image.size
     let scale = min(1, maxSide / max(size.width, size.height))
     let target = NSSize(width: max(1, size.width * scale), height: max(1, size.height * scale))
@@ -371,5 +553,6 @@ private func resized(_ image: NSImage, maxSide: CGFloat) -> NSImage {
     output.lockFocus()
     image.draw(in: NSRect(origin: .zero, size: target), from: .zero, operation: .copy, fraction: 1)
     output.unlockFocus()
+    try cancellation.check()
     return output
 }

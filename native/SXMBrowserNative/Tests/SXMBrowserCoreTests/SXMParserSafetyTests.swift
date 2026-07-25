@@ -214,6 +214,31 @@ func fullLoadRevalidatesHeaderAndRejectsExternalReplacement() throws {
 }
 
 @Test
+func fullLoadHonorsPreCancellation() async throws {
+    let url = try makeSXMFixture(
+        pixels: "2 2",
+        samples: [1, 2, 3, 4]
+    )
+    defer { try? FileManager.default.removeItem(at: url) }
+    let parser = SXMParser()
+    let metadata = try parser.loadMetadata(url)
+
+    let wasCancelled = await Task {
+        withUnsafeCurrentTask { $0?.cancel() }
+        do {
+            _ = try parser.loadFullFile(metadata)
+            return false
+        } catch is CancellationError {
+            return true
+        } catch {
+            return false
+        }
+    }.value
+
+    #expect(wasCancelled)
+}
+
+@Test
 func duplicateChannelNamesAreRejected() throws {
     let url = try makeSXMFixture(
         channelRows: [
