@@ -244,6 +244,8 @@ final class AppModel: ObservableObject {
         CoordinatorRenderedFrame?
     @Published private(set) var selectedRenderState:
         SelectedRenderState<SXMMetadata.ID> = .idle
+    @Published private(set) var viewerTransform =
+        ViewerTransform()
     @Published var scalePreset: ScalePreset = .percentile
     @Published var histogramBins: Int = AppModel.loadInt(Defaults.histogramBins, fallback: 256, range: 64...1024) {
         didSet {
@@ -331,6 +333,36 @@ final class AppModel: ObservableObject {
             return nil
         }
         return renderedFrame?.stats
+    }
+
+    var canAdjustViewerTransform: Bool {
+        mode == .single
+            && selectedImage != nil
+            && viewerTransform.imageSize.isUsable
+            && viewerTransform.viewportSize.isUsable
+    }
+
+    var canZoomViewerIn: Bool {
+        canAdjustViewerTransform
+            && nextViewerScale(increasing: true) != nil
+    }
+
+    var canZoomViewerOut: Bool {
+        canAdjustViewerTransform
+            && nextViewerScale(increasing: false) != nil
+    }
+
+    var viewerZoomLabel: String {
+        let percentage = viewerTransform.zoomPercentage
+        let formatted = Self.viewerZoomFormatter.string(
+            from: NSNumber(value: percentage)
+        ) ?? "\(Int(percentage.rounded()))"
+        switch viewerTransform.mode {
+        case .fit:
+            return "Fit · \(formatted)%"
+        case .custom:
+            return "\(formatted)%"
+        }
     }
 
     var selectedFile: SXMMetadata? {
@@ -1364,6 +1396,7 @@ final class AppModel: ObservableObject {
         manualAssociationProjection = nil
         spectrumDragPayloads.removeAll()
         selection.clear()
+        viewerTransform = ViewerTransform()
         sidebarMode = .all
         clearFilenameSearch()
         spectrumAxisState.clear()
@@ -2855,6 +2888,76 @@ final class AppModel: ObservableObject {
         )
     }
 
+    func reconcileViewerGeometry(
+        imageSize: CGSize,
+        viewportSize: CGSize
+    ) {
+        var updated = viewerTransform
+        updated.reconcile(
+            imageSize: ViewerSize(
+                width: imageSize.width,
+                height: imageSize.height
+            ),
+            viewportSize: ViewerSize(
+                width: viewportSize.width,
+                height: viewportSize.height
+            )
+        )
+        guard updated != viewerTransform else { return }
+        viewerTransform = updated
+    }
+
+    func fitViewer() {
+        guard canAdjustViewerTransform else { return }
+        var updated = viewerTransform
+        updated.fit()
+        viewerTransform = updated
+    }
+
+    func showViewerActualSize() {
+        setViewerScale(1)
+    }
+
+    func setViewerScale(_ scale: Double) {
+        guard canAdjustViewerTransform else { return }
+        var updated = viewerTransform
+        updated.setCustomScale(
+            scale,
+            around: updated.viewportSize.center
+        )
+        viewerTransform = updated
+    }
+
+    func zoomViewerIn() {
+        guard let scale = nextViewerScale(
+            increasing: true
+        ) else {
+            return
+        }
+        setViewerScale(scale)
+    }
+
+    func zoomViewerOut() {
+        guard let scale = nextViewerScale(
+            increasing: false
+        ) else {
+            return
+        }
+        setViewerScale(scale)
+    }
+
+    func commitViewerTransform(
+        _ proposed: ViewerTransform
+    ) {
+        guard canAdjustViewerTransform else { return }
+        var updated = proposed
+        updated.reconcile(
+            imageSize: viewerTransform.imageSize,
+            viewportSize: viewerTransform.viewportSize
+        )
+        viewerTransform = updated
+    }
+
     func activateSingleSpectroscopyGroup(_ id: String?) {
         singleSpectroscopyState.activateGroup(id)
         reconcileSingleSpectroscopyState()
@@ -3419,6 +3522,7 @@ final class AppModel: ObservableObject {
         selection = updatedSelection
         guard previousPrimaryID != selection.primaryID else { return }
 
+        viewerTransform = ViewerTransform()
         clearSelectedRender()
         reconcileSingleSpectroscopyState()
         guard selectedID != nil else {
@@ -3553,6 +3657,21 @@ final class AppModel: ObservableObject {
 
     private func clearSelectedRender() {
         invalidateActiveRender(clearFrame: true)
+    }
+
+    private func nextViewerScale(
+        increasing: Bool
+    ) -> Double? {
+        let current = viewerTransform.scale
+        let tolerance = 0.000_001
+        if increasing {
+            return Self.viewerZoomPresets.first {
+                $0 > current + tolerance
+            }
+        }
+        return Self.viewerZoomPresets.last {
+            $0 < current - tolerance
+        }
     }
 
     private func activateTagContextIfNeeded(_ tagID: UUID?) {
@@ -4208,6 +4327,24 @@ final class AppModel: ObservableObject {
         static let expandedTagIDsByDataset =
             "native.expandedTagIDsByDataset"
     }
+
+    private static let viewerZoomPresets = [
+        0.25,
+        0.5,
+        1,
+        2,
+        4,
+        8,
+        16,
+    ]
+
+    private static let viewerZoomFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 1
+        return formatter
+    }()
 
     private static func loadSortMode() -> SortMode {
         if let raw = UserDefaults.standard.string(forKey: Defaults.sortMode),

@@ -2117,11 +2117,30 @@ private struct BrowserToolbar: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        HStack(spacing: 10) {
+        GeometryReader { proxy in
+            toolbarRow(
+                layout: BrowserToolbarLayout(
+                    availableWidth: proxy.size.width
+                )
+            )
+        }
+        .frame(height: 48)
+        .background(AppTheme.toolbar)
+    }
+
+    @ViewBuilder
+    private func toolbarRow(
+        layout: BrowserToolbarLayout
+    ) -> some View {
+        HStack(spacing: layout.spacing) {
             Text(model.selectedFile?.filename ?? "No file selected")
                 .font(.system(size: 14, weight: .semibold))
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .frame(
+                    minWidth: layout.minimumFilenameWidth,
+                    alignment: .leading
+                )
                 .layoutPriority(1)
                 .accessibilityLabel("Selected file")
                 .accessibilityValue(
@@ -2131,29 +2150,66 @@ private struct BrowserToolbar: View {
             Text(model.selectedPositionText)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(Capsule().fill(AppTheme.subtleFill))
+                .padding(
+                    .horizontal,
+                    layout == .expanded ? 8 : 2
+                )
+                .padding(
+                    .vertical,
+                    layout == .expanded ? 3 : 0
+                )
+                .background {
+                    if layout == .expanded {
+                        Capsule().fill(AppTheme.subtleFill)
+                    }
+                }
                 .accessibilityLabel("File position")
                 .accessibilityValue(model.selectedPositionText)
 
-            Spacer(minLength: 4)
+            Spacer(minLength: layout == .minimal ? 0 : 4)
 
-            Picker(
-                "View mode",
-                selection: Binding(
-                    get: { model.mode },
-                    set: { model.setMode($0) }
-                )
-            ) {
-                ForEach(BrowserMode.allCases) { mode in
-                    Text(mode.label).tag(mode)
+            if layout == .minimal {
+                Menu {
+                    ForEach(BrowserMode.allCases) { mode in
+                        Button(mode.label) {
+                            model.setMode(mode)
+                        }
+                    }
+                } label: {
+                    Image(
+                        systemName:
+                            model.mode == .grid
+                            ? "square.grid.2x2"
+                            : "rectangle"
+                    )
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("View mode: \(model.mode.label)")
+                .accessibilityLabel("View mode")
+                .accessibilityValue(model.mode.label)
+            } else {
+                Picker(
+                    "View mode",
+                    selection: Binding(
+                        get: { model.mode },
+                        set: { model.setMode($0) }
+                    )
+                ) {
+                    ForEach(BrowserMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(
+                    width:
+                        layout == .expanded
+                        ? 142
+                        : 112
+                )
+                .accessibilityLabel("View mode")
             }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(width: 142)
-            .accessibilityLabel("View mode")
 
             ControlGroup {
                 Button {
@@ -2175,69 +2231,257 @@ private struct BrowserToolbar: View {
                 .accessibilityLabel("Next visible file")
             }
 
-            Menu {
-                if model.mode == .grid {
-                    Picker(
-                        "Grid density",
-                        selection: $model.gridDensity
-                    ) {
-                        ForEach(GridDensity.allCases) { density in
-                            Text(density.label).tag(density)
-                        }
-                    }
+            if model.mode == .single,
+               layout == .expanded {
+                ViewerZoomControls(model: model)
+            }
 
-                    Button {
-                        model.toggleGridSpectroscopyCards()
-                    } label: {
-                        Label(
-                            model.showsGridSpectroscopyCards
-                                ? "Hide Spectrum Cards in Grid"
-                                : "Show Spectrum Cards in Grid",
-                            systemImage:
-                                "waveform.path.ecg.rectangle"
+            browserActionsMenu
+        }
+        .padding(
+            .horizontal,
+            layout == .minimal ? 8 : 14
+        )
+        .frame(
+            maxWidth: .infinity,
+            maxHeight: .infinity
+        )
+    }
+
+    private var browserActionsMenu: some View {
+        Menu {
+            if model.mode == .single {
+                Menu("Image Zoom") {
+                    Button("Fit to Window") {
+                        model.fitViewer()
+                    }
+                    .disabled(!model.canAdjustViewerTransform)
+
+                    Button("Actual Size (100%)") {
+                        model.showViewerActualSize()
+                    }
+                    .disabled(!model.canAdjustViewerTransform)
+
+                    Divider()
+
+                    Button("Zoom In") {
+                        model.zoomViewerIn()
+                    }
+                    .disabled(!model.canZoomViewerIn)
+
+                    Button("Zoom Out") {
+                        model.zoomViewerOut()
+                    }
+                    .disabled(!model.canZoomViewerOut)
+
+                    Divider()
+
+                    ForEach(
+                        viewerZoomPresetScales,
+                        id: \.self
+                    ) { scale in
+                        Button(
+                            viewerZoomPercentageLabel(
+                                for: scale
+                            )
+                        ) {
+                            model.setViewerScale(scale)
+                        }
+                        .disabled(
+                            !model.canAdjustViewerTransform
                         )
                     }
-                    .disabled(model.spectra.isEmpty)
-
-                    Divider()
                 }
 
-                Button {
-                    model.exportPNG()
-                } label: {
-                    Label("Export PNG…", systemImage: "square.and.arrow.up")
-                }
-                .disabled(model.selectedImage == nil)
+                Divider()
+            }
 
-                Button {
-                    model.revealSelectedFilesInFinder()
-                } label: {
-                    Label("Show in Finder", systemImage: "folder")
-                }
-                .disabled(model.selectedCount == 0)
-
-                if model.selectionActionPresentation.placement
-                    == .overflow {
-                    Divider()
-                    Button(role: .destructive) {
-                        model.deleteSelectedFiles()
-                    } label: {
-                        Label("Move to Trash…", systemImage: "trash")
+            if model.mode == .grid {
+                Picker(
+                    "Grid density",
+                    selection: $model.gridDensity
+                ) {
+                    ForEach(GridDensity.allCases) { density in
+                        Text(density.label).tag(density)
                     }
-                    .disabled(!model.canDeleteSelection)
+                }
+
+                Button {
+                    model.toggleGridSpectroscopyCards()
+                } label: {
+                    Label(
+                        model.showsGridSpectroscopyCards
+                            ? "Hide Spectrum Cards in Grid"
+                            : "Show Spectrum Cards in Grid",
+                        systemImage:
+                            "waveform.path.ecg.rectangle"
+                    )
+                }
+                .disabled(model.spectra.isEmpty)
+
+                Divider()
+            }
+
+            Button {
+                model.exportPNG()
+            } label: {
+                Label(
+                    "Export PNG…",
+                    systemImage: "square.and.arrow.up"
+                )
+            }
+            .disabled(model.selectedImage == nil)
+
+            Button {
+                model.revealSelectedFilesInFinder()
+            } label: {
+                Label(
+                    "Show in Finder",
+                    systemImage: "folder"
+                )
+            }
+            .disabled(model.selectedCount == 0)
+
+            if model.selectionActionPresentation.placement
+                == .overflow {
+                Divider()
+                Button(role: .destructive) {
+                    model.deleteSelectedFiles()
+                } label: {
+                    Label(
+                        "Move to Trash…",
+                        systemImage: "trash"
+                    )
+                }
+                .disabled(!model.canDeleteSelection)
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.body)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("More browser actions")
+        .accessibilityLabel("More browser actions")
+    }
+}
+
+private enum BrowserToolbarLayout: Equatable {
+    case expanded
+    case compact
+    case minimal
+
+    init(availableWidth: CGFloat) {
+        if availableWidth >= 660 {
+            self = .expanded
+        } else if availableWidth >= 390 {
+            self = .compact
+        } else {
+            self = .minimal
+        }
+    }
+
+    var spacing: CGFloat {
+        switch self {
+        case .expanded:
+            10
+        case .compact:
+            7
+        case .minimal:
+            5
+        }
+    }
+
+    var minimumFilenameWidth: CGFloat {
+        switch self {
+        case .expanded:
+            100
+        case .compact:
+            70
+        case .minimal:
+            45
+        }
+    }
+}
+
+private let viewerZoomPresetScales = [
+    0.25,
+    0.5,
+    1,
+    2,
+    4,
+    8,
+    16,
+]
+
+private func viewerZoomPercentageLabel(
+    for scale: Double
+) -> String {
+    "\(Int((scale * 100).rounded()))%"
+}
+
+private struct ViewerZoomControls: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Button {
+                model.zoomViewerOut()
+            } label: {
+                Image(systemName: "minus.magnifyingglass")
+            }
+            .disabled(!model.canZoomViewerOut)
+            .help("Zoom out")
+            .accessibilityLabel("Zoom out")
+
+            Menu {
+                Button("Fit to Window") {
+                    model.fitViewer()
+                }
+                .disabled(!model.canAdjustViewerTransform)
+
+                Button("Actual Size (100%)") {
+                    model.showViewerActualSize()
+                }
+                .disabled(!model.canAdjustViewerTransform)
+
+                Divider()
+
+                ForEach(
+                    viewerZoomPresetScales,
+                    id: \.self
+                ) { scale in
+                    Button(
+                        viewerZoomPercentageLabel(
+                            for: scale
+                        )
+                    ) {
+                        model.setViewerScale(scale)
+                    }
+                    .disabled(!model.canAdjustViewerTransform)
                 }
             } label: {
-                Image(systemName: "ellipsis.circle")
-                    .font(.body)
+                Text(model.viewerZoomLabel)
+                    .font(.caption.monospacedDigit())
+                    .frame(minWidth: 62)
             }
-            .menuStyle(.borderlessButton)
+            .disabled(!model.canAdjustViewerTransform)
             .fixedSize()
-            .help("More browser actions")
-            .accessibilityLabel("More browser actions")
+            .help("Choose image zoom")
+            .accessibilityLabel("Image zoom")
+            .accessibilityValue(model.viewerZoomLabel)
+
+            Button {
+                model.zoomViewerIn()
+            } label: {
+                Image(systemName: "plus.magnifyingglass")
+            }
+            .disabled(!model.canZoomViewerIn)
+            .help("Zoom in")
+            .accessibilityLabel("Zoom in")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(AppTheme.toolbar)
+        .controlSize(.small)
+        .fixedSize()
     }
 }
 
@@ -3280,6 +3524,12 @@ struct SingleImageView: View {
 
 private struct SingleImageCanvas: View {
     @ObservedObject var model: AppModel
+    @State private var dragStartTransform:
+        ViewerTransform?
+    @State private var magnifyStartTransform:
+        ViewerTransform?
+    @State private var gestureTransform:
+        ViewerTransform?
 
     var body: some View {
         GeometryReader { proxy in
@@ -3292,27 +3542,11 @@ private struct SingleImageCanvas: View {
                        let file = model.files.first(where: {
                            $0.id == frame.request.fileID
                        }) {
-                        Image(nsImage: frame.image)
-                            .resizable()
-                            .interpolation(.none)
-                            .scaledToFit()
-                            .frame(
-                                width: max(
-                                    0,
-                                    proxy.size.width - 36
-                                ),
-                                height: max(
-                                    0,
-                                    proxy.size.height - 36
-                                )
-                            )
-                            .overlay {
-                                SpectroscopyMarkerLayer(
-                                    model: model,
-                                    file: file,
-                                    isInteractive: true
-                                )
-                            }
+                        readyCanvas(
+                            frame: frame,
+                            file: file,
+                            availableSize: proxy.size
+                        )
                     } else {
                         ProgressView()
                     }
@@ -3348,8 +3582,197 @@ private struct SingleImageCanvas: View {
             .onTapGesture {
                 NSApp.keyWindow?.makeFirstResponder(nil)
             }
+            .onChange(of: model.selectedID) { _, _ in
+                clearGesturePreview()
+            }
         }
     }
+
+    @ViewBuilder
+    private func readyCanvas(
+        frame: CoordinatorRenderedFrame,
+        file: SXMMetadata,
+        availableSize: CGSize
+    ) -> some View {
+        let viewportSize = CGSize(
+            width: max(1, availableSize.width - 36),
+            height: max(1, availableSize.height - 36)
+        )
+        let imageSize = CGSize(
+            width: max(1, CGFloat(file.pixels.width)),
+            height: max(1, CGFloat(file.pixels.height))
+        )
+        let geometry = ViewerCanvasGeometry(
+            imageSize: imageSize,
+            viewportSize: viewportSize
+        )
+        let displayedTransform = reconciledTransform(
+            gestureTransform ?? model.viewerTransform,
+            geometry: geometry
+        )
+        let scaledImageSize = CGSize(
+            width:
+                imageSize.width
+                * displayedTransform.scale,
+            height:
+                imageSize.height
+                * displayedTransform.scale
+        )
+
+        ZStack(alignment: .topLeading) {
+            ZStack {
+                Image(nsImage: frame.image)
+                    .resizable()
+                    .interpolation(.none)
+                    .frame(
+                        width: scaledImageSize.width,
+                        height: scaledImageSize.height
+                    )
+
+                SpectroscopyMarkerLayer(
+                    model: model,
+                    file: file,
+                    isInteractive: true
+                )
+                .frame(
+                    width: scaledImageSize.width,
+                    height: scaledImageSize.height
+                )
+            }
+            .frame(
+                width: scaledImageSize.width,
+                height: scaledImageSize.height
+            )
+            .offset(
+                x: displayedTransform.translation.x,
+                y: displayedTransform.translation.y
+            )
+        }
+        .frame(
+            width: viewportSize.width,
+            height: viewportSize.height,
+            alignment: .topLeading
+        )
+        .clipped()
+        .contentShape(Rectangle())
+        .simultaneousGesture(
+            panGesture(
+                startingFrom: displayedTransform
+            )
+        )
+        .simultaneousGesture(
+            magnifyGesture(
+                startingFrom: displayedTransform
+            )
+        )
+        .onAppear {
+            model.reconcileViewerGeometry(
+                imageSize: imageSize,
+                viewportSize: viewportSize
+            )
+        }
+        .onChange(of: geometry) { _, updated in
+            clearGesturePreview()
+            model.reconcileViewerGeometry(
+                imageSize: updated.imageSize,
+                viewportSize: updated.viewportSize
+            )
+        }
+        .onChange(of: frame.request.requestID) { _, _ in
+            clearGesturePreview()
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Image viewer")
+        .accessibilityValue(model.viewerZoomLabel)
+    }
+
+    private func panGesture(
+        startingFrom displayedTransform: ViewerTransform
+    ) -> some Gesture {
+        DragGesture(minimumDistance: 4)
+            .onChanged { value in
+                if dragStartTransform == nil {
+                    dragStartTransform =
+                        displayedTransform
+                }
+                guard var preview =
+                    dragStartTransform else {
+                    return
+                }
+                preview.pan(
+                    by: ViewerPoint(
+                        x: value.translation.width,
+                        y: value.translation.height
+                    )
+                )
+                gestureTransform = preview
+            }
+            .onEnded { _ in
+                commitGesturePreview()
+            }
+    }
+
+    private func magnifyGesture(
+        startingFrom displayedTransform: ViewerTransform
+    ) -> some Gesture {
+        MagnificationGesture(minimumScaleDelta: 0.005)
+            .onChanged { value in
+                if magnifyStartTransform == nil {
+                    magnifyStartTransform =
+                        displayedTransform
+                }
+                guard var preview =
+                    magnifyStartTransform else {
+                    return
+                }
+                preview.setCustomScale(
+                    preview.scale * Double(value),
+                    around: preview.viewportSize.center
+                )
+                gestureTransform = preview
+            }
+            .onEnded { _ in
+                commitGesturePreview()
+            }
+    }
+
+    private func reconciledTransform(
+        _ transform: ViewerTransform,
+        geometry: ViewerCanvasGeometry
+    ) -> ViewerTransform {
+        var resolved = transform
+        resolved.reconcile(
+            imageSize: ViewerSize(
+                width: geometry.imageSize.width,
+                height: geometry.imageSize.height
+            ),
+            viewportSize: ViewerSize(
+                width: geometry.viewportSize.width,
+                height: geometry.viewportSize.height
+            )
+        )
+        return resolved
+    }
+
+    private func commitGesturePreview() {
+        if let gestureTransform {
+            model.commitViewerTransform(
+                gestureTransform
+            )
+        }
+        clearGesturePreview()
+    }
+
+    private func clearGesturePreview() {
+        dragStartTransform = nil
+        magnifyStartTransform = nil
+        gestureTransform = nil
+    }
+}
+
+private struct ViewerCanvasGeometry: Equatable {
+    let imageSize: CGSize
+    let viewportSize: CGSize
 }
 
 private struct SingleSpectroscopyDrawer: View {

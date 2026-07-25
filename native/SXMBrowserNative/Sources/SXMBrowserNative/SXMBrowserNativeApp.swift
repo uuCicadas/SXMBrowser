@@ -70,6 +70,32 @@ struct SXMBrowserNativeApp: App {
 
                 Divider()
 
+                Button("Fit Image to Window") {
+                    model.fitViewer()
+                }
+                .keyboardShortcut("9", modifiers: [.command])
+                .disabled(!model.canAdjustViewerTransform)
+
+                Button("Actual Size (100%)") {
+                    model.showViewerActualSize()
+                }
+                .keyboardShortcut("0", modifiers: [.command])
+                .disabled(!model.canAdjustViewerTransform)
+
+                Button("Zoom In") {
+                    model.zoomViewerIn()
+                }
+                .keyboardShortcut("+", modifiers: [.command])
+                .disabled(!model.canZoomViewerIn)
+
+                Button("Zoom Out") {
+                    model.zoomViewerOut()
+                }
+                .keyboardShortcut("-", modifiers: [.command])
+                .disabled(!model.canZoomViewerOut)
+
+                Divider()
+
                 Button("Export PNG...") {
                     model.exportPNG()
                 }
