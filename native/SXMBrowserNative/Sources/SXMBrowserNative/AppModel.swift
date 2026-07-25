@@ -129,8 +129,7 @@ final class AppModel: ObservableObject {
     @Published var selectedProcessing: ProcessingMode = .raw
     @Published var selectedPalette: PaletteName = .gwyddionNet
     @Published var invertPalette = false
-    @Published var selectedSpectrumXColumn = ""
-    @Published var selectedSpectrumYColumn = ""
+    @Published private(set) var spectrumAxisState = SpectroscopyAxisState()
 
     @Published private(set) var renderedFrame: RenderedFrame?
     @Published var scalePreset: ScalePreset = .percentile
@@ -255,19 +254,6 @@ final class AppModel: ObservableObject {
 
     var selectedChannelInfo: SXMChannel? {
         selectedFile?.channels.first { $0.name == selectedChannel }
-    }
-
-    var selectedSpectrumColumns: [String] {
-        guard let file = selectedFile else { return [] }
-        var columns: [String] = []
-        var seen: Set<String> = []
-        for group in spectrumGroups(for: file) {
-            for column in group.availableColumns where !seen.contains(column) {
-                columns.append(column)
-                seen.insert(column)
-            }
-        }
-        return columns
     }
 
     var selectedPositionText: String {
@@ -421,8 +407,7 @@ final class AppModel: ObservableObject {
         sidebarMode = .all
         activeTagName = nil
         filenameSearch = ""
-        selectedSpectrumXColumn = ""
-        selectedSpectrumYColumn = ""
+        spectrumAxisState.clear()
         processedCacheKey = nil
         processedCacheMatrix = nil
         processedCacheStats = nil
@@ -832,22 +817,23 @@ final class AppModel: ObservableObject {
     }
 
     func syncSpectrumAxesWithSelection(preferredSpectrum: SpectroscopyFile? = nil) {
-        let columns = selectedSpectrumColumns
-        guard !columns.isEmpty else {
-            selectedSpectrumXColumn = ""
-            selectedSpectrumYColumn = ""
-            return
+        guard let file = selectedFile else { return }
+        var updatedState = spectrumAxisState
+        for group in spectrumGroups(for: file) {
+            let preferredInGroup = preferredSpectrum.flatMap { spectrum in
+                group.spectra.contains(where: { $0.id == spectrum.id })
+                    ? spectrum
+                    : nil
+            }
+            updatedState.ensureSelection(
+                forGroupID: group.id,
+                availableColumns: group.availableColumns,
+                preferredX: preferredInGroup?.xLabel ?? group.xLabel,
+                preferredY: preferredInGroup?.yLabel ?? group.yLabel
+            )
         }
-
-        let fallbackSpectrum = preferredSpectrum ?? selectedFile.flatMap { spectra(for: $0).first }
-        let fallbackX = fallbackSpectrum?.xLabel ?? columns[0]
-        let fallbackY = fallbackSpectrum?.yLabel ?? columns[min(1, columns.count - 1)]
-
-        if !columns.contains(selectedSpectrumXColumn) {
-            selectedSpectrumXColumn = columns.contains(fallbackX) ? fallbackX : columns[0]
-        }
-        if !columns.contains(selectedSpectrumYColumn) {
-            selectedSpectrumYColumn = columns.contains(fallbackY) ? fallbackY : columns[min(1, columns.count - 1)]
+        if updatedState != spectrumAxisState {
+            spectrumAxisState = updatedState
         }
     }
 
@@ -878,15 +864,50 @@ final class AppModel: ObservableObject {
     }
 
     func spectrumXAxis(for group: SpectroscopyGroup) -> String {
-        group.canonicalColumn(matching: selectedSpectrumXColumn) ?? group.xLabel
+        spectrumAxisState.selection(forGroupID: group.id)?.xColumn
+            ?? group.canonicalColumn(matching: group.xLabel)
+            ?? group.availableColumns.first
+            ?? ""
     }
 
     func spectrumYAxis(for group: SpectroscopyGroup) -> String {
-        group.canonicalColumn(matching: selectedSpectrumYColumn) ?? group.yLabel
+        spectrumAxisState.selection(forGroupID: group.id)?.yColumn
+            ?? group.canonicalColumn(matching: group.yLabel)
+            ?? group.availableColumns.dropFirst().first
+            ?? group.availableColumns.first
+            ?? ""
     }
 
-    func spectrumAxisChanged() {
-        status = "Using \(selectedSpectrumXColumn) vs \(selectedSpectrumYColumn)."
+    func setSpectrumXAxis(_ column: String, for group: SpectroscopyGroup) {
+        var updatedState = spectrumAxisState
+        guard updatedState.setXColumn(
+            column,
+            forGroupID: group.id,
+            availableColumns: group.availableColumns,
+            preferredX: group.xLabel,
+            preferredY: group.yLabel
+        ) else {
+            status = "\(column) is not compatible with \(group.title)."
+            return
+        }
+        spectrumAxisState = updatedState
+        status = "Using \(spectrumXAxis(for: group)) vs \(spectrumYAxis(for: group)) for \(group.title)."
+    }
+
+    func setSpectrumYAxis(_ column: String, for group: SpectroscopyGroup) {
+        var updatedState = spectrumAxisState
+        guard updatedState.setYColumn(
+            column,
+            forGroupID: group.id,
+            availableColumns: group.availableColumns,
+            preferredX: group.xLabel,
+            preferredY: group.yLabel
+        ) else {
+            status = "\(column) is not compatible with \(group.title)."
+            return
+        }
+        spectrumAxisState = updatedState
+        status = "Using \(spectrumXAxis(for: group)) vs \(spectrumYAxis(for: group)) for \(group.title)."
     }
 
     func spectra(for file: SXMMetadata) -> [SpectroscopyFile] {
@@ -1302,8 +1323,6 @@ final class AppModel: ObservableObject {
 
         clearSelectedRender()
         guard selectedID != nil else {
-            selectedSpectrumXColumn = ""
-            selectedSpectrumYColumn = ""
             status = "No file selected."
             return
         }
@@ -1478,6 +1497,9 @@ final class AppModel: ObservableObject {
         let associated = associateSpectra(spectra, with: files)
         spectrumParentIDBySpectrumID = associated.parents
         spectrumGroupsByFileID = associated.groups
+        ensureSpectrumAxisSelections(
+            for: associated.groups.values.flatMap { $0 }
+        )
     }
 
     private func rebuildSpectrumGroups(for parentIDs: Set<SXMMetadata.ID>) {
@@ -1502,6 +1524,26 @@ final class AppModel: ObservableObject {
             }
         }
         spectrumGroupsByFileID = updatedGroups
+        ensureSpectrumAxisSelections(
+            for: parentIDs.flatMap { updatedGroups[$0] ?? [] }
+        )
+    }
+
+    private func ensureSpectrumAxisSelections(
+        for groups: [SpectroscopyGroup]
+    ) {
+        var updatedState = spectrumAxisState
+        for group in groups {
+            updatedState.ensureSelection(
+                forGroupID: group.id,
+                availableColumns: group.availableColumns,
+                preferredX: group.xLabel,
+                preferredY: group.yLabel
+            )
+        }
+        if updatedState != spectrumAxisState {
+            spectrumAxisState = updatedState
+        }
     }
 
     private func associateSpectra(_ spectra: [SpectroscopyFile], with sxmFiles: [SXMMetadata]) -> (groups: [SXMMetadata.ID: [SpectroscopyGroup]], parents: [SpectroscopyFile.ID: SXMMetadata.ID]) {

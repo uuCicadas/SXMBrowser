@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 23 (2026-07-25): keep independent spectroscopy axes per group
 - Build 22 (2026-07-25): partition spectra by compatible column schema
 - Build 21 (2026-07-25): require complete finite DAT rows
 - Build 20 (2026-07-25): surface SXM and DAT scan diagnostics

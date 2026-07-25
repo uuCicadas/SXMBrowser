@@ -1601,41 +1601,42 @@ struct InspectorView: View {
                     .disabled(model.spectra.isEmpty)
 
                     if let file = model.selectedFile {
-                        LabeledControl("X Channel") {
-                            Picker("X Channel", selection: Binding(
-                                get: { model.selectedSpectrumXColumn },
-                                set: {
-                                    model.selectedSpectrumXColumn = $0
-                                    model.spectrumAxisChanged()
+                        let groups = model.spectrumGroups(for: file)
+                        ForEach(groups) { group in
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(group.title)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+
+                                LabeledControl("X Channel") {
+                                    Picker("X Channel", selection: Binding(
+                                        get: { model.spectrumXAxis(for: group) },
+                                        set: { model.setSpectrumXAxis($0, for: group) }
+                                    )) {
+                                        ForEach(group.availableColumns, id: \.self) { column in
+                                            Text(column).tag(column)
+                                        }
+                                    }
+                                    .labelsHidden()
+                                    .pickerStyle(.menu)
                                 }
-                            )) {
-                                ForEach(model.selectedSpectrumColumns, id: \.self) { column in
-                                    Text(column).tag(column)
+
+                                LabeledControl("Y Channel") {
+                                    Picker("Y Channel", selection: Binding(
+                                        get: { model.spectrumYAxis(for: group) },
+                                        set: { model.setSpectrumYAxis($0, for: group) }
+                                    )) {
+                                        ForEach(group.availableColumns, id: \.self) { column in
+                                            Text(column).tag(column)
+                                        }
+                                    }
+                                    .labelsHidden()
+                                    .pickerStyle(.menu)
                                 }
                             }
-                            .labelsHidden()
-                            .pickerStyle(.menu)
                         }
-                        .disabled(model.selectedSpectrumColumns.isEmpty)
 
-                        LabeledControl("Y Channel") {
-                            Picker("Y Channel", selection: Binding(
-                                get: { model.selectedSpectrumYColumn },
-                                set: {
-                                    model.selectedSpectrumYColumn = $0
-                                    model.spectrumAxisChanged()
-                                }
-                            )) {
-                                ForEach(model.selectedSpectrumColumns, id: \.self) { column in
-                                    Text(column).tag(column)
-                                }
-                            }
-                            .labelsHidden()
-                            .pickerStyle(.menu)
-                        }
-                        .disabled(model.selectedSpectrumColumns.isEmpty)
-
-                        StatLabel("plots", "\(model.spectrumGroups(for: file).count)")
+                        StatLabel("plots", "\(groups.count)")
                         StatLabel("points", "\(model.spectraForMarkers(on: file).count)")
                     }
                 }
