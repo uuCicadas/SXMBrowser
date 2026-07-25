@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 25 (2026-07-25): reuse matrix statistics across histogram bins
 - Build 24 (2026-07-25): bundle immutable machine-independent palettes
 - Build 23 (2026-07-25): keep independent spectroscopy axes per group
 - Build 22 (2026-07-25): partition spectra by compatible column schema

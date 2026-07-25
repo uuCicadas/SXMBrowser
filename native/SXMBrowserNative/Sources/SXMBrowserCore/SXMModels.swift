@@ -166,7 +166,7 @@ public struct SXMFullFile: Sendable {
     }
 }
 
-public struct HistogramStats: Sendable {
+public struct MatrixStatistics: Equatable, Sendable {
     public let count: Int
     public let min: Double
     public let max: Double
@@ -174,9 +174,60 @@ public struct HistogramStats: Sendable {
     public let p99: Double
     public let mean: Double
     public let std: Double
+
+    public init(
+        count: Int,
+        min: Double,
+        max: Double,
+        p1: Double,
+        p99: Double,
+        mean: Double,
+        std: Double
+    ) {
+        self.count = count
+        self.min = min
+        self.max = max
+        self.p1 = p1
+        self.p99 = p99
+        self.mean = mean
+        self.std = std
+    }
+}
+
+public struct HistogramDistribution: Equatable, Sendable {
     public let bins: Int
-    public let hist: [Int]
+    public let counts: [Int]
     public let edges: [Double]
+
+    public init(bins: Int, counts: [Int], edges: [Double]) {
+        self.bins = bins
+        self.counts = counts
+        self.edges = edges
+    }
+}
+
+public struct HistogramStats: Sendable {
+    public let statistics: MatrixStatistics
+    public let distribution: HistogramDistribution
+
+    public var count: Int { statistics.count }
+    public var min: Double { statistics.min }
+    public var max: Double { statistics.max }
+    public var p1: Double { statistics.p1 }
+    public var p99: Double { statistics.p99 }
+    public var mean: Double { statistics.mean }
+    public var std: Double { statistics.std }
+    public var bins: Int { distribution.bins }
+    public var hist: [Int] { distribution.counts }
+    public var edges: [Double] { distribution.edges }
+
+    public init(
+        statistics: MatrixStatistics,
+        distribution: HistogramDistribution
+    ) {
+        self.statistics = statistics
+        self.distribution = distribution
+    }
 }
 
 public struct RenderOptions: Hashable, Sendable {

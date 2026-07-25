@@ -85,6 +85,14 @@ struct RenderedFrame {
     let automaticScaleMax: Double?
 }
 
+private struct ProcessedRenderCache {
+    let key: String
+    let matrix: Matrix
+    let statistics: MatrixStatistics?
+    let histogram: HistogramStats?
+    let histogramBins: Int
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     static let defaultSidebarWidth: CGFloat = 300
@@ -161,10 +169,7 @@ final class AppModel: ObservableObject {
     private var imageTask: Task<Void, Never>?
     private var scaleRenderTask: Task<Void, Never>?
     private var renderRequestGate = RenderRequestGate<SXMMetadata.ID>()
-    private var processedCacheKey: String?
-    private var processedCacheMatrix: Matrix?
-    private var processedCacheStats: HistogramStats?
-    private var processedCacheStatsBins: Int?
+    private var processedRenderCache: ProcessedRenderCache?
     private var spectrumDragPayloads: [String: [SpectroscopyFile.ID]] = [:]
 
     init() {
@@ -408,10 +413,7 @@ final class AppModel: ObservableObject {
         activeTagName = nil
         filenameSearch = ""
         spectrumAxisState.clear()
-        processedCacheKey = nil
-        processedCacheMatrix = nil
-        processedCacheStats = nil
-        processedCacheStatsBins = nil
+        processedRenderCache = nil
         fullCache.removeAll()
         fullCacheOrder.removeAll()
         thumbnailCache.removeAllObjects()
@@ -809,10 +811,7 @@ final class AppModel: ObservableObject {
         scaleLocked = false
         scaleMin = nil
         scaleMax = nil
-        processedCacheKey = nil
-        processedCacheMatrix = nil
-        processedCacheStats = nil
-        processedCacheStatsBins = nil
+        processedRenderCache = nil
         syncSpectrumAxesWithSelection()
     }
 
@@ -1159,10 +1158,12 @@ final class AppModel: ObservableObject {
 
         imageTask = Task {
             do {
+                let cached = processedRenderCache?.key == cacheKey
+                    ? processedRenderCache
+                    : nil
                 let processed: Matrix
-                if processedCacheKey == cacheKey,
-                   let cachedMatrix = processedCacheMatrix {
-                    processed = cachedMatrix
+                if let cached {
+                    processed = cached.matrix
                 } else {
                     let full = try await fullFile(for: file)
                     guard let matrix = full.matrices[MatrixKey(channel: channel, direction: direction)] else {
@@ -1178,19 +1179,39 @@ final class AppModel: ObservableObject {
                 }
                 guard !Task.isCancelled, acceptsRenderRequest(request) else { return }
 
-                let stats: HistogramStats?
-                if processedCacheKey == cacheKey,
-                   processedCacheStatsBins == bins,
-                   let cachedStats = processedCacheStats {
-                    stats = cachedStats
+                let statistics: MatrixStatistics?
+                if let cached {
+                    statistics = cached.statistics
                 } else {
-                    stats = await Task.detached(priority: .userInitiated) {
-                        SXMRenderer.histogram(processed, bins: bins)
+                    statistics = await Task.detached(priority: .userInitiated) {
+                        SXMRenderer.statistics(processed)
                     }.value
                 }
                 guard !Task.isCancelled, acceptsRenderRequest(request) else { return }
 
-                let autoScale = SXMRenderer.automaticScale(processed)
+                let stats: HistogramStats?
+                if let cached, cached.histogramBins == bins {
+                    stats = cached.histogram
+                } else if let statistics {
+                    let distribution = await Task.detached(priority: .userInitiated) {
+                        SXMRenderer.histogram(
+                            processed,
+                            statistics: statistics,
+                            bins: bins
+                        )
+                    }.value
+                    stats = HistogramStats(
+                        statistics: statistics,
+                        distribution: distribution
+                    )
+                } else {
+                    stats = nil
+                }
+                guard !Task.isCancelled, acceptsRenderRequest(request) else { return }
+
+                let autoScale = statistics.map {
+                    SXMRenderer.automaticScale($0)
+                }
                 let renderMin: Double?
                 let renderMax: Double?
                 switch configuration.scale {
@@ -1215,10 +1236,13 @@ final class AppModel: ObservableObject {
                 }.value
                 guard !Task.isCancelled, acceptsRenderRequest(request) else { return }
 
-                processedCacheKey = cacheKey
-                processedCacheMatrix = processed
-                processedCacheStats = stats
-                processedCacheStatsBins = bins
+                processedRenderCache = ProcessedRenderCache(
+                    key: cacheKey,
+                    matrix: processed,
+                    statistics: statistics,
+                    histogram: stats,
+                    histogramBins: bins
+                )
                 if case .automatic = configuration.scale {
                     scaleMin = autoScale?.vmin
                     scaleMax = autoScale?.vmax
@@ -1404,10 +1428,7 @@ final class AppModel: ObservableObject {
     private func removeCachedData(for url: URL) {
         fullCache.removeValue(forKey: url)
         fullCacheOrder.removeAll { $0 == url }
-        processedCacheKey = nil
-        processedCacheMatrix = nil
-        processedCacheStats = nil
-        processedCacheStatsBins = nil
+        processedRenderCache = nil
         thumbnailCache.removeAllObjects()
         cancelThumbnailTasks()
     }

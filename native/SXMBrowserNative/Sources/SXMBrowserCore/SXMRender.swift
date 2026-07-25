@@ -28,57 +28,92 @@ public enum SXMRenderer {
         }
     }
 
-    public static func histogram(_ matrix: Matrix, bins requestedBins: Int = 256) -> HistogramStats? {
-        let finite = matrix.values.compactMap { value -> Double? in
-            value.isFinite ? Double(value) : nil
-        }
+    public static func statistics(_ matrix: Matrix) -> MatrixStatistics? {
+        var finite = matrix.values.filter(\.isFinite)
         guard !finite.isEmpty else { return nil }
-        let sorted = finite.sorted()
-        let minValue = sorted.first ?? 0
-        let maxValue = sorted.last ?? minValue
-        let bins = max(16, min(2048, requestedBins))
-        if maxValue == minValue {
-            var hist = [Int](repeating: 0, count: bins)
-            hist[bins / 2] = finite.count
-            return HistogramStats(
-                count: finite.count,
-                min: minValue,
-                max: maxValue,
-                p1: minValue,
-                p99: maxValue,
-                mean: minValue,
-                std: 0,
-                bins: bins,
-                hist: hist,
-                edges: [Double](repeating: minValue, count: bins + 1)
-            )
+
+        var mean = 0.0
+        var sumOfSquaredDeviations = 0.0
+        for (index, sample) in finite.enumerated() {
+            let value = Double(sample)
+            let count = Double(index + 1)
+            let delta = value - mean
+            mean += delta / count
+            let adjustedDelta = value - mean
+            sumOfSquaredDeviations += delta * adjustedDelta
         }
 
-        let width = (maxValue - minValue) / Double(bins)
-        var hist = [Int](repeating: 0, count: bins)
-        var sum = 0.0
-        var sumSq = 0.0
-        for value in finite {
-            let idx = min(bins - 1, max(0, Int((value - minValue) / width)))
-            hist[idx] += 1
-            sum += value
-            sumSq += value * value
-        }
-        let mean = sum / Double(finite.count)
-        let variance = max(0, sumSq / Double(finite.count) - mean * mean)
-        let edges = (0...bins).map { minValue + Double($0) * width }
+        finite.sort()
+        let minValue = Double(finite[0])
+        let maxValue = Double(finite[finite.count - 1])
+        let variance = max(
+            0,
+            sumOfSquaredDeviations / Double(finite.count)
+        )
 
-        return HistogramStats(
+        return MatrixStatistics(
             count: finite.count,
             min: minValue,
             max: maxValue,
-            p1: percentile(sorted, 1),
-            p99: percentile(sorted, 99),
+            p1: percentile(finite, 1),
+            p99: percentile(finite, 99),
             mean: mean,
-            std: sqrt(variance),
+            std: sqrt(variance)
+        )
+    }
+
+    public static func histogram(
+        _ matrix: Matrix,
+        statistics: MatrixStatistics,
+        bins requestedBins: Int = 256
+    ) -> HistogramDistribution {
+        let bins = max(16, min(2048, requestedBins))
+        if statistics.max == statistics.min {
+            var hist = [Int](repeating: 0, count: bins)
+            hist[bins / 2] = matrix.values.lazy.filter(\.isFinite).count
+            return HistogramDistribution(
+                bins: bins,
+                counts: hist,
+                edges: [Double](
+                    repeating: statistics.min,
+                    count: bins + 1
+                )
+            )
+        }
+
+        let width = (statistics.max - statistics.min) / Double(bins)
+        var hist = [Int](repeating: 0, count: bins)
+        for sample in matrix.values where sample.isFinite {
+            let value = Double(sample)
+            let idx = min(
+                bins - 1,
+                max(0, Int((value - statistics.min) / width))
+            )
+            hist[idx] += 1
+        }
+        let edges = (0...bins).map {
+            statistics.min + Double($0) * width
+        }
+
+        return HistogramDistribution(
             bins: bins,
-            hist: hist,
+            counts: hist,
             edges: edges
+        )
+    }
+
+    public static func histogram(
+        _ matrix: Matrix,
+        bins requestedBins: Int = 256
+    ) -> HistogramStats? {
+        guard let statistics = statistics(matrix) else { return nil }
+        return HistogramStats(
+            statistics: statistics,
+            distribution: histogram(
+                matrix,
+                statistics: statistics,
+                bins: requestedBins
+            )
         )
     }
 
@@ -116,17 +151,20 @@ public enum SXMRenderer {
     }
 
     public static func automaticScale(_ matrix: Matrix) -> (vmin: Double, vmax: Double)? {
-        let finite = matrix.values.compactMap { $0.isFinite ? Double($0) : nil }.sorted()
-        guard let first = finite.first, let last = finite.last else { return nil }
-        if first == last {
-            return (first, last)
+        guard let statistics = statistics(matrix) else { return nil }
+        return automaticScale(statistics)
+    }
+
+    public static func automaticScale(
+        _ statistics: MatrixStatistics
+    ) -> (vmin: Double, vmax: Double) {
+        if statistics.min == statistics.max {
+            return (statistics.min, statistics.max)
         }
-        let lo = percentile(finite, 1)
-        let hi = percentile(finite, 99)
-        if hi <= lo {
-            return (first, last)
+        if statistics.p99 <= statistics.p1 {
+            return (statistics.min, statistics.max)
         }
-        return (lo, hi)
+        return (statistics.p1, statistics.p99)
     }
 
     public static func colorize(
@@ -275,15 +313,15 @@ private func solve3x3(_ a: [[Double]], _ b: [Double]) -> [Double]? {
     return [m[0][3], m[1][3], m[2][3]]
 }
 
-private func percentile(_ sorted: [Double], _ p: Double) -> Double {
+private func percentile(_ sorted: [Float], _ p: Double) -> Double {
     guard !sorted.isEmpty else { return 0 }
-    if sorted.count == 1 { return sorted[0] }
+    if sorted.count == 1 { return Double(sorted[0]) }
     let pos = (p / 100) * Double(sorted.count - 1)
     let lo = Int(floor(pos))
     let hi = Int(ceil(pos))
-    if lo == hi { return sorted[lo] }
+    if lo == hi { return Double(sorted[lo]) }
     let t = pos - Double(lo)
-    return sorted[lo] * (1 - t) + sorted[hi] * t
+    return Double(sorted[lo]) * (1 - t) + Double(sorted[hi]) * t
 }
 
 private func interpolate(stops: [PaletteStop], at value: Double) -> (r: Double, g: Double, b: Double) {
