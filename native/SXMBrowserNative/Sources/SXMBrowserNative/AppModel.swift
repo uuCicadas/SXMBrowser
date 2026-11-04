@@ -256,7 +256,7 @@ final class AppModel: ObservableObject {
     @Published var selectedChannel = ""
     @Published var selectedDirection: ScanDirection = .fwd
     @Published var selectedProcessing: ProcessingMode = .planeLinear
-    @Published var selectedPalette: PaletteName = .blueViolet
+    @Published var selectedPalette: PaletteName = .duskViolet
     @Published var invertPalette = false
     @Published private(set) var spectrumAxisState = SpectroscopyAxisState()
     @Published private(set) var spectrumAxisRestoreIssues:

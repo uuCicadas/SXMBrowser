@@ -39,13 +39,15 @@ public enum ProcessingMode: String, CaseIterable, Codable, Sendable {
 
 public enum PaletteName: String, CaseIterable, Codable, Sendable {
     case blueViolet
+    case duskViolet
     case deepBlue
     case gray
     case flame
 
     public var label: String {
         switch self {
-        case .blueViolet: "Blue Violet"
+        case .blueViolet: "Ink Violet"
+        case .duskViolet: "Dusk Violet"
         case .deepBlue: "Deep Blue"
         case .gray: "Basic gray"
         case .flame: "Flame"
@@ -267,7 +269,7 @@ public func classifyChannel(_ name: String) -> ChannelKind {
 }
 
 public func defaultPalette(for channelName: String) -> PaletteName {
-    classifyChannel(channelName) == .afm ? .gray : .blueViolet
+    classifyChannel(channelName) == .afm ? .gray : .duskViolet
 }
 
 public func defaultProcessing(for channelName: String) -> ProcessingMode {

@@ -25,7 +25,7 @@ func defaultDisplayRulesUseSTMPlaneFitAndAFMRawWithChannelPalette() {
     for channel in ["Z", "Current"] {
         #expect(classifyChannel(channel) == .stm)
         #expect(defaultProcessing(for: channel) == .planeLinear)
-        #expect(defaultPalette(for: channel) == .blueViolet)
+        #expect(defaultPalette(for: channel) == .duskViolet)
     }
 
     for channel in ["OC_M1_Freq._Shift", "Frequency Shift", "Amplitude", "Excitation", "PLL", "Δf"] {

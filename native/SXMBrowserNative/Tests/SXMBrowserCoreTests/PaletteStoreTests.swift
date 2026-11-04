@@ -51,10 +51,12 @@ func bundledPaletteCatalogUsesVersionControlledStops() {
 func selectedSTMPalettesMatchApprovedPreviews() {
     // Fingerprints cover every Double in the selected preview's stops, in order:
     // position, r, g, b, encoded as little-endian IEEE 754 values.
-    // Approved refinement: design/stm-palette-refinement/further-five-percent/candidate-blue-violet.json
     // B4: design/stm-palette-preview/saved/B4-deep-blue/palette.json
+    // E Ink Violet: design/palette-survey-2026/palettes/E-ink-violet-blueViolet.json
+    // H Dusk Violet: design/palette-survey-2026/palettes/H-dusk-violet.json
     let approvedFingerprints: [(PaletteName, String)] = [
-        (.blueViolet, "e5e5c9cedc4ccbe03466a04129edd1b4e5128d85ca98f4b1ccb6c52347240c0e"),
+        (.blueViolet, "eef29bb173702cd500a5668b6de08ace1f332bb0e0c6c0cde0c0f47c7c893528"),
+        (.duskViolet, "5c48fafdc3d046448bb10d0388078288382730550bb655bb69419b0ee382dd08"),
         (.deepBlue, "a48576bd35d240d1b2cbc3b4c4ce6e31c690dbe1b963a77762a7770bbe4b1805"),
     ]
 

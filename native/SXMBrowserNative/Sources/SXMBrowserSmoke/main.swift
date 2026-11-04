@@ -332,7 +332,7 @@ private func runSmoke() throws {
     let validPaletteCount = PaletteName.allCases.filter {
         PaletteStore.shared.stops(for: $0).count >= 2
     }.count
-    let expectedPalettes: [PaletteName] = [.gray, .flame, .blueViolet, .deepBlue]
+    let expectedPalettes: [PaletteName] = [.gray, .flame, .blueViolet, .duskViolet, .deepBlue]
     guard Set(PaletteName.allCases) == Set(expectedPalettes),
           validPaletteCount == expectedPalettes.count else {
         throw SmokeFailure.contract(
@@ -349,7 +349,7 @@ private func runSmoke() throws {
         height: 1,
         values: (0...256).map { Float($0) / 256 }
     )
-    for palette in [PaletteName.blueViolet, .deepBlue] {
+    for palette in [PaletteName.blueViolet, .duskViolet, .deepBlue] {
         let options = RenderOptions(
             channel: "Z",
             direction: .fwd,
