@@ -3169,6 +3169,7 @@ struct SpectroscopyPlotView: View {
     let xColumn: String
     let yColumn: String
     var focusedSpectrumID: SpectroscopyFile.ID? = nil
+    var liveResizing = false
 
     private let inset = EdgeInsets(
         top: 20,
@@ -3316,31 +3317,28 @@ struct SpectroscopyPlotView: View {
         ) else {
             return
         }
-        let pointCount = min(series.x.count, series.y.count)
-        let xSpan = max(1e-30, ranges.xMax - ranges.xMin)
-        let ySpan = max(1e-30, ranges.yMax - ranges.yMin)
-        var path = Path()
-        var didMove = false
-        for index in 0..<pointCount {
-            let xValue = series.x[index]
-            let yValue = series.y[index]
-            guard xValue.isFinite, yValue.isFinite else { continue }
-            let x = plot.minX
-                + CGFloat((xValue - ranges.xMin) / xSpan) * plot.width
-            let y = plot.maxY
-                - CGFloat((yValue - ranges.yMin) / ySpan) * plot.height
-            let point = CGPoint(x: x, y: y)
-            if didMove {
-                path.addLine(to: point)
-            } else {
-                path.move(to: point)
-                didMove = true
-            }
-        }
-        let isFocused = spectrum.id == focusedSpectrumID
+        let path = curvePath(
+            series: series,
+            plot: plot,
+            ranges: ranges
+        )
         let visualStyle = spectrumVisualStyle(
             for: spectrum
         )
+        let isFocused = spectrum.id == focusedSpectrumID
+        // While the drawer is being dragged the plot is redrawn every frame;
+        // one decimated stroke per curve keeps the drag at full frame rate.
+        if liveResizing {
+            context.stroke(
+                path,
+                with: .color(spectrumColor(visualStyle)),
+                style: spectrumStrokeStyle(
+                    visualStyle.pattern,
+                    lineWidth: 1.7
+                )
+            )
+            return
+        }
         let underlayWidth: CGFloat
         let colorWidth: CGFloat
         if isFocused {
@@ -3390,6 +3388,76 @@ struct SpectroscopyPlotView: View {
                 lineWidth: colorWidth
             )
         )
+    }
+
+    private func curvePath(
+        series: (x: [Double], y: [Double]),
+        plot: CGRect,
+        ranges: (xMin: Double, xMax: Double, yMin: Double, yMax: Double)
+    ) -> Path {
+        let count = min(series.x.count, series.y.count)
+        let xSpan = max(1e-30, ranges.xMax - ranges.xMin)
+        let ySpan = max(1e-30, ranges.yMax - ranges.yMin)
+        var path = Path()
+        var didMove = false
+        func addPoint(_ xValue: Double, _ yValue: Double) {
+            guard xValue.isFinite, yValue.isFinite else { return }
+            let x = plot.minX
+                + CGFloat((xValue - ranges.xMin) / xSpan) * plot.width
+            let y = plot.maxY
+                - CGFloat((yValue - ranges.yMin) / ySpan) * plot.height
+            let point = CGPoint(x: x, y: y)
+            if didMove {
+                path.addLine(to: point)
+            } else {
+                path.move(to: point)
+                didMove = true
+            }
+        }
+
+        let targetPoints = max(2, Int(plot.width / 2))
+        guard liveResizing, count > targetPoints * 2 else {
+            for index in 0..<count {
+                addPoint(series.x[index], series.y[index])
+            }
+            return path
+        }
+
+        // Min/max decimation preserves peaks while cutting stroke work.
+        let bucketCount = max(1, targetPoints)
+        let bucketSize = max(1, count / bucketCount)
+        var index = 0
+        while index < count {
+            let end = min(index + bucketSize, count)
+            var lowest = Double.infinity
+            var highest = -Double.infinity
+            var lowestX = 0.0
+            var highestX = 0.0
+            for sample in index..<end {
+                let x = series.x[sample]
+                let y = series.y[sample]
+                guard x.isFinite, y.isFinite else { continue }
+                if y < lowest {
+                    lowest = y
+                    lowestX = x
+                }
+                if y > highest {
+                    highest = y
+                    highestX = x
+                }
+            }
+            if lowest.isFinite {
+                if lowestX <= highestX {
+                    addPoint(lowestX, lowest)
+                    addPoint(highestX, highest)
+                } else {
+                    addPoint(highestX, highest)
+                    addPoint(lowestX, lowest)
+                }
+            }
+            index = end
+        }
+        return path
     }
 
     private var plotAccessibilityValue: String {
@@ -4205,6 +4273,7 @@ private struct SingleSpectroscopyDrawer: View {
                         model: model,
                         presentation: activeGroup
                     )
+                    .equatable()
                     .frame(width: legendWidth)
                 }
                 .padding(.horizontal, 12)
@@ -4238,6 +4307,7 @@ private struct SingleSpectroscopyDrawer: View {
                             model: model,
                             presentation: activeGroup
                         )
+                        .equatable()
                         .frame(width: 310, height: 320)
                     }
                     .accessibilityLabel(
@@ -4287,7 +4357,8 @@ private struct SingleSpectroscopyDrawer: View {
                 yColumn: yColumn,
                 focusedSpectrumID:
                     model.singleSpectroscopyState
-                        .focusedSpectrumID
+                        .focusedSpectrumID,
+                liveResizing: isResizing
             )
             .id(
                 "\(activeGroup.renderID)|"
@@ -4326,7 +4397,7 @@ private struct SingleSpectroscopyDrawer: View {
     }
 }
 
-private struct SpectroscopyLegend: View {
+private struct SpectroscopyLegend: View, Equatable {
     @ObservedObject var model: AppModel
     let presentation: PresentedSpectroscopyGroup
 
@@ -4370,6 +4441,14 @@ private struct SpectroscopyLegend: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Spectrum curve legend")
+    }
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.presentation.id == rhs.presentation.id
+            && lhs.presentation.allSpectra.count
+                == rhs.presentation.allSpectra.count
+            && lhs.presentation.visibleSpectra.count
+                == rhs.presentation.visibleSpectra.count
     }
 }
 
