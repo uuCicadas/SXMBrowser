@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 91 (2026-11-04): Remove the zoom in and zoom out buttons from the toolbar and keep zoom presets in the zoom menu.
 - Build 90 (2026-11-04): Draw the toolbar STM palette chip in sRGB so it keeps the palette colors.
 - Build 89 (2026-11-04): Add a global STM preview palette picker to the toolbar and keep the inspector toggle at the trailing edge.
 - Build 88 (2026-11-04): Adopt the Ink Violet ramp for the Blue Violet palette, add Dusk Violet, and make Dusk Violet the default STM preview palette; keep AFM on Basic gray.
