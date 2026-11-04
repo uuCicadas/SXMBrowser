@@ -2443,64 +2443,55 @@ private struct ViewerZoomControls: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        HStack(spacing: 3) {
-            Button {
-                model.zoomViewerOut()
-            } label: {
-                Image(systemName: "minus.magnifyingglass")
-            }
-            .disabled(!model.canZoomViewerOut)
-            .help("Zoom out")
-            .accessibilityLabel("Zoom out")
-
-            Menu {
-                Button("Fit to Window") {
-                    model.fitViewer()
-                }
-                .disabled(!model.canAdjustViewerTransform)
-
-                Button("Actual Size (100%)") {
-                    model.showViewerActualSize()
-                }
-                .disabled(!model.canAdjustViewerTransform)
-
-                Divider()
-
-                ForEach(
-                    viewerZoomPresetScales,
-                    id: \.self
-                ) { scale in
-                    Button(
-                        viewerZoomPercentageLabel(
-                            for: scale
-                        )
-                    ) {
-                        model.setViewerScale(scale)
-                    }
-                    .disabled(!model.canAdjustViewerTransform)
-                }
-            } label: {
-                Text(model.viewerZoomLabel)
-                    .font(.caption.monospacedDigit())
-                    .frame(minWidth: 62)
-            }
-            .disabled(!model.canAdjustViewerTransform)
-            .fixedSize()
-            .help("Choose image zoom")
-            .accessibilityLabel("Image zoom")
-            .accessibilityValue(model.viewerZoomLabel)
-
-            Button {
+        Menu {
+            Button("Zoom In") {
                 model.zoomViewerIn()
-            } label: {
-                Image(systemName: "plus.magnifyingglass")
             }
             .disabled(!model.canZoomViewerIn)
-            .help("Zoom in")
-            .accessibilityLabel("Zoom in")
+
+            Button("Zoom Out") {
+                model.zoomViewerOut()
+            }
+            .disabled(!model.canZoomViewerOut)
+
+            Divider()
+
+            Button("Fit to Window") {
+                model.fitViewer()
+            }
+            .disabled(!model.canAdjustViewerTransform)
+
+            Button("Actual Size (100%)") {
+                model.showViewerActualSize()
+            }
+            .disabled(!model.canAdjustViewerTransform)
+
+            Divider()
+
+            ForEach(
+                viewerZoomPresetScales,
+                id: \.self
+            ) { scale in
+                Button(
+                    viewerZoomPercentageLabel(
+                        for: scale
+                    )
+                ) {
+                    model.setViewerScale(scale)
+                }
+                .disabled(!model.canAdjustViewerTransform)
+            }
+        } label: {
+            Text(model.viewerZoomLabel)
+                .font(.caption.monospacedDigit())
+                .frame(minWidth: 62)
         }
-        .controlSize(.small)
+        .menuStyle(.borderlessButton)
+        .disabled(!model.canAdjustViewerTransform)
         .fixedSize()
+        .help("Choose image zoom")
+        .accessibilityLabel("Image zoom")
+        .accessibilityValue(model.viewerZoomLabel)
     }
 }
 
