@@ -34,8 +34,12 @@ public enum SXMRenderer {
             return matrix
         case .lineMean:
             return try lineMeanSubtract(matrix, cancellation: cancellation)
+        case .lineSlope:
+            return try lineSlopeSubtract(matrix, cancellation: cancellation)
         case .lineLinear:
             return try lineLinearFit(matrix, cancellation: cancellation)
+        case .lineDerivative:
+            return try lineDifferentiate(matrix, cancellation: cancellation)
         case .planeLinear:
             return try planeLinearFit(matrix, cancellation: cancellation)
         }
@@ -279,13 +283,7 @@ public enum SXMRenderer {
     public static func automaticScale(
         _ statistics: MatrixStatistics
     ) -> (vmin: Double, vmax: Double) {
-        if statistics.min == statistics.max {
-            return (statistics.min, statistics.max)
-        }
-        if statistics.p99 <= statistics.p1 {
-            return (statistics.min, statistics.max)
-        }
-        return (statistics.p1, statistics.p99)
+        (statistics.min, statistics.max)
     }
 
     public static func colorize(
@@ -376,14 +374,12 @@ private func lineMeanSubtract(
     return output
 }
 
+/// Removes each scan line's least-squares slope and intercept using finite samples.
 private func lineLinearFit(
     _ matrix: Matrix,
     cancellation: CancellationCheckpoint
 ) throws -> Matrix {
     var output = matrix
-    let n = Double(matrix.width)
-    let sumX = Double(matrix.width - 1) * n / 2
-    let sumXX = Double(matrix.width - 1) * Double(matrix.width) * Double(2 * matrix.width - 1) / 6
 
     for y in 0..<matrix.height {
         try cancellation.check()
@@ -415,22 +411,105 @@ private func lineLinearFit(
             if x.isMultiple(of: 4_096) {
                 try cancellation.check()
             }
-            output[x, y] = matrix[x, y] - Float(slope * Double(x) + intercept)
+            // Subtract before narrowing so a small residual is not rounded away
+            // when the original signal has a much larger constant offset.
+            output[x, y] = Float(Double(matrix[x, y]) - (slope * Double(x) + intercept))
         }
-
-        _ = (sumX, sumXX)
     }
     return output
 }
 
+private func lineSlopeSubtract(
+    _ matrix: Matrix,
+    cancellation: CancellationCheckpoint
+) throws -> Matrix {
+    var output = matrix
+
+    for y in 0..<matrix.height {
+        try cancellation.check()
+        var valid = 0.0
+        var sx = 0.0
+        var sy = 0.0
+        var sxx = 0.0
+        var sxy = 0.0
+        for x in 0..<matrix.width {
+            if x.isMultiple(of: 4_096) {
+                try cancellation.check()
+            }
+            let value = matrix[x, y]
+            if value.isFinite {
+                let dx = Double(x)
+                let dy = Double(value)
+                valid += 1
+                sx += dx
+                sy += dy
+                sxx += dx * dx
+                sxy += dx * dy
+            }
+        }
+        if valid < 2 { continue }
+        let denominator = valid * sxx - sx * sx
+        let slope = abs(denominator) < .ulpOfOne ? 0 : (valid * sxy - sx * sy) / denominator
+        let meanX = sx / valid
+        for x in 0..<matrix.width {
+            if x.isMultiple(of: 4_096) {
+                try cancellation.check()
+            }
+            output[x, y] = matrix[x, y] - Float(slope * (Double(x) - meanX))
+        }
+    }
+    return output
+}
+
+private func lineDifferentiate(
+    _ matrix: Matrix,
+    cancellation: CancellationCheckpoint
+) throws -> Matrix {
+    var output = matrix
+
+    for y in 0..<matrix.height {
+        try cancellation.check()
+        for x in 0..<matrix.width {
+            if x.isMultiple(of: 4_096) {
+                try cancellation.check()
+            }
+            let current = matrix[x, y]
+            guard current.isFinite else {
+                output[x, y] = .nan
+                continue
+            }
+            let left = x > 0 ? matrix[x - 1, y] : .nan
+            let right = x + 1 < matrix.width ? matrix[x + 1, y] : .nan
+            if left.isFinite && right.isFinite {
+                output[x, y] = (right - left) / 2
+            } else if right.isFinite {
+                output[x, y] = right - current
+            } else if left.isFinite {
+                output[x, y] = current - left
+            } else {
+                output[x, y] = 0
+            }
+        }
+    }
+    return output
+}
+
+/// Removes one least-squares plane z = ax + by + c across all finite pixels.
+/// A unique plane requires at least three non-collinear finite samples; otherwise
+/// leave the data unchanged rather than silently choosing a different correction.
 private func planeLinearFit(
     _ matrix: Matrix,
     cancellation: CancellationCheckpoint
 ) throws -> Matrix {
-    var normal = [[Double]](repeating: [Double](repeating: 0, count: 3), count: 3)
-    var rhs = [Double](repeating: 0, count: 3)
-    var count = 0
-
+    // Normalize coordinates and remove a reference height before accumulating.
+    // Centering avoids subtracting large, nearly equal normal-equation terms.
+    let xScale = Double(max(1, matrix.width - 1))
+    let yScale = Double(max(1, matrix.height - 1))
+    var referenceHeight: Double?
+    var count = 0.0
+    var sumX = 0.0
+    var sumY = 0.0
+    var sumZ = 0.0
     for y in 0..<matrix.height {
         try cancellation.check()
         for x in 0..<matrix.width {
@@ -439,17 +518,49 @@ private func planeLinearFit(
             }
             let value = matrix[x, y]
             guard value.isFinite else { continue }
-            let row = [Double(x), Double(y), 1.0]
-            for i in 0..<3 {
-                rhs[i] += row[i] * Double(value)
-                for j in 0..<3 {
-                    normal[i][j] += row[i] * row[j]
-                }
-            }
+            let z = Double(value)
+            if referenceHeight == nil { referenceHeight = z }
             count += 1
+            sumX += Double(x) / xScale
+            sumY += Double(y) / yScale
+            sumZ += z - referenceHeight!
         }
     }
-    guard count >= 3, let coeff = solve3x3(normal, rhs) else { return matrix }
+    guard count >= 3, let referenceHeight else { return matrix }
+    let meanX = sumX / count
+    let meanY = sumY / count
+    let meanZ = sumZ / count
+
+    var xx = 0.0
+    var xy = 0.0
+    var yy = 0.0
+    var xz = 0.0
+    var yz = 0.0
+    for y in 0..<matrix.height {
+        try cancellation.check()
+        for x in 0..<matrix.width {
+            if x.isMultiple(of: 4_096) {
+                try cancellation.check()
+            }
+            let value = matrix[x, y]
+            guard value.isFinite else { continue }
+            let dx = Double(x) / xScale - meanX
+            let dy = Double(y) / yScale - meanY
+            let dz = (Double(value) - referenceHeight) - meanZ
+            xx += dx * dx
+            xy += dx * dy
+            yy += dy * dy
+            xz += dx * dz
+            yz += dy * dz
+        }
+    }
+    let determinant = xx * yy - xy * xy
+    // Relative rank check covers single rows, columns, and arbitrary collinear
+    // masks without a height-unit-dependent absolute pivot threshold.
+    guard xx > 0, yy > 0,
+          determinant > 64 * Double.ulpOfOne * xx * yy else { return matrix }
+    let slopeX = (xz * yy - yz * xy) / determinant
+    let slopeY = (yz * xx - xz * xy) / determinant
 
     var output = matrix
     for y in 0..<matrix.height {
@@ -458,36 +569,17 @@ private func planeLinearFit(
             if x.isMultiple(of: 4_096) {
                 try cancellation.check()
             }
-            output[x, y] = matrix[x, y] - Float(coeff[0] * Double(x) + coeff[1] * Double(y) + coeff[2])
+            let value = matrix[x, y]
+            guard value.isFinite else { continue }
+            let fittedOffset = meanZ
+                + slopeX * (Double(x) / xScale - meanX)
+                + slopeY * (Double(y) / yScale - meanY)
+            // Keep the subtraction in Double: converting the fitted plane to
+            // Float first can erase small residuals above a large baseline.
+            output[x, y] = Float((Double(value) - referenceHeight) - fittedOffset)
         }
     }
     return output
-}
-
-private func solve3x3(_ a: [[Double]], _ b: [Double]) -> [Double]? {
-    var m = [
-        [a[0][0], a[0][1], a[0][2], b[0]],
-        [a[1][0], a[1][1], a[1][2], b[1]],
-        [a[2][0], a[2][1], a[2][2], b[2]],
-    ]
-
-    for pivot in 0..<3 {
-        var maxRow = pivot
-        for row in pivot..<3 where abs(m[row][pivot]) > abs(m[maxRow][pivot]) {
-            maxRow = row
-        }
-        if abs(m[maxRow][pivot]) < 1e-20 { return nil }
-        if maxRow != pivot { m.swapAt(maxRow, pivot) }
-        let div = m[pivot][pivot]
-        for col in pivot..<4 { m[pivot][col] /= div }
-        for row in 0..<3 where row != pivot {
-            let factor = m[row][pivot]
-            for col in pivot..<4 {
-                m[row][col] -= factor * m[pivot][col]
-            }
-        }
-    }
-    return [m[0][3], m[1][3], m[2][3]]
 }
 
 private func percentile(_ sorted: [Float], _ p: Double) -> Double {
@@ -505,21 +597,29 @@ private func interpolate(stops: [PaletteStop], at value: Double) -> (r: Double, 
     guard let first = stops.first, let last = stops.last else { return (value, value, value) }
     if value <= first.position { return (first.r, first.g, first.b) }
     if value >= last.position { return (last.r, last.g, last.b) }
+    guard value.isFinite else { return (last.r, last.g, last.b) }
 
-    for idx in 0..<(stops.count - 1) {
-        let a = stops[idx]
-        let b = stops[idx + 1]
-        if value >= a.position && value <= b.position {
-            let span = max(1e-12, b.position - a.position)
-            let t = (value - a.position) / span
-            return (
-                a.r * (1 - t) + b.r * t,
-                a.g * (1 - t) + b.g * t,
-                a.b * (1 - t) + b.b * t
-            )
+    // Locate the first stop at or above the value. Exact stop matches use
+    // the preceding interval, preserving the original interpolation arithmetic.
+    var lower = 1
+    var upper = stops.count - 1
+    while lower < upper {
+        let middle = lower + (upper - lower) / 2
+        if value <= stops[middle].position {
+            upper = middle
+        } else {
+            lower = middle + 1
         }
     }
-    return (last.r, last.g, last.b)
+    let a = stops[lower - 1]
+    let b = stops[lower]
+    let span = max(1e-12, b.position - a.position)
+    let t = (value - a.position) / span
+    return (
+        a.r * (1 - t) + b.r * t,
+        a.g * (1 - t) + b.g * t,
+        a.b * (1 - t) + b.b * t
+    )
 }
 
 private func makeCGImage(rgba: [UInt8], width: Int, height: Int) -> CGImage? {

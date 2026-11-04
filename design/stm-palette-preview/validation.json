@@ -1,0 +1,107 @@
+{
+  "status": "preview_only_no_app_defaults_changed",
+  "native_renderer_parity": "Exact RGB equality for both samples in gray and flame",
+  "native_palette_catalog_sha256": "bfef59ef7edb8d4298cb3ddc68cb3e489fca1855b430d320f1e4952432e7db32",
+  "afm_gray_stops": [
+    {
+      "position": 0.0,
+      "r": 0.0,
+      "g": 0.0,
+      "b": 0.0
+    },
+    {
+      "position": 1.0,
+      "r": 1.0,
+      "g": 1.0,
+      "b": 1.0
+    }
+  ],
+  "checks": {
+    "paper_gold": {
+      "luminance_strictly_increasing": true,
+      "L_min": 7.0,
+      "L_max": 97.0,
+      "L_linear_max_error": 0.0027311948533430552
+    },
+    "slate_teal": {
+      "luminance_strictly_increasing": true,
+      "L_min": 7.0,
+      "L_max": 97.0,
+      "L_linear_max_error": 0.0012563710926869476
+    },
+    "flame_reversal_L": [
+      90.79748779741756,
+      50.68278873167333
+    ]
+  },
+  "inputs": [
+    {
+      "channel": "Z",
+      "feedback_on": true,
+      "filename": "Au1110164.sxm",
+      "height": 512,
+      "key": "Au1110164_Z_raw",
+      "p1": -9.548410112358852e-08,
+      "p99": -9.47978366383495e-08,
+      "path": "/Users/wuziyou/Documents/Project/SXM Browser/example/Au1110164.sxm",
+      "processing": "raw",
+      "range_x_nm": 50,
+      "range_y_nm": 50,
+      "unit": "m",
+      "vmax": -9.473236417534281e-08,
+      "vmin": -9.554499058594956e-08,
+      "width": 512,
+      "sha256": "78e5fd77b546d91c5253fed4fd82456ef815ed981061e3fd7d298e2ee0b0a65e",
+      "preview_crop": [
+        0,
+        0,
+        512,
+        512
+      ]
+    },
+    {
+      "channel": "Z",
+      "feedback_on": true,
+      "filename": "Au1110365.sxm",
+      "height": 512,
+      "key": "Au1110365_Z_raw",
+      "p1": -7.400001848623106e-08,
+      "p99": -7.390562473119644e-08,
+      "path": "/Users/wuziyou/Documents/Project/SXM Browser/example-graph/Au1110365.sxm",
+      "processing": "raw",
+      "range_x_nm": 4,
+      "range_y_nm": 4,
+      "unit": "m",
+      "vmax": -7.389699163695695e-08,
+      "vmin": -7.401647650340237e-08,
+      "width": 512,
+      "sha256": "c988722fe1a110222739beb1db75752dc4a301bd9c5c979f0ac68975d05a0838",
+      "preview_crop": [
+        0,
+        0,
+        512,
+        218
+      ]
+    }
+  ],
+  "literature": [
+    {
+      "reference": "Guo et al., Nature Materials 13, 184–189 (2014)",
+      "figure": "4",
+      "url": "https://www.phy.pku.edu.cn/xzli/articles/Nature_Materials_13_2_184-189_2014.pdf",
+      "use": "Warm dark-brown/gold/ivory style reference; LUT independently reconstructed and lightness regularized"
+    },
+    {
+      "reference": "Peng et al., Nature Communications 9, 122 (2018)",
+      "figure": "1",
+      "url": "https://www.nature.com/articles/s41467-017-02635-5",
+      "use": "Additional visual reference reviewed"
+    },
+    {
+      "reference": "Tian et al., Nature Communications 15, 7834 (2024)",
+      "figure": "1",
+      "url": "https://www.nature.com/articles/s41467-024-52131-w",
+      "use": "Additional visual reference reviewed"
+    }
+  ]
+}

@@ -2,6 +2,14 @@ import AppKit
 import Foundation
 import SXMBrowserCore
 
+public struct UncheckedSendableImage: @unchecked Sendable {
+    public let image: NSImage
+
+    public init(_ image: NSImage) {
+        self.image = image
+    }
+}
+
 public protocol SXMMatrixReading: Sendable {
     func loadMatrix(
         _ metadata: SXMMetadata,
@@ -93,13 +101,18 @@ public struct DefaultRenderBackend: RenderBackend, Sendable {
         _ matrix: Matrix,
         options: RenderOptions
     ) async throws -> NSImage {
-        try await runDetachedCancellable(priority: .userInitiated) {
-            try SXMRenderer.renderProcessedImage(
-                matrix: matrix,
-                options: options,
-                cancellation: .task
+        let rendered = try await runDetachedCancellable(
+            priority: .userInitiated
+        ) {
+            UncheckedSendableImage(
+                try SXMRenderer.renderProcessedImage(
+                    matrix: matrix,
+                    options: options,
+                    cancellation: .task
+                )
             )
         }
+        return rendered.image
     }
 }
 

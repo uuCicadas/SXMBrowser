@@ -1,0 +1,17 @@
+{
+  "preview_only": true,
+  "base": "Build 81 Blue Violet",
+  "shadow_contrast_multiplier": 1.05,
+  "chroma_multiplier": 0.95,
+  "chroma_reduction_percent_range": [
+    4.9853650605136135,
+    5.017155859510725
+  ],
+  "max_additional_lightness": 2.266318311059095,
+  "monotonic_luminance": true,
+  "within_srgb_without_clipping": true,
+  "endpoints_preserved": true,
+  "source_hashes_verified": true,
+  "current_preview_matches_native_RGB": true,
+  "app_and_production_palette_unchanged": true
+}

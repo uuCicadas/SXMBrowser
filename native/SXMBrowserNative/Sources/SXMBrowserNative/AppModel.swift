@@ -137,7 +137,7 @@ private enum MetadataTransferWorkflowError: LocalizedError {
 final class AppModel: ObservableObject {
     private struct ThumbnailTaskEntry {
         let token: UUID
-        let task: Task<NSImage?, Never>
+        let task: Task<UncheckedSendableImage?, Never>
     }
 
     private struct DatasetMetadataPreparation {
@@ -214,6 +214,13 @@ final class AppModel: ObservableObject {
     @Published var isInspectorVisible = AppModel.loadBool(Defaults.inspectorVisible, fallback: true) {
         didSet { UserDefaults.standard.set(isInspectorVisible, forKey: Defaults.inspectorVisible) }
     }
+    // Effective visibility is window-local state; automatic folding must not
+    // overwrite the user's saved pane preferences.
+    @Published private(set) var actualSidebarVisible = true
+    @Published private(set) var actualInspectorVisible = true
+    @Published private(set) var sidebarVisibilityRequestID: UUID?
+    @Published private(set) var inspectorVisibilityRequestID: UUID?
+
     @Published private(set) var datasetLoadState: DatasetLoadState =
         .idle
     @Published var status = "Choose a folder with .sxm files."
@@ -233,8 +240,8 @@ final class AppModel: ObservableObject {
 
     @Published var selectedChannel = ""
     @Published var selectedDirection: ScanDirection = .fwd
-    @Published var selectedProcessing: ProcessingMode = .raw
-    @Published var selectedPalette: PaletteName = .flame
+    @Published var selectedProcessing: ProcessingMode = .planeLinear
+    @Published var selectedPalette: PaletteName = .blueViolet
     @Published var invertPalette = false
     @Published private(set) var spectrumAxisState = SpectroscopyAxisState()
     @Published private(set) var spectrumAxisRestoreIssues:
@@ -248,7 +255,7 @@ final class AppModel: ObservableObject {
         ViewerTransform()
     @Published private(set) var probeReading:
         ProbeReading?
-    @Published var scalePreset: ScalePreset = .percentile
+    @Published var scalePreset: ScalePreset = .full
     @Published var histogramBins: Int = AppModel.loadInt(Defaults.histogramBins, fallback: 256, range: 64...1024) {
         didSet {
             UserDefaults.standard.set(histogramBins, forKey: Defaults.histogramBins)
@@ -677,7 +684,7 @@ final class AppModel: ObservableObject {
     }
 
     func requestFilenameSearchFocus() {
-        isSidebarVisible = true
+        showSidebar()
         filenameSearchFocusRequestID = UUID()
     }
 
@@ -712,7 +719,29 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func updatePaneVisibility(sidebar: Bool, inspector: Bool) {
+        if actualSidebarVisible != sidebar { actualSidebarVisible = sidebar }
+        if actualInspectorVisible != inspector { actualInspectorVisible = inspector }
+    }
+
+    func toggleSidebar() {
+        isSidebarVisible = !actualSidebarVisible
+        sidebarVisibilityRequestID = UUID()
+    }
+
+    func showSidebar() {
+        isSidebarVisible = true
+        sidebarVisibilityRequestID = UUID()
+    }
+
+    func toggleInspector() {
+        isInspectorVisible = !actualInspectorVisible
+        inspectorVisibilityRequestID = UUID()
+    }
+
     func resetLayout() {
+        sidebarVisibilityRequestID = nil
+        inspectorVisibilityRequestID = nil
         isSidebarVisible = true
         isInspectorVisible = true
         sidebarWidth = Self.defaultSidebarWidth
@@ -2861,7 +2890,7 @@ final class AppModel: ObservableObject {
         selectedPalette = defaultPalette(for: selectedChannel)
         selectedProcessing = defaultProcessing(for: selectedChannel)
         invertPalette = false
-        scalePreset = .percentile
+        scalePreset = .full
         scaleLocked = false
         scaleMin = nil
         scaleMax = nil
@@ -3511,12 +3540,12 @@ final class AppModel: ObservableObject {
         }
 
         if let existing = thumbnailTasks[key] {
-            return await existing.task.value
+            return await existing.task.value?.image
         }
 
         let token = UUID()
-        let task = Task { @MainActor [weak self] in
-            await self?.generateThumbnail(
+        let task = Task { @MainActor [weak self] () -> UncheckedSendableImage? in
+            guard let image = await self?.generateThumbnail(
                 for: file,
                 cacheKey: key,
                 channel: channel,
@@ -3524,10 +3553,11 @@ final class AppModel: ObservableObject {
                 processing: processing,
                 palette: palette,
                 invert: invert
-            )
+            ) else { return nil }
+            return UncheckedSendableImage(image)
         }
         thumbnailTasks[key] = ThumbnailTaskEntry(token: token, task: task)
-        let image = await task.value
+        let image = await task.value?.image
         if thumbnailTasks[key]?.token == token {
             thumbnailTasks.removeValue(forKey: key)
         }
@@ -3541,6 +3571,7 @@ final class AppModel: ObservableObject {
             return
         }
         if resetScale {
+            scalePreset = .full
             scaleLocked = false
             scaleMin = nil
             scaleMax = nil
@@ -4404,13 +4435,16 @@ final class AppModel: ObservableObject {
                 outputSize: 260,
                 invert: invert
             )
-            let image = try await runDetachedCancellable(priority: .utility) {
-                try SXMRenderer.renderImage(
-                    matrix: matrix,
-                    options: options,
-                    cancellation: .task
+            let rendered = try await runDetachedCancellable(priority: .utility) {
+                UncheckedSendableImage(
+                    try SXMRenderer.renderImage(
+                        matrix: matrix,
+                        options: options,
+                        cancellation: .task
+                    )
                 )
             }
+            let image = rendered.image
             if Task.isCancelled { return nil }
             thumbnailCache.setObject(image, forKey: cacheKey as NSString, cost: estimatedImageCost(image))
             return image

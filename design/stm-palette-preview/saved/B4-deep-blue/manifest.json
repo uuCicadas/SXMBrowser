@@ -1,0 +1,12 @@
+{
+  "name": "B4 · 文献深蓝",
+  "status": "retained_by_user_as_candidate",
+  "retained_on": "2026-10-25",
+  "applied_as_app_default": false,
+  "provenance": "Literature-inspired reconstruction; original reference attribution retained inside palette.json.",
+  "files_sha256": {
+    "palette.json": "fbc493e4f6ef53f789084bce4d976d11eacd4546a2baf135d3c1192935b666e5",
+    "preview.png": "cbf68c2710daca00fe1e3b41d62003456132f3780f050f8b559dcc4f79d9034d",
+    "validation.json": "993c1b7c13ccf273271330cc5e2d80eec114dd75cc672da9d8f8113d5e8f21cc"
+  }
+}

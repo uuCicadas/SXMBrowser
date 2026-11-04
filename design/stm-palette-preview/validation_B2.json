@@ -1,0 +1,9 @@
+{
+  "status": "preview_only_no_app_defaults_changed",
+  "lab_chroma_multiplier": 1.4,
+  "in_srgb_gamut_without_clipping": true,
+  "luminance_strictly_increasing": true,
+  "max_L_error": 0.0011745271165821691,
+  "previous_B_pixels_unchanged": true,
+  "raw_input_hashes_verified": true
+}

@@ -127,10 +127,16 @@ native/SXMBrowserNative
 - 扫描文件夹中的 `.sxm` 文件。
 - 按记录时间、修改时间、文件名排序。
 - 网格缩略图和单图大图浏览。
+- 标准 File / Edit / View 菜单与可定制的原生紧凑工具栏，窗口标题和控制按钮在顶部同一行显示。
+- 原生可拖动分栏；窗口变窄时自动收起侧栏，放大后恢复，手动显隐和宽度偏好独立保存。
+- 轻量交互动效：手动侧栏显隐、网格/单图切换、缩略图悬停与选中、标签和谱图面板展开、通知提示使用短过渡；遵循 macOS“减少动态效果”，图像操作与分栏拖动保持实时响应。
+- 内容区支持最小 680×480 点；谱图面板随可用高度收缩，避免挤占主图。
+- Single 主图不显示读数浮层及鼠标跟随准心；右下角比例尺采用白色文字与实心白横线，随缩放自动保持正确的物理长度。
 - 自动识别恒高模式下的频偏通道。
 - 切换 channel、forward/backward、配色、raw/平面处理。
-- 默认配色：STM 类通道（Z/Current）用 Gwyddion.net，AFM/PLL 类通道（Frequency Shift/Amplitude/Excitation）用 Basic gray。
-- 默认处理：STM 类通道用 Line linear fit，AFM/PLL 类通道用 Raw。
+- 默认配色：STM 类通道（Z/Current）用 Blue Violet（蓝紫），暗部提亮并增强层次，色彩浓度略微降低，可切换 Deep Blue（深蓝）；AFM/PLL 类通道（Frequency Shift/Amplitude/Excitation）继续用 Basic gray。Flame 保留为可选配色。
+- 默认显示：STM 类通道（Z/Current）使用 Plane linear fit，对整幅图的有限像素最小二乘拟合并扣除平面 z = ax + by + c；AFM/PLL 类通道继续使用 Raw。单图与网格缩略图采用相同默认规则，色阶继续使用 Full min–max。
+- Processing 可手动切换 Raw、Subtract average、Subtract slope、Subtract linear fit（原 Subtract average + slope）、Differentiate 或 Plane linear fit；逐行拟合不同于整幅图像的平面拟合，不改写原始 SXM 文件。
 - 解析 `.dat` 谱图文件的全部数据列，并可在右栏为谱图切换 X/Y 通道。
 - 右栏提供 Inspector 风格的 Color Scale 和 Histogram：Full/1-99%/σ 色阶、Invert、bins、直方图和 PNG 导出。
 - 导出当前配色与处理后的纯 PNG 图，不带标题、坐标轴、scale bar 或色条。

@@ -11,65 +11,44 @@ private extension UTType {
 }
 
 struct ContentView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var model: AppModel
     @State private var isDropTargeted = false
-    @State private var liveSidebarWidth: CGFloat
-    @State private var liveInspectorWidth: CGFloat
-    @State private var isResizingSplit = false
     @FocusState private var isFilenameSearchFocused: Bool
 
-    init(model: AppModel) {
-        self.model = model
-        _liveSidebarWidth = State(initialValue: model.sidebarWidth)
-        _liveInspectorWidth = State(initialValue: model.inspectorWidth)
-    }
-
     var body: some View {
-        GeometryReader { proxy in
-            let layout = ResponsivePaneLayout(
-                containerWidth: Double(proxy.size.width)
-            )
+        VStack(spacing: 0) {
+            if let banner = model.noticePresentation.banner {
+                UserNoticeBanner(
+                    notice: banner,
+                    onAction: model.performNoticeAction,
+                    onDismiss: { model.dismissNoticeBanner(id: banner.id) }
+                )
+                .transition(BrowserMotion.reveal(from: .top, reduceMotion: reduceMotion))
+            }
 
-            VStack(spacing: 0) {
-                if let banner = model.noticePresentation.banner {
-                    UserNoticeBanner(
-                        notice: banner,
-                        onAction: model.performNoticeAction,
-                        onDismiss: {
-                            model.dismissNoticeBanner(id: banner.id)
-                        }
-                    )
-                    .transition(
-                        .move(edge: .top).combined(with: .opacity)
-                    )
-                }
+            if model.shouldPresentMetadataWarning {
+                MetadataWarningStrip(model: model)
+                    .transition(BrowserMotion.reveal(from: .top, reduceMotion: reduceMotion))
+            }
 
-                if model.shouldPresentMetadataWarning {
-                    MetadataWarningStrip(model: model)
-                        .transition(
-                            .move(edge: .top).combined(with: .opacity)
-                        )
-                }
-
-                inlineBrowser(layout: layout)
-                    .overlay(alignment: .leading) {
-                        if model.isSidebarVisible,
-                           layout.sidebarPlacement == .overlay {
-                            floatingSidebar
-                        }
-                    }
-                    .overlay(alignment: .trailing) {
-                        if model.isInspectorVisible,
-                           layout.inspectorPlacement == .overlay {
-                            floatingInspector
-                        }
-                    }
-                    .transaction { transaction in
-                        if isResizingSplit {
-                            transaction.animation = nil
-                            transaction.disablesAnimations = true
-                        }
-                    }
+            NativeBrowserSplitView(
+                sidebarVisible: $model.isSidebarVisible,
+                inspectorVisible: $model.isInspectorVisible,
+                sidebarWidth: $model.sidebarWidth,
+                inspectorWidth: $model.inspectorWidth,
+                sidebarVisibilityRequestID: model.sidebarVisibilityRequestID,
+                inspectorVisibilityRequestID: model.inspectorVisibilityRequestID,
+                onVisibilityChanged: { sidebar, inspector in
+                    model.updatePaneVisibility(sidebar: sidebar, inspector: inspector)
+                },
+                onWidthsChanged: model.saveLayoutWidths
+            ) {
+                SidebarView(model: model, filenameSearchFocus: $isFilenameSearchFocused)
+            } content: {
+                MainImageView(model: model)
+            } inspector: {
+                InspectorView(model: model)
             }
         }
         .background(AppTheme.page)
@@ -78,8 +57,10 @@ struct ContentView: View {
                 RoundedRectangle(cornerRadius: 10)
                     .stroke(Color.accentColor.opacity(0.75), lineWidth: 3)
                     .padding(8)
+                    .transition(.opacity)
             }
         }
+        .browserMotion(.feedback, value: isDropTargeted)
         .overlay(alignment: .bottom) {
             if let toast = model.noticePresentation.toast {
                 UserNoticeToast(
@@ -90,65 +71,19 @@ struct ContentView: View {
                 )
                 .padding(.horizontal, 18)
                 .padding(.bottom, 18)
-                .transition(
-                    .move(edge: .bottom).combined(with: .opacity)
-                )
+                .transition(BrowserMotion.reveal(from: .bottom, reduceMotion: reduceMotion))
                 .zIndex(10)
             }
         }
-        .animation(
-            .easeInOut(duration: 0.18),
-            value: model.noticePresentation
-        )
-        .frame(minWidth: 760, maxWidth: .infinity, minHeight: 740, maxHeight: .infinity, alignment: .leading)
+        .browserMotion(.disclosure, value: model.noticePresentation)
+        .browserMotion(.disclosure, value: model.shouldPresentMetadataWarning)
+        .frame(minWidth: 680, maxWidth: .infinity, minHeight: 480, maxHeight: .infinity)
+        .navigationTitle(model.selectedFile?.filename ?? "SXM Browser")
+        .toolbar(id: "SXM Browser.MainToolbar") {
+            BrowserToolbar(model: model)
+        }
         .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted) { providers in
             handleFileDrop(providers)
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .navigation) {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.16)) {
-                        model.isSidebarVisible.toggle()
-                    }
-                } label: {
-                    Image(systemName: "sidebar.left")
-                }
-                .keyboardShortcut("1", modifiers: [.command, .option])
-                .help(model.isSidebarVisible ? "Hide file list" : "Show file list")
-                .accessibilityLabel(
-                    model.isSidebarVisible
-                        ? "Hide file list"
-                        : "Show file list"
-                )
-            }
-
-            ToolbarItemGroup(placement: .automatic) {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        model.resetLayout()
-                    }
-                } label: {
-                    Image(systemName: "rectangle.3.group")
-                }
-                .keyboardShortcut("0", modifiers: [.command, .option])
-                .help("Reset layout")
-                .accessibilityLabel("Reset layout")
-
-                Button {
-                    withAnimation(.easeInOut(duration: 0.16)) {
-                        model.isInspectorVisible.toggle()
-                    }
-                } label: {
-                    Image(systemName: "sidebar.right")
-                }
-                .keyboardShortcut("2", modifiers: [.command, .option])
-                .help(model.isInspectorVisible ? "Hide inspector" : "Show inspector")
-                .accessibilityLabel(
-                    model.isInspectorVisible
-                        ? "Hide inspector"
-                        : "Show inspector"
-                )
-            }
         }
         .sheet(
             isPresented: Binding(
@@ -162,21 +97,7 @@ struct ContentView: View {
         ) {
             MetadataImportPreviewSheet(model: model)
         }
-        .onAppear {
-            liveSidebarWidth = model.sidebarWidth
-            liveInspectorWidth = model.inspectorWidth
-            model.openStartupFolder()
-        }
-        .onChange(of: model.sidebarWidth) { _, newValue in
-            if !isResizingSplit {
-                liveSidebarWidth = newValue
-            }
-        }
-        .onChange(of: model.inspectorWidth) { _, newValue in
-            if !isResizingSplit {
-                liveInspectorWidth = newValue
-            }
-        }
+        .onAppear { model.openStartupFolder() }
         .onChange(
             of: model.filenameSearchFocusRequestID
         ) { _, requestID in
@@ -192,104 +113,6 @@ struct ContentView: View {
             isFilenameSearchFocused = false
             NSApp.keyWindow?.makeFirstResponder(nil)
         }
-    }
-
-    private func inlineBrowser(
-        layout: ResponsivePaneLayout
-    ) -> some View {
-        HStack(spacing: 0) {
-            if model.isSidebarVisible,
-               layout.sidebarPlacement == .inline {
-                SidebarView(
-                    model: model,
-                    filenameSearchFocus:
-                        $isFilenameSearchFocused
-                )
-                    .frame(width: liveSidebarWidth)
-                    .clipped()
-                    .transition(
-                        .move(edge: .leading).combined(with: .opacity)
-                    )
-                SplitHandle(
-                    width: $liveSidebarWidth,
-                    range: AppModel.sidebarWidthRange,
-                    defaultWidth: AppModel.defaultSidebarWidth,
-                    edge: .leading,
-                    onEditingChanged: { isResizingSplit = $0 },
-                    onCommit: {
-                        model.sidebarWidth = liveSidebarWidth
-                        model.saveLayoutWidths()
-                    }
-                )
-            }
-
-            MainImageView(model: model)
-                .frame(
-                    minWidth: 0,
-                    maxWidth: .infinity,
-                    maxHeight: .infinity
-                )
-
-            if model.isInspectorVisible,
-               layout.inspectorPlacement == .inline {
-                SplitHandle(
-                    width: $liveInspectorWidth,
-                    range: AppModel.inspectorWidthRange,
-                    defaultWidth: AppModel.defaultInspectorWidth,
-                    edge: .trailing,
-                    onEditingChanged: { isResizingSplit = $0 },
-                    onCommit: {
-                        model.inspectorWidth = liveInspectorWidth
-                        model.saveLayoutWidths()
-                    }
-                )
-                InspectorView(model: model)
-                    .frame(width: liveInspectorWidth)
-                    .clipped()
-                    .transition(
-                        .move(edge: .trailing).combined(with: .opacity)
-                    )
-            }
-        }
-    }
-
-    private var floatingSidebar: some View {
-        SidebarView(
-            model: model,
-            filenameSearchFocus: $isFilenameSearchFocused
-        )
-            .frame(width: liveSidebarWidth)
-            .frame(maxHeight: .infinity)
-            .background(AppTheme.sidebar)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(AppTheme.separator, lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.20), radius: 18, x: 4, y: 0)
-            .padding(12)
-            .transition(
-                .move(edge: .leading).combined(with: .opacity)
-            )
-            .zIndex(2)
-    }
-
-    private var floatingInspector: some View {
-        InspectorView(model: model)
-            .frame(width: liveInspectorWidth)
-            .frame(maxHeight: .infinity)
-            .background(AppTheme.sidebar)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(AppTheme.separator, lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.20), radius: 18, x: -4, y: 0)
-            .padding(12)
-            .transition(
-                .move(edge: .trailing).combined(with: .opacity)
-            )
-            .zIndex(3)
     }
 
     private func handleFileDrop(_ providers: [NSItemProvider]) -> Bool {
@@ -600,7 +423,10 @@ private struct MetadataImportPreviewSheet: View {
                 EmptyView()
             }
         }
-        .frame(width: 680, height: 620)
+        .frame(
+            minWidth: 560, idealWidth: 640, maxWidth: 680,
+            minHeight: 360, idealHeight: 480, maxHeight: 620
+        )
         .background(AppTheme.page)
         .interactiveDismissDisabled(isApplying)
     }
@@ -1153,94 +979,6 @@ private struct MetadataImportDetailSection: View {
     }
 }
 
-enum SplitEdge {
-    case leading
-    case trailing
-}
-
-struct SplitHandle: View {
-    @Binding var width: CGFloat
-    let range: ClosedRange<CGFloat>
-    let defaultWidth: CGFloat
-    let edge: SplitEdge
-    let onEditingChanged: (Bool) -> Void
-    let onCommit: () -> Void
-    @State private var startWidth: CGFloat?
-    @State private var isDragging = false
-
-    var body: some View {
-        Rectangle()
-            .fill(Color.clear)
-            .frame(width: 7)
-            .overlay(alignment: edge == .leading ? .trailing : .leading) {
-                Rectangle()
-                    .fill(isDragging ? Color.accentColor.opacity(0.75) : AppTheme.separator.opacity(0.75))
-                    .frame(width: isDragging ? 2 : 1)
-                    .padding(.vertical, 10)
-            }
-            .contentShape(Rectangle())
-            .cursor(.resizeLeftRight)
-            .onTapGesture(count: 2) {
-                withAnimation(.easeInOut(duration: 0.16)) {
-                    width = defaultWidth
-                }
-                onCommit()
-            }
-            .gesture(
-                DragGesture(minimumDistance: 1)
-                    .onChanged { value in
-                        if startWidth == nil {
-                            startWidth = width
-                            isDragging = true
-                            onEditingChanged(true)
-                        }
-                        let origin = startWidth ?? width
-                        let delta = edge == .leading ? value.translation.width : -value.translation.width
-                        let nextWidth = min(range.upperBound, max(range.lowerBound, origin + delta))
-                        var transaction = Transaction()
-                        transaction.disablesAnimations = true
-                        withTransaction(transaction) {
-                            width = nextWidth
-                        }
-                    }
-                    .onEnded { _ in
-                        startWidth = nil
-                        isDragging = false
-                        onEditingChanged(false)
-                        onCommit()
-                    }
-            )
-            .accessibilityElement()
-            .accessibilityLabel(
-                edge == .leading
-                    ? "File list width"
-                    : "Inspector width"
-            )
-            .accessibilityValue(
-                "\(Int(width.rounded())) points"
-            )
-            .accessibilityHint(
-                "Adjust the pane width. Double-click resets it."
-            )
-            .accessibilityAdjustableAction { direction in
-                let delta: CGFloat
-                switch direction {
-                case .increment:
-                    delta = 20
-                case .decrement:
-                    delta = -20
-                @unknown default:
-                    return
-                }
-                width = min(
-                    range.upperBound,
-                    max(range.lowerBound, width + delta)
-                )
-                onCommit()
-            }
-    }
-}
-
 struct SidebarView: View {
     @ObservedObject var model: AppModel
     let filenameSearchFocus: FocusState<Bool>.Binding
@@ -1393,17 +1131,17 @@ struct SidebarView: View {
                 .padding(.horizontal, 2)
         }
         .padding(12)
-        .background(AppTheme.sidebar)
     }
 }
 
 struct AllSidebarFileList: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var model: AppModel
 
     private func scrollToSelection(with proxy: ScrollViewProxy) {
         guard let selectedID = model.selectedID else { return }
         DispatchQueue.main.async {
-            withAnimation(.easeInOut(duration: 0.18)) {
+            withAnimation(BrowserMotion.navigation.animation(reduceMotion: reduceMotion)) {
                 proxy.scrollTo(selectedID, anchor: .center)
             }
         }
@@ -1497,7 +1235,8 @@ struct TagGroupView: View {
                 Button {
                     model.toggleTagExpansion(tag.id)
                 } label: {
-                    Image(systemName: model.expandedTagIDs.contains(tag.id) ? "chevron.down" : "chevron.right")
+                    Image(systemName: "chevron.right")
+                        .rotationEffect(.degrees(model.expandedTagIDs.contains(tag.id) ? 90 : 0))
                         .font(.system(size: 10, weight: .semibold))
                         .frame(width: 16, height: 22)
                 }
@@ -1549,6 +1288,8 @@ struct TagGroupView: View {
                                 lineWidth: isTagDropTargeted ? 1.6 : 1
                             )
                     )
+                    .browserMotion(.feedback, value: model.activeTagID == tag.id)
+                    .browserMotion(.feedback, value: isTagDropTargeted)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(tag.name)
@@ -1607,6 +1348,7 @@ struct TagGroupView: View {
                 }
             }
         }
+        .browserMotion(.disclosure, value: model.expandedTagIDs.contains(tag.id))
     }
 
     private func tagItemProvider() -> NSItemProvider {
@@ -2117,6 +1859,9 @@ struct FileRow: View {
                 .padding(1)
         )
         .foregroundStyle(isSelected ? Color.white : Color.primary)
+        .browserMotion(.feedback, value: isSelected)
+        .browserMotion(.feedback, value: isCurrent)
+        .browserMotion(.feedback, value: isDropTargeted)
     }
 }
 
@@ -2197,24 +1942,24 @@ struct FileContextMenu: View {
 }
 
 struct MainImageView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var model: AppModel
 
     var body: some View {
         VStack(spacing: 0) {
-            BrowserToolbar(model: model)
-
             if model.selectionActionPresentation.placement
                 == .actionBar {
                 SelectionActionBar(model: model)
-                    .transition(
-                        .move(edge: .top).combined(with: .opacity)
-                    )
+                    .transition(BrowserMotion.reveal(from: .top, reduceMotion: reduceMotion))
+                Divider()
             }
 
-            Divider()
-
-            browserContent
+            ZStack {
+                browserContent
+            }
+            .browserMotion(.navigation, value: model.mode)
         }
+        .browserMotion(.disclosure, value: model.selectionActionPresentation.placement)
         .background(AppTheme.page)
         .overlay {
             KeyboardCommandOverlay { command in
@@ -2328,6 +2073,7 @@ struct MainImageView: View {
 
         case .gridReady:
             GridBrowserView(model: model)
+                .transition(.asymmetric(insertion: .opacity, removal: .identity))
 
         case .noSelection:
             BrowserStateView(
@@ -2346,143 +2092,92 @@ struct MainImageView: View {
              .renderReady,
              .renderFailed(_, _):
             SingleImageView(model: model)
+                .transition(.asymmetric(insertion: .opacity, removal: .identity))
         }
     }
 }
 
-private struct BrowserToolbar: View {
+private struct BrowserToolbar: CustomizableToolbarContent {
     @ObservedObject var model: AppModel
 
-    var body: some View {
-        GeometryReader { proxy in
-            toolbarRow(
-                layout: BrowserToolbarLayout(
-                    availableWidth: proxy.size.width
-                )
-            )
+    var body: some CustomizableToolbarContent {
+        ToolbarItem(id: "sidebar", placement: .navigation) {
+            Button {
+                model.toggleSidebar()
+            } label: {
+                Label("File List", systemImage: "sidebar.left")
+            }
+            .help(model.actualSidebarVisible ? "Hide file list" : "Show file list")
         }
-        .frame(height: 48)
-        .background(AppTheme.toolbar)
-    }
+        .customizationBehavior(.disabled)
 
-    @ViewBuilder
-    private func toolbarRow(
-        layout: BrowserToolbarLayout
-    ) -> some View {
-        HStack(spacing: layout.spacing) {
-            Text(model.selectedFile?.filename ?? "No file selected")
-                .font(.system(size: 14, weight: .semibold))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(
-                    minWidth: layout.minimumFilenameWidth,
-                    alignment: .leading
-                )
-                .layoutPriority(1)
-                .accessibilityLabel("Selected file")
-                .accessibilityValue(
-                    model.selectedFile?.filename ?? "No file selected"
-                )
+        ToolbarItem(id: "view-mode") {
+            Picker("View mode", selection: Binding(
+                get: { model.mode }, set: { model.setMode($0) }
+            )) {
+                Label("Grid", systemImage: "square.grid.2x2").tag(BrowserMode.grid)
+                Label("Single", systemImage: "rectangle").tag(BrowserMode.single)
+            }
+            .pickerStyle(.segmented)
+            .labelStyle(.iconOnly)
+            .frame(width: 84)
+            .help("Switch between grid and single-image views")
+        }
 
+        ToolbarItem(id: "previous-file") {
+            Button {
+                model.stepSelection(-1)
+            } label: {
+                Label("Previous File", systemImage: "chevron.left")
+            }
+            .disabled(!model.canStepSelection(by: -1))
+            .help("Previous visible file")
+        }
+
+        ToolbarItem(id: "next-file") {
+            Button {
+                model.stepSelection(1)
+            } label: {
+                Label("Next File", systemImage: "chevron.right")
+            }
+            .disabled(!model.canStepSelection(by: 1))
+            .help("Next visible file")
+        }
+
+        ToolbarItem(id: "image-zoom") {
+            ViewerZoomControls(model: model)
+        }
+
+        ToolbarItem(id: "file-position", placement: .status) {
             Text(model.selectedPositionText)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
-                .padding(
-                    .horizontal,
-                    layout == .expanded ? 8 : 2
-                )
-                .padding(
-                    .vertical,
-                    layout == .expanded ? 3 : 0
-                )
-                .background {
-                    if layout == .expanded {
-                        Capsule().fill(AppTheme.subtleFill)
-                    }
-                }
-                .accessibilityLabel("File position")
-                .accessibilityValue(model.selectedPositionText)
+                .help("File position")
+        }
 
-            Spacer(minLength: layout == .minimal ? 0 : 4)
-
-            if layout == .minimal {
-                Menu {
-                    ForEach(BrowserMode.allCases) { mode in
-                        Button(mode.label) {
-                            model.setMode(mode)
-                        }
-                    }
-                } label: {
-                    Image(
-                        systemName:
-                            model.mode == .grid
-                            ? "square.grid.2x2"
-                            : "rectangle"
-                    )
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help("View mode: \(model.mode.label)")
-                .accessibilityLabel("View mode")
-                .accessibilityValue(model.mode.label)
-            } else {
-                Picker(
-                    "View mode",
-                    selection: Binding(
-                        get: { model.mode },
-                        set: { model.setMode($0) }
-                    )
-                ) {
-                    ForEach(BrowserMode.allCases) { mode in
-                        Text(mode.label).tag(mode)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .frame(
-                    width:
-                        layout == .expanded
-                        ? 142
-                        : 112
-                )
-                .accessibilityLabel("View mode")
+        ToolbarItem(id: "export-png") {
+            Button {
+                model.exportPNG()
+            } label: {
+                Label("Export PNG…", systemImage: "square.and.arrow.up")
             }
+            .disabled(model.selectedImage == nil)
+        }
+        .defaultCustomization(.hidden)
 
-            ControlGroup {
-                Button {
-                    model.stepSelection(-1)
-                } label: {
-                    Image(systemName: "chevron.left")
-                }
-                .disabled(!model.canStepSelection(by: -1))
-                .help("Previous visible file")
-                .accessibilityLabel("Previous visible file")
-
-                Button {
-                    model.stepSelection(1)
-                } label: {
-                    Image(systemName: "chevron.right")
-                }
-                .disabled(!model.canStepSelection(by: 1))
-                .help("Next visible file")
-                .accessibilityLabel("Next visible file")
-            }
-
-            if model.mode == .single,
-               layout == .expanded {
-                ViewerZoomControls(model: model)
-            }
-
+        ToolbarItem(id: "browser-actions", placement: .primaryAction) {
             browserActionsMenu
         }
-        .padding(
-            .horizontal,
-            layout == .minimal ? 8 : 14
-        )
-        .frame(
-            maxWidth: .infinity,
-            maxHeight: .infinity
-        )
+
+        ToolbarItem(id: "inspector", placement: .primaryAction) {
+            Button {
+                model.toggleInspector()
+            } label: {
+                Label("Inspector", systemImage: "sidebar.right")
+            }
+            .help(model.actualInspectorVisible ? "Hide inspector" : "Show inspector")
+        }
+        .customizationBehavior(.disabled)
     }
 
     private var browserActionsMenu: some View {
@@ -2579,6 +2274,14 @@ private struct BrowserToolbar: View {
             }
             .disabled(model.selectedCount == 0)
 
+            Divider()
+
+            Button {
+                model.resetLayout()
+            } label: {
+                Label("Reset Layout", systemImage: "rectangle.3.group")
+            }
+
             if model.selectionActionPresentation.placement
                 == .overflow {
                 Divider()
@@ -2600,44 +2303,6 @@ private struct BrowserToolbar: View {
         .fixedSize()
         .help("More browser actions")
         .accessibilityLabel("More browser actions")
-    }
-}
-
-private enum BrowserToolbarLayout: Equatable {
-    case expanded
-    case compact
-    case minimal
-
-    init(availableWidth: CGFloat) {
-        if availableWidth >= 660 {
-            self = .expanded
-        } else if availableWidth >= 390 {
-            self = .compact
-        } else {
-            self = .minimal
-        }
-    }
-
-    var spacing: CGFloat {
-        switch self {
-        case .expanded:
-            10
-        case .compact:
-            7
-        case .minimal:
-            5
-        }
-    }
-
-    var minimumFilenameWidth: CGFloat {
-        switch self {
-        case .expanded:
-            100
-        case .compact:
-            70
-        case .minimal:
-            45
-        }
     }
 }
 
@@ -2726,81 +2391,101 @@ private struct SelectionActionBar: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        HStack(spacing: 10) {
-            Label(
-                "\(model.selectedCount) selected",
-                systemImage: "checkmark.circle.fill"
-            )
-            .font(.callout.weight(.semibold))
-            .foregroundStyle(.primary)
-            .accessibilityLabel("\(model.selectedCount) files selected")
-
-            Spacer(minLength: 8)
-
-            Menu {
-                if model.tags.isEmpty {
-                    Button("New Tag…") {
-                        model.promptForNewTagForSelection()
-                    }
-                } else {
-                    ForEach(model.tags) { tag in
-                        Button(tag.name) {
-                            model.addTagToSelection(tag.id)
-                        }
-                    }
-                    Divider()
-                    Button("New Tag…") {
-                        model.promptForNewTagForSelection()
-                    }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                selectionSummary.fixedSize()
+                Spacer(minLength: 8)
+                HStack(spacing: 10) {
+                    selectionActions
                 }
-            } label: {
-                Label("Add Tag", systemImage: "tag")
+                .fixedSize()
             }
-            .disabled(!model.canModifyTags)
 
-            Menu {
-                let removableTags = model.removableTagsForSelection()
-                if removableTags.isEmpty {
-                    Text("No Tags")
-                } else {
-                    ForEach(removableTags) { tag in
-                        Button(tag.name) {
-                            model.removeTagFromSelection(tag.id)
-                        }
-                    }
+            HStack(spacing: 10) {
+                selectionSummary
+                Spacer(minLength: 8)
+                Menu {
+                    selectionActions
+                } label: {
+                    Label("Selection Actions", systemImage: "ellipsis.circle")
                 }
-            } label: {
-                Label("Remove Tag", systemImage: "tag.slash")
+                .menuStyle(.borderlessButton)
+                .fixedSize()
             }
-            .disabled(
-                !model.canModifyTags
-                    || model.removableTagsForSelection().isEmpty
-            )
-
-            Button {
-                model.revealSelectedFilesInFinder()
-            } label: {
-                Label("Show in Finder", systemImage: "folder")
-            }
-            .help("Reveal selected files in Finder")
-
-            Button(role: .destructive) {
-                model.deleteSelectedFiles()
-            } label: {
-                Label("Move to Trash…", systemImage: "trash")
-            }
-            .disabled(!model.canDeleteSelection)
-            .help("Move selected visible files to the system Trash")
         }
         .controlSize(.small)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(Color.accentColor.opacity(0.10))
         .overlay(alignment: .top) {
-            Rectangle()
-                .fill(AppTheme.separator)
-                .frame(height: 1)
+            Rectangle().fill(AppTheme.separator).frame(height: 1)
         }
+    }
+
+    private var selectionSummary: some View {
+        Label("\(model.selectedCount) selected", systemImage: "checkmark.circle.fill")
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .accessibilityLabel("\(model.selectedCount) files selected")
+    }
+
+    @ViewBuilder
+    private var selectionActions: some View {
+        Menu {
+            if model.tags.isEmpty {
+                Button("New Tag…") {
+                    model.promptForNewTagForSelection()
+                }
+            } else {
+                ForEach(model.tags) { tag in
+                    Button(tag.name) {
+                        model.addTagToSelection(tag.id)
+                    }
+                }
+                Divider()
+                Button("New Tag…") {
+                    model.promptForNewTagForSelection()
+                }
+            }
+        } label: {
+            Label("Add Tag", systemImage: "tag")
+        }
+        .disabled(!model.canModifyTags)
+
+        Menu {
+            let removableTags = model.removableTagsForSelection()
+            if removableTags.isEmpty {
+                Text("No Tags")
+            } else {
+                ForEach(removableTags) { tag in
+                    Button(tag.name) {
+                        model.removeTagFromSelection(tag.id)
+                    }
+                }
+            }
+        } label: {
+            Label("Remove Tag", systemImage: "tag.slash")
+        }
+        .disabled(
+            !model.canModifyTags
+                || model.removableTagsForSelection().isEmpty
+        )
+
+        Button {
+            model.revealSelectedFilesInFinder()
+        } label: {
+            Label("Show in Finder", systemImage: "folder")
+        }
+        .help("Reveal selected files in Finder")
+
+        Button(role: .destructive) {
+            model.deleteSelectedFiles()
+        } label: {
+            Label("Move to Trash…", systemImage: "trash")
+        }
+        .disabled(!model.canDeleteSelection)
+        .help("Move selected visible files to the system Trash")
     }
 }
 
@@ -3103,6 +2788,7 @@ struct ThumbnailCard: View {
     @ObservedObject var model: AppModel
     let file: SXMMetadata
     @State private var image: NSImage?
+    @State private var isHovered = false
 
     private var isSelected: Bool {
         model.selectedIDs.contains(file.id)
@@ -3147,6 +2833,7 @@ struct ThumbnailCard: View {
             }
             .aspectRatio(1, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 6))
+            .browserMotion(.feedback, value: image != nil)
 
             Text(file.filename)
                 .font(.caption)
@@ -3165,6 +2852,12 @@ struct ThumbnailCard: View {
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(isSelected ? AppTheme.selectedTile(for: colorScheme) : AppTheme.cardSurface(for: colorScheme))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.accentColor.opacity(isHovered && !isSelected ? 0.045 : 0))
+                }
+                .browserMotion(.feedback, value: isSelected)
+                .browserMotion(.feedback, value: isHovered)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
@@ -3173,9 +2866,7 @@ struct ThumbnailCard: View {
                         ? Color.accentColor.opacity(
                             isCurrent ? 1 : 0.8
                         )
-                        : AppTheme.tileBorder(
-                            for: colorScheme
-                        ),
+                        : (isHovered ? Color.accentColor.opacity(0.45) : AppTheme.tileBorder(for: colorScheme)),
                     lineWidth:
                         colorSchemeContrast == .increased
                         ? (
@@ -3189,29 +2880,37 @@ struct ThumbnailCard: View {
                             : (isSelected ? 1.3 : 1)
                         )
                 )
+                .browserMotion(.feedback, value: isSelected)
+                .browserMotion(.feedback, value: isCurrent)
+                .browserMotion(.feedback, value: isHovered)
         )
         .overlay(alignment: .topTrailing) {
-            if isSelected {
-                Image(
-                    systemName:
-                        isCurrent
-                        ? "checkmark.circle.fill"
-                        : "checkmark.circle"
-                )
-                .font(.system(size: 17, weight: .bold))
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(
-                    Color.white,
-                    Color.accentColor
-                )
-                .padding(13)
-                .shadow(
-                    color: Color.black.opacity(0.65),
-                    radius: 2
-                )
-                .accessibilityHidden(true)
+            ZStack {
+                if isSelected {
+                    Image(
+                        systemName:
+                            isCurrent
+                            ? "checkmark.circle.fill"
+                            : "checkmark.circle"
+                    )
+                    .font(.system(size: 17, weight: .bold))
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(
+                        Color.white,
+                        Color.accentColor
+                    )
+                    .padding(13)
+                    .shadow(
+                        color: Color.black.opacity(0.65),
+                        radius: 2
+                    )
+                    .accessibilityHidden(true)
+                    .transition(.opacity)
+                }
             }
+            .browserMotion(.feedback, value: isSelected)
         }
+        .onHover { isHovered = $0 }
         .shadow(
             color: isSelected ? Color.accentColor.opacity(0.10) : Color.black.opacity(0.045),
             radius: isSelected ? 8 : 5,
@@ -3269,7 +2968,9 @@ struct ThumbnailCard: View {
             model.setMode(.single)
         }
         .task(id: thumbnailTaskID) {
-            image = await model.thumbnail(for: file, usingSelection: isCurrent)
+            let thumbnail = await model.thumbnail(for: file, usingSelection: isCurrent)
+            guard !Task.isCancelled else { return }
+            image = thumbnail
         }
     }
 }
@@ -3368,49 +3069,15 @@ struct MeasurementMarker: View {
     var isFocused = false
 
     var body: some View {
-        ZStack {
-            Circle()
-                .fill(spectrumColor(style).opacity(0.26))
-                .frame(width: 18, height: 18)
-            Circle()
-                .stroke(Color.white.opacity(0.98), lineWidth: 2)
-                .frame(width: 20, height: 20)
-            Circle()
-                .stroke(
-                    Color.black.opacity(0.78),
-                    lineWidth: 1
-                )
-                .frame(width: 22, height: 22)
-
-            SpectrumStyleGlyph(
-                style: style,
-                width: 16,
-                lineWidth: 2
+        Circle()
+            .fill(spectrumColor(style))
+            .frame(
+                width: isFocused ? 12 : 10,
+                height: isFocused ? 12 : 10
             )
-
-            if isFocused {
-                Circle()
-                    .stroke(
-                        Color.accentColor,
-                        lineWidth: 2.2
-                    )
-                    .frame(width: 27, height: 27)
-                    .shadow(
-                        color: Color.accentColor.opacity(0.45),
-                        radius: 2
-                    )
-            }
-        }
-        .frame(
-            width: isFocused ? 29 : 24,
-            height: isFocused ? 29 : 24
-        )
-        .shadow(
-            color: .black.opacity(0.35),
-            radius: 1.5,
-            x: 0,
-            y: 1
-        )
+            // Keep the click target comfortable without covering more image data.
+            .frame(width: 30, height: 30)
+            .contentShape(Circle())
     }
 }
 
@@ -3802,19 +3469,24 @@ struct SingleImageView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            SingleImageCanvas(model: model)
-                .frame(
-                    maxWidth: .infinity,
-                    maxHeight: .infinity
-                )
-                .layoutPriority(1)
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                SingleImageCanvas(model: model)
+                    // Keep new data, probes and continuous gestures out of layout transitions.
+                    .transaction { transaction in
+                        transaction.animation = nil
+                        transaction.disablesAnimations = true
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .layoutPriority(1)
 
-            SingleSpectroscopyDrawer(
-                model: model,
-                liveHeight: $liveDrawerHeight,
-                isResizing: $isResizingDrawer
-            )
+                SingleSpectroscopyDrawer(
+                    model: model,
+                    liveHeight: $liveDrawerHeight,
+                    isResizing: $isResizingDrawer,
+                    maximumHeight: max(42, proxy.size.height / 2)
+                )
+            }
         }
         .onChange(
             of: model.singleSpectroscopyState.height
@@ -3928,7 +3600,6 @@ private struct SingleImageCanvas: View {
                 imageSize.height
                 * displayedTransform.scale
         )
-        let activeProbe = model.probeReading(for: frame)
         let visibleImageRect = CGRect(
             x: displayedTransform.translation.x,
             y: displayedTransform.translation.y,
@@ -3975,50 +3646,19 @@ private struct SingleImageCanvas: View {
                 y: displayedTransform.translation.y
             )
 
-            if let activeProbe {
-                if let center =
-                    activeProbe.pixelCoordinate.viewportCenter(
-                        viewerTransform: displayedTransform,
-                        pixelWidth: file.pixels.width,
-                        pixelHeight: file.pixels.height
-                    ) {
-                    ProbeReticle()
-                        .position(
-                            x: center.x,
-                            y: center.y
-                        )
-                }
-
-                VStack {
-                    HStack {
-                        Spacer(minLength: 0)
-                        ProbeReadingCard(
-                            reading: activeProbe
-                        )
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(10)
-                .allowsHitTesting(false)
-            }
-
             if let scaleBar {
                 let overlayWidth =
                     CGFloat(scaleBar.screenLengthPoints)
-                    + 16
                 ScreenScaleBar(scaleBar: scaleBar)
-                    .frame(
-                        width: overlayWidth,
-                        height: 42
-                    )
                     .position(
                         x:
-                            visibleImageRect.minX
-                            + 10
-                            + overlayWidth / 2,
+                            visibleImageRect.maxX
+                            - ScreenScaleBar.edgeInset
+                            - overlayWidth / 2,
                         y:
                             visibleImageRect.maxY
-                            - 29
+                            - ScreenScaleBar.edgeInset
+                            - ScreenScaleBar.height / 2
                     )
             }
         }
@@ -4039,20 +3679,6 @@ private struct SingleImageCanvas: View {
                 startingFrom: displayedTransform
             )
         )
-        .onContinuousHover(
-            coordinateSpace: .local
-        ) { phase in
-            switch phase {
-            case .active(let location):
-                model.updateProbeReading(
-                    at: location,
-                    using: displayedTransform,
-                    request: frame.request
-                )
-            case .ended:
-                model.clearProbeReading()
-            }
-        }
         .onAppear {
             model.reconcileViewerGeometry(
                 imageSize: imageSize,
@@ -4074,11 +3700,7 @@ private struct SingleImageCanvas: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Image viewer")
-        .accessibilityValue(
-            viewerAccessibilityValue(
-                probe: activeProbe
-            )
-        )
+        .accessibilityValue(model.viewerZoomLabel)
     }
 
     private func panGesture(
@@ -4166,18 +3788,6 @@ private struct SingleImageCanvas: View {
         gestureTransform = nil
     }
 
-    private func viewerAccessibilityValue(
-        probe: ProbeReading?
-    ) -> String {
-        guard let probe else {
-            return model.viewerZoomLabel
-        }
-        return [
-            model.viewerZoomLabel,
-            probeAccessibilitySummary(probe),
-        ].joined(separator: ", ")
-    }
-
     private func resolvedScaleBar(
         for file: SXMMetadata,
         transform: ViewerTransform,
@@ -4185,17 +3795,24 @@ private struct SingleImageCanvas: View {
     ) -> ScaleBar? {
         guard let scanRangeX = file.scanRange?.x,
               !visibleImageRect.isNull,
-              visibleImageRect.width >= 76,
-              visibleImageRect.height >= 54 else {
+              visibleImageRect.width
+                >= CGFloat(ScaleBar.preferredMinimumScreenLengthPoints)
+                    + 2 * ScreenScaleBar.edgeInset,
+              visibleImageRect.height
+                >= ScreenScaleBar.height + 2 * ScreenScaleBar.edgeInset else {
             return nil
         }
-        return ScaleBar.resolve(
+        guard let scaleBar = ScaleBar.resolve(
             scanRangeX: scanRangeX,
             sourcePixelWidth: file.pixels.width,
             viewerTransform: transform,
             availableWidth:
-                visibleImageRect.width - 28
-        )
+                visibleImageRect.width - 2 * ScreenScaleBar.edgeInset
+        ), scaleBar.screenLengthPoints
+            >= ScaleBar.preferredMinimumScreenLengthPoints else {
+            return nil
+        }
+        return scaleBar
     }
 }
 
@@ -4204,231 +3821,16 @@ private struct ViewerCanvasGeometry: Equatable {
     let viewportSize: CGSize
 }
 
-private struct ProbeReticle: View {
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(Color.black.opacity(0.34))
-                .frame(width: 15, height: 15)
-            Circle()
-                .stroke(Color.white, lineWidth: 1.5)
-                .frame(width: 11, height: 11)
-            Rectangle()
-                .fill(Color.white)
-                .frame(width: 17, height: 1)
-            Rectangle()
-                .fill(Color.white)
-                .frame(width: 1, height: 17)
-        }
-        .frame(width: 20, height: 20)
-        .shadow(
-            color: Color.black.opacity(0.75),
-            radius: 1,
-            x: 0,
-            y: 1
-        )
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-}
-
-private struct ProbeReadingCard: View {
-    let reading: ProbeReading
-
-    var body: some View {
-        Grid(
-            alignment: .leading,
-            horizontalSpacing: 9,
-            verticalSpacing: 3
-        ) {
-            GridRow {
-                Text("Pixel")
-                Text(
-                    "\(reading.pixelCoordinate.x), "
-                        + "\(reading.pixelCoordinate.y)"
-                )
-                .gridColumnAlignment(.trailing)
-            }
-            GridRow {
-                Text("Raw")
-                Text(
-                    formattedProbeValue(
-                        reading.rawValue,
-                        unit: reading.unit
-                    )
-                )
-                .gridColumnAlignment(.trailing)
-            }
-            GridRow {
-                Text("Processed")
-                Text(
-                    formattedProbeValue(
-                        reading.processedValue,
-                        unit: reading.unit
-                    )
-                )
-                .gridColumnAlignment(.trailing)
-            }
-            if let physical = reading.physicalCoordinate {
-                GridRow {
-                    Text("Position")
-                    Text(
-                        "X "
-                            + formattedProbeValue(
-                                physical.x,
-                                unit: "m"
-                            )
-                            + " · Y "
-                            + formattedProbeValue(
-                                physical.y,
-                                unit: "m"
-                            )
-                    )
-                    .gridColumnAlignment(.trailing)
-                }
-            }
-        }
-        .font(.caption.monospacedDigit())
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            .regularMaterial,
-            in: RoundedRectangle(cornerRadius: 7)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 7)
-                .stroke(
-                    Color.primary.opacity(0.14),
-                    lineWidth: 1
-                )
-        }
-        .shadow(
-            color: Color.black.opacity(0.18),
-            radius: 5,
-            x: 0,
-            y: 2
-        )
-        .allowsHitTesting(false)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Data probe")
-        .accessibilityValue(
-            probeAccessibilitySummary(reading)
-        )
-    }
-}
-
-private struct ScreenScaleBar: View {
-    let scaleBar: ScaleBar
-
-    var body: some View {
-        VStack(spacing: 4) {
-            Text(scaleBar.label)
-                .font(.caption.weight(.semibold))
-                .monospacedDigit()
-
-            ScaleBarGlyph()
-                .stroke(
-                    Color.black.opacity(0.90),
-                    style: StrokeStyle(
-                        lineWidth: 5,
-                        lineCap: .square,
-                        lineJoin: .miter
-                    )
-                )
-                .overlay {
-                    ScaleBarGlyph()
-                        .stroke(
-                            Color.white,
-                            style: StrokeStyle(
-                                lineWidth: 2,
-                                lineCap: .square,
-                                lineJoin: .miter
-                            )
-                        )
-                }
-                .frame(
-                    width:
-                        CGFloat(
-                            scaleBar.screenLengthPoints
-                        ),
-                    height: 10
-                )
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(
-            .regularMaterial,
-            in: RoundedRectangle(cornerRadius: 7)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 7)
-                .stroke(
-                    Color.primary.opacity(0.14),
-                    lineWidth: 1
-                )
-        }
-        .shadow(
-            color: Color.black.opacity(0.18),
-            radius: 4,
-            x: 0,
-            y: 2
-        )
-        .allowsHitTesting(false)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Scale bar")
-        .accessibilityValue(scaleBar.label)
-    }
-}
-
-private struct ScaleBarGlyph: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let centerY = rect.midY
-        path.move(
-            to: CGPoint(
-                x: rect.minX,
-                y: centerY
-            )
-        )
-        path.addLine(
-            to: CGPoint(
-                x: rect.maxX,
-                y: centerY
-            )
-        )
-        path.move(
-            to: CGPoint(
-                x: rect.minX,
-                y: rect.minY
-            )
-        )
-        path.addLine(
-            to: CGPoint(
-                x: rect.minX,
-                y: rect.maxY
-            )
-        )
-        path.move(
-            to: CGPoint(
-                x: rect.maxX,
-                y: rect.minY
-            )
-        )
-        path.addLine(
-            to: CGPoint(
-                x: rect.maxX,
-                y: rect.maxY
-            )
-        )
-        return path
-    }
-}
-
 private struct SingleSpectroscopyDrawer: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var model: AppModel
     @Binding var liveHeight: CGFloat
     @Binding var isResizing: Bool
+    let maximumHeight: CGFloat
+
+    private var displayedHeight: CGFloat {
+        min(liveHeight, maximumHeight)
+    }
     @State private var dragStartHeight: CGFloat?
     @State private var isLegendPopoverPresented = false
 
@@ -4466,8 +3868,8 @@ private struct SingleSpectroscopyDrawer: View {
         }
         .frame(
             maxWidth: .infinity,
-            minHeight: isExpanded ? liveHeight : 42,
-            maxHeight: isExpanded ? liveHeight : 42
+            minHeight: isExpanded ? displayedHeight : 42,
+            maxHeight: isExpanded ? displayedHeight : 42
         )
         .background(
             AppTheme.cardSurface(for: colorScheme)
@@ -4478,10 +3880,7 @@ private struct SingleSpectroscopyDrawer: View {
                 .frame(height: 1)
         }
         .clipped()
-        .animation(
-            .easeInOut(duration: 0.18),
-            value: isExpanded
-        )
+        .browserMotion(.disclosure, value: isExpanded)
     }
 
     private var resizeHandle: some View {
@@ -4512,11 +3911,11 @@ private struct SingleSpectroscopyDrawer: View {
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
                         if dragStartHeight == nil {
-                            dragStartHeight = liveHeight
+                            dragStartHeight = displayedHeight
                             isResizing = true
                         }
                         let start =
-                            dragStartHeight ?? liveHeight
+                            dragStartHeight ?? displayedHeight
                         let next = SingleSpectroscopyState
                             .resizedHeight(
                                 startingAt: Double(start),
@@ -4527,7 +3926,7 @@ private struct SingleSpectroscopyDrawer: View {
                         var transaction = Transaction()
                         transaction.disablesAnimations = true
                         withTransaction(transaction) {
-                            liveHeight = CGFloat(next)
+                            liveHeight = min(CGFloat(next), maximumHeight)
                         }
                     }
                     .onEnded { _ in
@@ -4581,12 +3980,9 @@ private struct SingleSpectroscopyDrawer: View {
                     !isExpanded
                 )
             } label: {
-                Image(
-                    systemName: isExpanded
-                        ? "chevron.down"
-                        : "chevron.right"
-                )
-                .frame(width: 18, height: 18)
+                Image(systemName: "chevron.right")
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .frame(width: 18, height: 18)
             }
             .buttonStyle(.plain)
             .help(
@@ -5336,7 +4732,6 @@ struct InspectorView: View {
             }
             .padding(12)
         }
-        .background(AppTheme.sidebar)
     }
 
     private func formattedMetadataDate(
@@ -5874,55 +5269,6 @@ func compact(_ value: Double) -> String {
     }
 
     return String(format: "%.3e", value)
-}
-
-private func formattedProbeValue(
-    _ value: Double?,
-    unit: String
-) -> String {
-    guard let value, value.isFinite else {
-        return "Not finite"
-    }
-    let formatted = compact(value)
-    guard !unit.isEmpty else { return formatted }
-    if value == 0 {
-        return "\(formatted) \(unit)"
-    }
-    return "\(formatted)\(unit)"
-}
-
-private func probeAccessibilitySummary(
-    _ reading: ProbeReading
-) -> String {
-    var fields = [
-        "Pixel \(reading.pixelCoordinate.x), "
-            + "\(reading.pixelCoordinate.y), zero based",
-        "Raw "
-            + formattedProbeValue(
-                reading.rawValue,
-                unit: reading.unit
-            ),
-        "Processed "
-            + formattedProbeValue(
-                reading.processedValue,
-                unit: reading.unit
-            ),
-    ]
-    if let physical = reading.physicalCoordinate {
-        fields.append(
-            "Position X "
-                + formattedProbeValue(
-                    physical.x,
-                    unit: "m"
-                )
-                + ", Y "
-                + formattedProbeValue(
-                    physical.y,
-                    unit: "m"
-                )
-        )
-    }
-    return fields.joined(separator: ", ")
 }
 
 private extension View {

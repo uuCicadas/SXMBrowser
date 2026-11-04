@@ -1,0 +1,391 @@
+{
+  "date": "2026-10-25",
+  "selection": "Purposive sample of molecular/atomic real-space STM/AFM studies in Nature and Science main journals; not a systematic review or statistical estimate of journal-wide palette usage.",
+  "n": 10,
+  "journal_counts": {
+    "Nature": 5,
+    "Science": 5
+  },
+  "scope": "Visible tonal organization, signal semantics, experimentally measured versus simulated data, and explicitly reported processing. No inferred author LUT/gamma.",
+  "papers": [
+    {
+      "id": "cai2010",
+      "title": "Atomically precise bottom-up fabrication of graphene nanoribbons",
+      "authors": "Jinming Cai, Pascal Ruffieux et al.",
+      "year": 2010,
+      "journal": "Nature",
+      "volume": "466",
+      "pages": "470–473",
+      "doi": "10.1038/nature09211",
+      "official_url": "https://www.nature.com/articles/nature09211",
+      "figure_panels": [
+        "Fig. 2b,c,e",
+        "Fig. 3b,c"
+      ],
+      "signals": "Experimental STM apparent height; separate grayscale DFT STM simulations are embedded beside the experimental colored panels.",
+      "palette_scheme": "Sequential dark-to-light warm map for measured STM, grayscale for calculated STM; no scalar diverging map in the inspected measured STM panels.",
+      "observations": [
+        "Fig. 2b/e and Fig. 3b have visible continuous color bars going near-black through dark red and orange into pale cream/white. Examples of stated spans are 0–3.8 Å (2b), 0–2 Å (2e), and 0–1.8 Å (3b inset).",
+        "Measured ribbons occupy the bright end while substrate occupies darker or colored middle tones. Fig. 2e retains red middle tones in substrate and only raises the ribbon toward pale white; the field is not uniformly washed into gray-white.",
+        "Background is not universally black: large terraces in Fig. 2c and Fig. 3b/c remain colored middle tones, so black should be an available endpoint rather than a forced background.",
+        "The grayscale portions of 2b/2e and the 3b inset are explicitly DFT STM simulations, not AFM and not additional measured modes. Blue ball models are structural overlays rather than data colormap colors."
+      ],
+      "confirmed_processing": [
+        "Captions explicitly distinguish measured STM, DFT STM simulation, and structural overlays. No exact LUT, gamma, percentile clipping, or leveling recipe was specified in the inspected captions."
+      ],
+      "design_takeaway": "Keep chromatic midtones with a clear luminance progression; reserve near-white for the high endpoint. Use a broad enough dark-to-light range while retaining terrace differences. Do not infer that all backgrounds should be clipped black.",
+      "evidence_paths": [
+        "/tmp/sxm-ns-survey/extra3/cai2010_fig2.jpg",
+        "/tmp/sxm-ns-survey/extra3/cai2010_fig3.jpg",
+        "/tmp/sxm-ns-survey/extra3/cai2010_fig2.html",
+        "/tmp/sxm-ns-survey/extra3/cai2010_fig3.html"
+      ],
+      "evidence_urls": [
+        "https://www.nature.com/articles/nature09211/figures/2",
+        "https://www.nature.com/articles/nature09211/figures/3",
+        "https://media.springernature.com/lw1200/springer-static/image/art%3A10.1038%2Fnature09211/MediaObjects/41586_2010_Article_BFnature09211_Fig2_HTML.jpg"
+      ]
+    },
+    {
+      "id": "cocker2016",
+      "title": "Tracking the ultrafast motion of a single molecule by femtosecond orbital imaging",
+      "authors": "Tyler L. Cocker, Dominik Peller, Ping Yu, Jascha Repp and Rupert Huber",
+      "year": 2016,
+      "journal": "Nature",
+      "volume": "539",
+      "pages": "263–267",
+      "doi": "10.1038/nature19816",
+      "official_url": "https://www.nature.com/articles/nature19816",
+      "figure_panels": [
+        "Fig. 2a,b (DC topography)",
+        "Fig. 2c,e (experimental THz-induced current)",
+        "Fig. 2d,i (simulated THz current)"
+      ],
+      "signals": "DC-STM apparent height and THz-induced tunnel current; the latter is scaled to electrons per THz pulse for panel 2e.",
+      "palette_scheme": "Grayscale for DC height; sequential near-black/red/yellow/white for the magnitude of one-sign THz current. Not a zero-centered diverging experimental data map.",
+      "observations": [
+        "2a,b use grayscale with a gray-to-dark background and bright molecular lobes. Caption gives grayscale spans 2.3 Å and 2.0 Å.",
+        "2c,e place near-zero THz current in a nearly black background, while stronger orbital lobes run through saturated middle tones into small pale/white centers; gaps between lobes remain distinctly dark.",
+        "The THz color bar has 0 at the dark end and -1 a.u. (c,d,i) or -0.58 electrons/pulse (e) at the bright end. Thus increasing brightness follows the magnitude of this negative current, not increasing signed numerical value.",
+        "The measured 2c/e panels retain visible sampling and noise; simulated 2d/i lobes are smoother. This visual difference is not proof of a colormap or denoising advantage.",
+        "Red/blue molecular lobes in 2f,g are DFT orbital contour sign colors, not an experimental STM scalar colormap. They should not be included as a rainbow/diverging STM example."
+      ],
+      "confirmed_processing": [
+        "Caption explicitly distinguishes constant-current DC imaging, simultaneous THz imaging following topography, and constant-height THz imaging. Methods explicitly calibrate average current into electrons/pulse. No exact LUT, gamma, percentile mapping, or image smoothing recipe found in the examined main text/methods."
+      ],
+      "design_takeaway": "Use a strong background-to-signal separation with genuinely dark low-signal endpoint and bright but localized peaks. Keep modality and signal sign explicit; do not assign a diverging map merely because a measurement happens to be negative.",
+      "evidence_paths": [
+        "/tmp/sxm-ns-survey/extra3/cocker2016_fig2.jpg",
+        "/tmp/sxm-ns-survey/extra3/cocker2016.html"
+      ],
+      "evidence_urls": [
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC5597038/",
+        "https://cdn.ncbi.nlm.nih.gov/pmc/blobs/3330/5597038/ea32cb0d96c0/emss-69876-f002.jpg"
+      ]
+    },
+    {
+      "id": "peng2018_nature",
+      "title": "The effect of hydration number on the interfacial transport of sodium ions",
+      "authors": "Jinbo Peng, Duanyun Cao, Zhili He et al.; corresponding authors Li-Mei Xu, Yi Qin Gao, En-Ge Wang, Ying Jiang",
+      "year": 2018,
+      "journal": "Nature",
+      "volume": "557",
+      "pages": "701–705",
+      "published": "2018-05-14",
+      "doi": "10.1038/s41586-018-0122-2",
+      "official_url": "https://www.nature.com/articles/s41586-018-0122-2",
+      "figure_url": "https://www.nature.com/articles/s41586-018-0122-2/figures/1",
+      "image_url": "https://media.springernature.com/full/springer-static/image/art%3A10.1038%2Fs41586-018-0122-2/MediaObjects/41586_2018_122_Fig1_HTML.gif",
+      "pdf_url": "https://web.tdli.sjtu.edu.cn/jinbopeng/wp-content/uploads/sites/17/2022/06/Peng-et-al.-2018-The-effect-of-hydration-number-on-the-interfacial-.pdf",
+      "figure_panels": "Fig. 1a–e, STM / AFM / AFM simulation columns; PDF p2",
+      "signal": "STM: constant-current topography using CO tip; experimental AFM: constant-height frequency shift Δf; simulation: Δf.",
+      "palette_classification": "STM and measured AFM: dark-to-light warm sequential. AFM simulation: grayscale sequential. Not a zero-centered diverging palette.",
+      "observations": [
+        "STM background is nearly black / dark maroon, molecular features progress through brown-gold to small white highlights.",
+        "Experimental AFM retains brown-gold background, dark depressions and brighter off-centre features; the simulated panels are grayscale.",
+        "Experimental AFM numerical range differs by hydrate, e.g. -6.4 to -0.6 Hz for a and -12.0 to -6.0 Hz for b. This is visible per-panel scaling, not one common range.",
+        "White arrows and dashed lattice guides support interpretation; they are annotations rather than colour-map features."
+      ],
+      "confirmed_processing": [
+        "Figure legend and Methods establish acquisition modes and CO tip.",
+        "No explicit image smoothing, gamma, histogram equalization or numerical LUT found in the inspected main article and Methods. This does not establish that images are unprocessed.",
+        "The bright/dark AFM contrast is discussed in terms of electrostatics and water orientation, rather than explained as a display effect."
+      ],
+      "evidence_paths": [
+        "/tmp/sxm-ns-survey/nature3/peng2018.pdf",
+        "/tmp/sxm-ns-survey/nature3/peng2018.txt",
+        "/tmp/sxm-ns-survey/nature3/peng2018-2.png",
+        "/tmp/sxm-ns-survey/nature3/peng2018_fig1.gif"
+      ],
+      "practical_inference": "Useful example of reserving white for a small feature population, but the warm hue direction is not recommended for the user who rejected A."
+    },
+    {
+      "id": "ma2020_nature",
+      "title": "Atomic imaging of the edge structure and growth of a two-dimensional hexagonal ice",
+      "authors": "Runze Ma, Duanyun Cao, Chongqin Zhu, Ye Tian et al.; corresponding authors Xiao Cheng Zeng, Li-Mei Xu, En-Ge Wang, Ying Jiang",
+      "year": 2020,
+      "journal": "Nature",
+      "volume": "577",
+      "pages": "60–63",
+      "published": "2020-01-01",
+      "doi": "10.1038/s41586-019-1853-4",
+      "official_url": "https://www.nature.com/articles/s41586-019-1853-4",
+      "figure_url": "https://www.nature.com/articles/s41586-019-1853-4/figures/1",
+      "accessible_figure_source": "Author/institute-hosted full PDF p2",
+      "pdf_url": "https://en.sslab.org.cn/upload_files/file/2020-01/1578019892658816.pdf",
+      "figure_panels": "Fig. 1c STM; Fig. 1d AFM; Fig. 2a measured AFM; Fig. 2b AFM simulations; PDF p2",
+      "signal": "Fig1c: constant-current STM topography, 100 mV / 10 pA. Fig1d and Fig2a: constant-height Δf measured at different tip heights. Fig2b: simulated Δf.",
+      "palette_classification": "Measured STM/AFM: black–deep blue–saturated blue–pale cool blue/white sequential. Simulated AFM: grayscale sequential; not a zero-centered diverging palette.",
+      "observations": [
+        "Fig1c has a black substrate and pale-blue ice plateau with local dark-blue molecular texture. Its visible Low/High strip has a long near-black section, not a uniform-lightness ramp.",
+        "Fig1d presents dark hexagonal holes with bright blue to nearly white ridges; its numerical Δf bar spans -10.1 to +1.2 Hz.",
+        "Fig2a changes contrast with tip height: bright spots, directional features and honeycomb lines. These structural contrast changes are not attributable to palette alone.",
+        "Fig2a independently labelled Δf windows are -12.0 to -7.8 Hz, -12.2 to +1.02 Hz, and -16.1 to -7.2 Hz."
+      ],
+      "confirmed_processing": [
+        "Methods confirms CO-terminated tips, constant-current STM and constant-height AFM at 5 K.",
+        "No explicit gamma, numerical LUT, flattening or image filter parameters found in the inspected main article/Methods.",
+        "Extended Data Fig3i explicitly smooths Δf(z) spectroscopy with a 5-point moving average before integration to force. This applies to a curve and must not be claimed as image smoothing."
+      ],
+      "evidence_paths": [
+        "/tmp/sxm-ns-survey/nature3/ma2020.pdf",
+        "/tmp/sxm-ns-survey/nature3/ma2020.txt",
+        "/tmp/sxm-ns-survey/nature3/ma2020-02.png",
+        "/tmp/sxm-ns-survey/nature3/ma_bars_zoom.png",
+        "/tmp/sxm-ns-survey/nature3/colorbar_samples.json"
+      ],
+      "practical_inference": "The blue sequential family is directly relevant. Copy the visual separation of dark valleys and cold bright peaks, not the special long-black STM scale window or an unreported gamma."
+    },
+    {
+      "id": "hong2024_nature",
+      "title": "Imaging surface structure and premelting of ice Ih with atomic resolution",
+      "authors": "Jiani Hong, Ye Tian, Tiancheng Liang, Xinmeng Liu et al.; corresponding authors Ye Tian, Li-Mei Xu, En-Ge Wang, Ying Jiang",
+      "year": 2024,
+      "journal": "Nature",
+      "volume": "630",
+      "pages": "375–380",
+      "published": "2024-05-22",
+      "doi": "10.1038/s41586-024-07427-8",
+      "official_url": "https://www.nature.com/articles/s41586-024-07427-8",
+      "figure_url": "https://www.nature.com/articles/s41586-024-07427-8/figures/1",
+      "image_url": "https://media.springernature.com/full/springer-static/image/art%3A10.1038%2Fs41586-024-07427-8/MediaObjects/41586_2024_7427_Fig1_HTML.png",
+      "methods_primary_pdf_url": "https://jupiter.chem.uoa.gr/thanost/papers/papers1/Nature_630%282024%29375.pdf",
+      "methods_access": "Full-PDF download returned HTTP403. The primary-paper indexed Methods text was readable through web search; official Fig1 caption and full publisher image inspected directly.",
+      "figure_panels": "Fig. 1b topographic overview; Fig. 1c,d measured AFM top rows and simulated AFM bottom rows",
+      "signal": "Fig1b: constant-frequency-shift AFM height at -1.8 Hz. Fig1c,d: constant-height experimental and simulated Δf.",
+      "palette_classification": "Experimental AFM: black–deep blue–saturated blue–cool white sequential. Simulated AFM: grayscale sequential.",
+      "observations": [
+        "Fig1c experiment shows cold-white maxima on blue surrounding regions and deep-blue/black minima. Fig1d shows light narrow ridges surrounding dark holes. No yellow/cream high-value branch is visible.",
+        "Both signed signal examples still use a sequential ramp; simulated bars cross zero without assigning a distinct neutral-centred hue.",
+        "Experiment Δf bars are -5.27 to -0.62 Hz (c) and -6.54 to -1.37 Hz (d); simulations use their own ranges.",
+        "Thin coloured arrows and boundary overlays annotate domains without changing the image palette."
+      ],
+      "confirmed_processing": [
+        "Methods explicitly states use of Nanotec WSxM for image processing.",
+        "The inspected Methods statement does not specify gamma, LUT values, clipping percentiles or the exact processing operations. Do not infer those from the figure.",
+        "Official caption gives separate constant-height conditions for c and d, so apparent sharpness differences also have an acquisition basis."
+      ],
+      "evidence_paths": [
+        "/tmp/sxm-ns-survey/nature3/hong2024_fig1.png",
+        "/tmp/sxm-ns-survey/nature3/hong_bars_zoom.png",
+        "/tmp/sxm-ns-survey/nature3/colorbar_samples.json"
+      ],
+      "practical_inference": "Closest cold-tone reference for B2 refinement: replace grey-green and cream branch with more chromatic blue/cyan mids and a near-neutral cool-white endpoint. This is our design inference; the user AFM gray remains unchanged."
+    },
+    {
+      "id": "gross2009",
+      "title": "The Chemical Structure of a Molecule Resolved by Atomic Force Microscopy",
+      "authors": "Leo Gross, Fabian Mohn, Nikolaj Moll, Peter Liljeroth, Gerhard Meyer",
+      "year": 2009,
+      "journal": "Science",
+      "volume": "325",
+      "issue": "5944",
+      "pages": "1110-1114",
+      "doi": "10.1126/science.1176210",
+      "official_url": "https://www.science.org/doi/10.1126/science.1176210",
+      "visual_source_url": "https://www2.chem.wisc.edu/deptfiles/chem345-gellman/LecMaterials/Journal%20Articles/Gellman_Microscropy.pdf",
+      "visual_source_type": "Published journal PDF scan hosted by University of Wisconsin chemistry teaching site",
+      "figure_panels": [
+        "Fig. 1B: constant-current STM of pentacene/Cu(111)",
+        "Fig. 1C,D: constant-height AFM frequency-shift images",
+        "Fig. 3A,B: measured frequency shift versus extracted vertical force"
+      ],
+      "observations": [
+        "Fig. 1B: molecule is a broad bright form on a middle-gray field; small hue variation is not the main carrier of structure.",
+        "Fig. 1C/D: bright narrow molecular outlines and dark ring interiors/dark surrounding halo coexist against a gray background; background is not uniformly black. The contrast hierarchy is spatially local and uses the full gray tonal span.",
+        "Fig. 3A/B distinguish two measured/derived quantities by cool light/dark versus orange/yellow presentations. This is not evidence that all maps share one universal high-value-is-white color scheme."
+      ],
+      "classification": "Fig.1 STM/AFM: grayscale-like monochrome tonal mapping. Scan has a pale color cast; exact hue is not reliable. Fig.3 quantity-specific false color.",
+      "modal_separation": "Fig.1 relies mainly on separate panels and captions; STM and AFM are not obligatorily distinguished by different hues.",
+      "colorbar": "Vertical bars visible in Fig.1 and Fig.2; tiny numerical text in scan is not reliable. Fig.3A bar is labeled -3 Hz to 0 Hz; Fig.3B force bar -120 pN to 0 pN.",
+      "confirmed_processing": [
+        "Fig.1 caption explicitly states constant-current STM and constant-height AFM; these are acquisition modes, not image post-processing.",
+        "No exact LUT, gamma, clipping percentile or perceptual-uniformity claim established from this inspected source."
+      ],
+      "evidence_paths": [
+        "/tmp/sxm-ns-survey/science4/gross2009.pdf",
+        "/tmp/sxm-ns-survey/science4/gross2009-2.png",
+        "/tmp/sxm-ns-survey/science4/gross2009-3.png"
+      ],
+      "limitations": [
+        "The accessible journal PDF is a scanned copy with color cast and fine screen pattern. Conclusions use visible tonal structure only, not numerical color reconstruction."
+      ]
+    },
+    {
+      "id": "gross2012",
+      "title": "Bond-Order Discrimination by Atomic Force Microscopy",
+      "authors": "Leo Gross et al.",
+      "year": 2012,
+      "journal": "Science",
+      "volume": "337",
+      "issue": "6100",
+      "pages": "1326-1329",
+      "doi": "10.1126/science.1225621",
+      "official_url": "https://www.science.org/doi/10.1126/science.1225621",
+      "visual_source_url": "https://epub.uni-regensburg.de/32096/2/DissertationBrunoSchuler.pdf",
+      "visual_source_type": "Coauthor Bruno Schuler thesis, section 7.1 explicitly identifies the Science article and authorized reproduction; figure numbering/layout differs",
+      "figure_panels": [
+        "Science Fig.1B-E C60 constant-height AFM height sequence; corresponding images in thesis Fig.7.1a-c, PDF page54",
+        "Science Fig.1F processed AFM image; corresponding thesis Fig.7.1d",
+        "Science Fig.3C HBC and Fig.4C DBNP pseudo-3D AFM; corresponding thesis Fig.7.3b,c, PDF page58"
+      ],
+      "observations": [
+        "C60 maps use black-gray-white with middle-gray substrate, dark depression/halo and bright bond contours. On approach, the center changes from dark to lighter and bond edges become clear; this comes from measured contrast changing with height, not evidence of a tone-curve tweak.",
+        "HBC/DBNP panels retain deep dark ring centers and weak gray interior detail while narrow bond ridges are bright. Gray surroundings remain readable; white is not spread across every elevated area.",
+        "Colored model bonds, trace colors and red measurement marks encode annotations/categories, not the AFM scalar LUT."
+      ],
+      "classification": "Grayscale sequential scalar maps; separate categorical model/annotation colors.",
+      "modal_separation": "AFM maps stay grayscale; model bond-order colors and line profiles are separate visual layers. The original Fig.1A includes an STM inset, but its color was not directly inspected in the thesis version.",
+      "colorbar": "Thesis Fig.7.1a-c has individual grayscale Hz bars: -4.5 to -1.5, -4 to -1, -4 to 0. Do not transplant these limits to other panels. Pseudo-3D b/c of Fig7.3 have no scalar bar directly below them.",
+      "confirmed_processing": [
+        "Published Fig.1F caption explicitly calls it Laplace-filtered and flattened (verified in author-uploaded original article text on ResearchGate).",
+        "Thesis Fig.7.1d separately describes Laplace and low-pass filtering; wording is preserved as source-specific, not assumed to be identical to the journal processing description.",
+        "Published Fig.3C / Fig.4C captions explicitly identify pseudo-3D representations.",
+        "No numeric LUT, gamma or clipping percentiles established."
+      ],
+      "evidence_paths": [
+        "/tmp/sxm-ns-survey/science4/schuler-author-thesis.pdf",
+        "/tmp/sxm-ns-survey/science4/gross2012-thesis-054.png",
+        "/tmp/sxm-ns-survey/science4/gross2012-thesis-p58.png"
+      ],
+      "limitations": [
+        "Visual evidence is the author-authorized thesis reproduction, not a downloaded final Science PDF; mapped figure identities were checked against the journal figure captions."
+      ]
+    },
+    {
+      "id": "deoteyza2013",
+      "title": "Direct Imaging of Covalent Bond Structure in Single-Molecule Chemical Reactions",
+      "authors": "Dimas G. de Oteyza et al.",
+      "year": 2013,
+      "journal": "Science",
+      "volume": "340",
+      "issue": "6139",
+      "pages": "1434-1437",
+      "doi": "10.1126/science.1238187",
+      "official_url": "https://www.science.org/doi/10.1126/science.1238187",
+      "visual_source_url": "https://cfm.ehu.es/highlights/direct-imaging-of-covalent-bond-structure-in-single-molecule-chemical-reactions/",
+      "visual_source_type": "Author institution CFM original research figure, corresponding to journal Fig.2 but different AFM display limits from final printed figure",
+      "original_pdf_text_url": "https://www.scienceintheclassroom.org/sites/default/files/research-papers/science-2013-de_oteyza-1434-7.pdf",
+      "figure_panels": [
+        "Journal Fig.2A-D corresponding STM reactant/product panels in author institutional figure",
+        "Journal Fig.2E-H corresponding constant-height nc-AFM reactant/product panels in author institutional figure"
+      ],
+      "observations": [
+        "STM row: dark/black low regions lead through teal/cyan and a pale band, then red/orange to yellow in broad molecular lobes. This is a multihue scalar sequence with visually nonmonotonic lightness, not a zero-centered signed diverging map.",
+        "AFM row: medium-gray field, dark molecular surroundings/interiors, fine white or light-gray bond ridges. The tonal contour carries the molecular connectivity.",
+        "Reactant/product columns keep the same mode-specific palette; the STM/AFM rows explicitly separate broad electronic form from fine force-contrast structure.",
+        "This paper is a counterexample to any claim that all high-profile SPM papers use narrow-hue or perceptually monotonic colormaps."
+      ],
+      "classification": "STM multihue scalar map with brightness reversals; AFM grayscale.",
+      "modal_separation": "Strong and explicit: colored STM upper row, grayscale AFM lower row, line structures in third row.",
+      "colorbar": "Individual bars shown under every STM and AFM panel; STM limits read 0-1.54 Å, 0-1.17 Å, 0-1.22 Å and 0-1.38 Å in the institutional image. AFM Hz limits differ from final journal PDF text; neither set should be mixed with the other.",
+      "confirmed_processing": [
+        "Journal caption confirms all images acquired with CO-modified tip; nc-AFM is constant-height frequency shift.",
+        "No LUT, gamma, percentile windowing or nonlinear tone mapping was established."
+      ],
+      "evidence_paths": [
+        "/tmp/sxm-ns-survey/science4/deoteyza2013-fig2.jpg"
+      ],
+      "limitations": [
+        "Actual pixels inspected are an original author-institution research figure, not the final journal PDF. Final journal PDF text was readable through web search, but file retrieval repeatedly returned HTTP403/404. AFM limits differ between institutional figure and journal version. Conclusions are restricted to qualitative palette/mode structure visibly present."
+      ]
+    },
+    {
+      "id": "guo2016",
+      "title": "Nuclear quantum effects of hydrogen bonds probed by tip-enhanced inelastic electron tunneling",
+      "authors": "Jing Guo, Jing-Tao Lü, Yexin Feng, Ji Chen, Jinbo Peng, Zeren Lin, Xiangzhi Meng, Zhichang Wang, Xin-Zheng Li, En-Ge Wang, Ying Jiang",
+      "year": 2016,
+      "journal": "Science",
+      "volume": "352",
+      "issue": "6283",
+      "pages": "321-325",
+      "doi": "10.1126/science.aaf2042",
+      "official_url": "https://www.science.org/doi/10.1126/science.aaf2042",
+      "visual_source_url": "https://www.phy.pku.edu.cn/xzli/articles/Science_352_6283_321-325_2016.pdf",
+      "visual_source_type": "Final journal PDF on coauthor Xin-Zheng Li university site",
+      "figure_panels": [
+        "Fig.1D: STM topography of D2O monomer",
+        "Fig.3B: normalized IETS map versus tip height and energy"
+      ],
+      "observations": [
+        "Fig.1D: near-black/dark-brown field, red-brown lower shoulders, gold upper shoulders and small cream-white lobes. Lightness increases toward the protrusion; broad background remains dark and the brightest area is spatially localized.",
+        "Fig.3B: blue-white-red diverging map, with white near zero and opposite signs in blue/red. This is a spectroscopy map of a signed normalized derivative, not an STM height image.",
+        "Fig.1D inset molecular orbital is a translucent olive isosurface separated from the STM image; categorical atom colors do not define the STM palette."
+      ],
+      "classification": "Fig.1D warm sequential STM map; Fig.3B zero-centered diverging signed spectroscopy map.",
+      "modal_separation": "Different signal semantics, separate figures and explicit units justify different map types.",
+      "colorbar": "Fig.1D visible 0 Å to1.2 Å colorbar. Fig.3B -250,0,200,400 V^-1 for (d²I/dV²)/(dI/dV).",
+      "confirmed_processing": [
+        "Fig.2B/C caption explicitly states normalization of d²I/dV² by dI/dV and per-curve scaling for equal magnitude; this is spectroscopy processing and cannot be transferred to STM image contrast.",
+        "Fig.3B colorbar explicitly identifies normalized IETS signal.",
+        "No gamma, exact LUT or percentile clipping established for STM Fig1D."
+      ],
+      "evidence_paths": [
+        "/tmp/sxm-ns-survey/science4/guo2016.pdf",
+        "/tmp/sxm-ns-survey/science4/guo2016-2.png",
+        "/tmp/sxm-ns-survey/science4/guo2016-3.png"
+      ],
+      "limitations": [
+        "PDF begins with the end of a preceding paper with DOI aad9898. Correct DOI for Guo et al. is aaf2042."
+      ]
+    },
+    {
+      "id": "fatayer2019",
+      "title": "Molecular structure elucidation with charge-state control",
+      "authors": "Shadi Fatayer, Florian Albrecht et al.",
+      "year": 2019,
+      "journal": "Science",
+      "volume": "365",
+      "pages": "142–145",
+      "doi": "10.1126/science.aax5895",
+      "official_url": "https://www.science.org/doi/10.1126/science.aax5895",
+      "figure_panels": [
+        "Fig. 2A–D (pentacene)",
+        "Fig. 4C,E,G (constant-height porphine)",
+        "Fig. 4D,F,H (Laplace-filtered porphine)"
+      ],
+      "signals": "CO-tip constant-height AFM frequency shift, Δf in Hz, for different charge states.",
+      "palette_scheme": "Grayscale sequential maps throughout measured AFM panels; chemistry/conjugation annotations and chart symbols use separate categorical colors.",
+      "observations": [
+        "2A–D use grayscale with dark ring centers, brighter bond outlines and a relatively light background. Their Δf ranges differ and are printed separately: -10.5 to -6, -6 to -1, -10 to -5, -15.3 to -9.9 Hz.",
+        "4C/E/G use medium-gray background with bright bond perimeter and darker central regions. Their explicit Δf bars keep the signed signal readable without assigning two unrelated hues.",
+        "4D/F/H show thinner, sharper grayscale bond traces than C/E/G. The caption explicitly identifies these as corresponding Laplace-filtered images; this is a separate processed quantity, not an improved colormap.",
+        "Because the fields and tip heights differ, similar brightness across charge-state panels must not be interpreted as the same absolute Δf. Each bar matters."
+      ],
+      "confirmed_processing": [
+        "Fig. 4 caption explicitly states constant-height and corresponding Laplace-filtered AFM images in paired panels. Fig. 2 and Fig. 4 captions specify different voltages and tip heights. Authors compare local bond contrast cautiously because tip electric fields and CO tilt affect apparent lengths. No author LUT, gamma, or percentile clipping specification found."
+      ],
+      "design_takeaway": "Do not equate high visual sharpness with saturation. Preserve raw/processed distinction and keep each scale explicit; retain project AFM gray. For STM, local contrast should be improved by a documented display or leveling option rather than silently emulating Laplace-filtered edges.",
+      "evidence_paths": [
+        "/tmp/sxm-ns-survey/extra3/fatayer2019.pdf",
+        "/tmp/sxm-ns-survey/extra3/fatayer2019_fig2.png",
+        "/tmp/sxm-ns-survey/extra3/fatayer2019_fig4.png"
+      ],
+      "evidence_urls": [
+        "https://arxiv.org/abs/1907.06100",
+        "https://arxiv.org/pdf/1907.06100"
+      ],
+      "access_note": "Publisher link gave 403 via web tool. Author manuscript downloaded from arXiv explicitly states definitive Science volume, issue, date and DOI on page 1. Figures inspected in that author manuscript."
+    }
+  ]
+}

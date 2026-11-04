@@ -20,25 +20,33 @@ public enum ChannelKind: String, Codable, Sendable {
 public enum ProcessingMode: String, CaseIterable, Codable, Sendable {
     case raw
     case lineMean
+    case lineSlope
     case lineLinear
+    case lineDerivative
     case planeLinear
 
     public var label: String {
         switch self {
         case .raw: "Raw"
-        case .lineMean: "Line mean subtract"
-        case .lineLinear: "Line linear fit"
+        case .lineMean: "Subtract average"
+        case .lineSlope: "Subtract slope"
+        case .lineLinear: "Subtract linear fit"
+        case .lineDerivative: "Differentiate"
         case .planeLinear: "Plane linear fit"
         }
     }
 }
 
 public enum PaletteName: String, CaseIterable, Codable, Sendable {
+    case blueViolet
+    case deepBlue
     case gray
     case flame
 
     public var label: String {
         switch self {
+        case .blueViolet: "Blue Violet"
+        case .deepBlue: "Deep Blue"
         case .gray: "Basic gray"
         case .flame: "Flame"
         }
@@ -259,9 +267,9 @@ public func classifyChannel(_ name: String) -> ChannelKind {
 }
 
 public func defaultPalette(for channelName: String) -> PaletteName {
-    classifyChannel(channelName) == .afm ? .gray : .flame
+    classifyChannel(channelName) == .afm ? .gray : .blueViolet
 }
 
 public func defaultProcessing(for channelName: String) -> ProcessingMode {
-    classifyChannel(channelName) == .afm ? .raw : .lineLinear
+    classifyChannel(channelName) == .afm ? .raw : .planeLinear
 }

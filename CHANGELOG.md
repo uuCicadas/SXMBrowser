@@ -4,6 +4,21 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Simplify image measurement markers to solid dots matching their spectrum colors, with a slightly larger dot for the focused spectrum.
+- Rename Subtract average + slope to Subtract linear fit and retain small fit residuals when subtracting a large baseline.
+
+## 2.3.0 - 2026-08-26
+
+- Build 84 (2026-10-26): Move the Single viewer scale bar to the lower-right image corner and remove the mouse-following probe reticle and continuous hover sampling.
+- Build 83 (2026-10-26): Remove the Single viewer's upper-right data probe card and restyle its lower-left scale bar as centered white text above a solid white line, without a panel or end caps; retain zoom-aware physical scale lengths.
+- Build 82 (2026-10-26): Adopt the approved Blue Violet preview with 5% stronger shadow lightness differences and a further 5% reduction in perceptual chroma relative to Build 81; preserve Plane linear fit as the STM default.
+- Build 81 (2026-10-26): Use Plane linear fit by default for STM; stabilize the full-image least-squares fit and preserve small residuals with Double subtraction. Refine Blue Violet with slightly brighter low/mid tones and 3% lower perceptual chroma, preserving monotonic luminance and other palettes.
+- Build 80 (2026-10-25): Combine window title and controls into a single compact native toolbar
+- Build 79 (2026-10-25): Adopt native customizable toolbars and split panes, organize standard menus, and adapt the window and spectroscopy drawer to smaller sizes
+- Build 78 (2026-10-25): Restore the compact system title bar and move pane toggles into the content toolbar
+- Build 77 (2026-10-25): Set Blue Violet as the STM default, add optional Deep Blue, and preserve AFM Basic gray
+- Build 76 (2026-08-26): Use raw full-range preview defaults and add Nanonis-compatible display processing
+
 ## 2.2.0 - 2026-07-25
 
 - Build 75 (2026-07-25): Finalize the v2.2.0 palette replacement release

@@ -24,4 +24,8 @@ fi
 cp "$BUILD_DIR/release/SXMBrowserNative" "$APP/Contents/MacOS/SXMBrowserNative"
 chmod +x "$APP/Contents/MacOS/SXMBrowserNative"
 
+# Seal the complete bundle after copying its executable and resources.
+codesign --force --sign - --timestamp=none "$APP"
+codesign --verify --deep --strict "$APP"
+
 echo "Built: $APP"

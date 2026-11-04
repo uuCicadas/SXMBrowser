@@ -89,6 +89,8 @@ func automaticScaleFromStatisticsMatchesMatrixConvenience() throws {
 
     #expect(direct.vmin == reused.vmin)
     #expect(direct.vmax == reused.vmax)
+    #expect(direct.vmin == statistics.min)
+    #expect(direct.vmax == statistics.max)
 }
 
 @Test

@@ -332,14 +332,43 @@ private func runSmoke() throws {
     let validPaletteCount = PaletteName.allCases.filter {
         PaletteStore.shared.stops(for: $0).count >= 2
     }.count
-    let expectedPalettes: [PaletteName] = [.gray, .flame]
-    guard PaletteName.allCases == expectedPalettes,
+    let expectedPalettes: [PaletteName] = [.gray, .flame, .blueViolet, .deepBlue]
+    guard Set(PaletteName.allCases) == Set(expectedPalettes),
           validPaletteCount == expectedPalettes.count else {
         throw SmokeFailure.contract(
             "The embedded palette catalog is incomplete; "
                 + "expected=\(expectedPalettes.count) "
                 + "actual=\(validPaletteCount)."
         )
+    }
+
+    // Exercise PNG export for both user-selected STM palettes. The canonical
+    // sample's first image can be an AFM channel and therefore render only gray.
+    let paletteRamp = Matrix(
+        width: 257,
+        height: 1,
+        values: (0...256).map { Float($0) / 256 }
+    )
+    for palette in [PaletteName.blueViolet, .deepBlue] {
+        let options = RenderOptions(
+            channel: "Z",
+            direction: .fwd,
+            processing: .raw,
+            palette: palette,
+            vmin: 0,
+            vmax: 1
+        )
+        let png = try SXMRenderer.pngData(matrix: paletteRamp, options: options)
+        guard let bitmap = NSBitmapImageRep(data: png),
+              bitmap.pixelsWide == paletteRamp.width,
+              bitmap.pixelsHigh == paletteRamp.height,
+              let low = bitmap.colorAt(x: 0, y: 0),
+              let high = bitmap.colorAt(x: paletteRamp.width - 1, y: 0),
+              low != high else {
+            throw SmokeFailure.contract(
+                "Palette \(palette.rawValue) did not produce a valid PNG gradient."
+            )
+        }
     }
 
     let sxmParser = SXMParser()

@@ -1,0 +1,9 @@
+{
+  "status": "preview_only_no_app_defaults_changed",
+  "floating_point_luminance_strictly_increasing": true,
+  "max_L_difference_from_B3": 0.0009295527536892223,
+  "same_raw_data_direction_crop_and_numerical_range": true,
+  "prior_B3_pixel_equality": true,
+  "input_sha256_verified": true,
+  "production_palette_catalog_unchanged": true
+}

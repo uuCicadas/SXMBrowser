@@ -1,0 +1,11 @@
+{
+  "status": "preview_only_no_app_defaults_changed",
+  "B4_snapshot_hashes_verified": true,
+  "floating_point_luminance_strictly_increasing": true,
+  "lightness_curve_error_max": 0.0009473880090595799,
+  "generation_uses_reference_palette": false,
+  "same_raw_data_direction_crop_and_numerical_range": true,
+  "prior_B4_pixel_equality": true,
+  "input_sha256_verified": true,
+  "production_palette_catalog_unchanged": true
+}

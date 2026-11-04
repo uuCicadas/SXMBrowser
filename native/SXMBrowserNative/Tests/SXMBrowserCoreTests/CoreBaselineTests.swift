@@ -21,14 +21,18 @@ func headerParserStopsAtScanEnd() {
 }
 
 @Test
-func defaultDisplayRulesDistinguishSTMAndAFMChannels() {
-    #expect(classifyChannel("Z") == .stm)
-    #expect(defaultProcessing(for: "Z") == .lineLinear)
-    #expect(defaultPalette(for: "Z") == .flame)
+func defaultDisplayRulesUseSTMPlaneFitAndAFMRawWithChannelPalette() {
+    for channel in ["Z", "Current"] {
+        #expect(classifyChannel(channel) == .stm)
+        #expect(defaultProcessing(for: channel) == .planeLinear)
+        #expect(defaultPalette(for: channel) == .blueViolet)
+    }
 
-    #expect(classifyChannel("OC_M1_Freq._Shift") == .afm)
-    #expect(defaultProcessing(for: "OC_M1_Freq._Shift") == .raw)
-    #expect(defaultPalette(for: "OC_M1_Freq._Shift") == .gray)
+    for channel in ["OC_M1_Freq._Shift", "Frequency Shift", "Amplitude", "Excitation", "PLL", "Δf"] {
+        #expect(classifyChannel(channel) == .afm)
+        #expect(defaultProcessing(for: channel) == .raw)
+        #expect(defaultPalette(for: channel) == .gray)
+    }
 }
 
 @Test
@@ -42,6 +46,45 @@ func lineMeanProcessingCentersEachFiniteRow() {
     let processed = SXMRenderer.processedMatrix(matrix, processing: .lineMean)
 
     #expect(processed.values == [-1, 0, 1, -1, 0, 1])
+}
+
+@Test
+func lineSlopeProcessingPreservesEachRowAverage() {
+    let matrix = Matrix(
+        width: 4,
+        height: 2,
+        values: [10, 12, 14, 16, 30, 29, 28, 27]
+    )
+
+    let processed = SXMRenderer.processedMatrix(matrix, processing: .lineSlope)
+
+    #expect(processed.values == [13, 13, 13, 13, 28.5, 28.5, 28.5, 28.5])
+}
+
+@Test
+func lineAverageAndSlopeProcessingCentersEachRow() {
+    let matrix = Matrix(
+        width: 4,
+        height: 2,
+        values: [10, 12, 14, 16, 30, 29, 28, 27]
+    )
+
+    let processed = SXMRenderer.processedMatrix(matrix, processing: .lineLinear)
+
+    #expect(processed.values.allSatisfy { abs($0) < 0.000_01 })
+}
+
+@Test
+func lineDifferentiateUsesCenteredInteriorDifferences() {
+    let matrix = Matrix(
+        width: 4,
+        height: 1,
+        values: [0, 1, 4, 9]
+    )
+
+    let processed = SXMRenderer.processedMatrix(matrix, processing: .lineDerivative)
+
+    #expect(processed.values == [1, 2, 4, 5])
 }
 
 @Test
