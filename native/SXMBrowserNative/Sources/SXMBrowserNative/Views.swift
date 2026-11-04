@@ -2199,8 +2199,15 @@ private struct BrowserToolbar: CustomizableToolbarContent {
                 }
                 .pickerStyle(.inline)
             } label: {
-                PaletteSwatch(palette: model.stmPreviewPalette)
+                HStack(spacing: 5) {
+                    PaletteSwatch(palette: model.stmPreviewPalette)
+                    Text("STM")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
             .help("STM preview palette: \(model.stmPreviewPalette.label)")
             .accessibilityLabel("STM preview palette")
         }
@@ -2343,32 +2350,17 @@ private struct BrowserToolbar: CustomizableToolbarContent {
 }
 
 /// Compact gradient chip that shows the current STM preview palette at a
-/// glance; the surrounding menu lists every palette.
+/// glance; the surrounding menu lists every palette. Drawn as an NSImage so
+/// toolbar menu labels keep the bitmap instead of collapsing it to text.
 private struct PaletteSwatch: View {
     let palette: PaletteName
 
     var body: some View {
-        let stops = PaletteStore.shared.stops(for: palette)
-        RoundedRectangle(cornerRadius: 3, style: .continuous)
-            .fill(
-                LinearGradient(
-                    stops: stops.map {
-                        Gradient.Stop(
-                            color: Color(
-                                .sRGB,
-                                red: $0.r,
-                                green: $0.g,
-                                blue: $0.b,
-                                opacity: 1
-                            ),
-                            location: CGFloat($0.position)
-                        )
-                    },
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
+        Image(nsImage: PaletteSwatchRenderer.image(for: palette))
+            .renderingMode(.original)
+            .resizable()
             .frame(width: 42, height: 13)
+            .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 3, style: .continuous)
                     .strokeBorder(
@@ -2377,6 +2369,57 @@ private struct PaletteSwatch: View {
                     )
             )
             .accessibilityHidden(true)
+    }
+}
+
+private enum PaletteSwatchRenderer {
+    static func image(for palette: PaletteName) -> NSImage {
+        let pointSize = NSSize(width: 42, height: 13)
+        let pixelWidth = 84
+        let pixelHeight = 26
+        guard
+            let space = CGColorSpace(name: CGColorSpace.sRGB),
+            let context = CGContext(
+                data: nil,
+                width: pixelWidth,
+                height: pixelHeight,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: space,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )
+        else {
+            return NSImage(size: pointSize)
+        }
+        let stops = PaletteStore.shared.stops(for: palette)
+        let colors = stops.map {
+            CGColor(
+                srgbRed: CGFloat($0.r),
+                green: CGFloat($0.g),
+                blue: CGFloat($0.b),
+                alpha: 1
+            )
+        }
+        let locations = stops.map { CGFloat($0.position) }
+        guard let gradient = CGGradient(
+            colorsSpace: space,
+            colors: colors as CFArray,
+            locations: locations
+        ) else {
+            return NSImage(size: pointSize)
+        }
+        context.drawLinearGradient(
+            gradient,
+            start: CGPoint(x: 0, y: CGFloat(pixelHeight) / 2),
+            end: CGPoint(x: CGFloat(pixelWidth), y: CGFloat(pixelHeight) / 2),
+            options: []
+        )
+        guard let cgImage = context.makeImage() else {
+            return NSImage(size: pointSize)
+        }
+        let image = NSImage(cgImage: cgImage, size: pointSize)
+        image.isTemplate = false
+        return image
     }
 }
 
