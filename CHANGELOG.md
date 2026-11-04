@@ -4,6 +4,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+- Build 89 (2026-11-04): Add a global STM preview palette picker to the toolbar and keep the inspector toggle at the trailing edge.
 - Build 88 (2026-11-04): Adopt the Ink Violet ramp for the Blue Violet palette, add Dusk Violet, and make Dusk Violet the default STM preview palette; keep AFM on Basic gray.
 - Simplify image measurement markers to solid dots matching their spectrum colors, with a slightly larger dot for the focused spectrum.
 - Rename Subtract average + slope to Subtract linear fit and retain small fit residuals when subtracting a large baseline.
