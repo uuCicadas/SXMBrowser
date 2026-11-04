@@ -2187,6 +2187,24 @@ private struct BrowserToolbar: CustomizableToolbarContent {
             browserActionsMenu
         }
 
+        ToolbarItem(id: "stm-palette", placement: .primaryAction) {
+            Menu {
+                Picker("STM preview palette", selection: Binding(
+                    get: { model.stmPreviewPalette },
+                    set: { model.setSTMPreviewPalette($0) }
+                )) {
+                    ForEach(PaletteName.allCases, id: \.self) { palette in
+                        Text(palette.label).tag(palette)
+                    }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                PaletteSwatch(palette: model.stmPreviewPalette)
+            }
+            .help("STM preview palette: \(model.stmPreviewPalette.label)")
+            .accessibilityLabel("STM preview palette")
+        }
+
         ToolbarItem(id: "inspector", placement: .primaryAction) {
             Button {
                 model.toggleInspector()
@@ -2321,6 +2339,44 @@ private struct BrowserToolbar: CustomizableToolbarContent {
         .fixedSize()
         .help("More browser actions")
         .accessibilityLabel("More browser actions")
+    }
+}
+
+/// Compact gradient chip that shows the current STM preview palette at a
+/// glance; the surrounding menu lists every palette.
+private struct PaletteSwatch: View {
+    let palette: PaletteName
+
+    var body: some View {
+        let stops = PaletteStore.shared.stops(for: palette)
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(
+                LinearGradient(
+                    stops: stops.map {
+                        Gradient.Stop(
+                            color: Color(
+                                .sRGB,
+                                red: $0.r,
+                                green: $0.g,
+                                blue: $0.b,
+                                opacity: 1
+                            ),
+                            location: CGFloat($0.position)
+                        )
+                    },
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .frame(width: 42, height: 13)
+            .overlay(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .strokeBorder(
+                        Color(nsColor: .separatorColor),
+                        lineWidth: 0.5
+                    )
+            )
+            .accessibilityHidden(true)
     }
 }
 
@@ -2832,7 +2888,7 @@ struct ThumbnailCard: View {
                 String(model.invertPalette)
             ].joined(separator: "|")
         }
-        return "\(file.id.uuidString)|default"
+        return "\(file.id.uuidString)|default|\(model.stmPreviewPalette.rawValue)"
     }
 
     var body: some View {

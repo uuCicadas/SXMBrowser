@@ -257,6 +257,18 @@ final class AppModel: ObservableObject {
     @Published var selectedDirection: ScanDirection = .fwd
     @Published var selectedProcessing: ProcessingMode = .planeLinear
     @Published var selectedPalette: PaletteName = .duskViolet
+    @Published var stmPreviewPalette: PaletteName =
+        AppModel.loadPalette(Defaults.stmPreviewPalette, fallback: .duskViolet) {
+        didSet {
+            UserDefaults.standard.set(
+                stmPreviewPalette.rawValue,
+                forKey: Defaults.stmPreviewPalette
+            )
+            if stmPreviewPalette != oldValue {
+                thumbnailCache.removeAllObjects()
+            }
+        }
+    }
     @Published var invertPalette = false
     @Published private(set) var spectrumAxisState = SpectroscopyAxisState()
     @Published private(set) var spectrumAxisRestoreIssues:
@@ -2931,12 +2943,32 @@ final class AppModel: ObservableObject {
         resultAlert.runModal()
     }
 
+    /// Palette used for previews and thumbnails when the user has not made an
+    /// explicit per-image selection. AFM always keeps the neutral gray map.
+    func previewPalette(for channelName: String) -> PaletteName {
+        classifyChannel(channelName) == .afm ? .gray : stmPreviewPalette
+    }
+
+    /// Replaces the STM preview palette everywhere: the persisted default,
+    /// thumbnails, and the current image when it is an STM channel.
+    func setSTMPreviewPalette(_ palette: PaletteName) {
+        stmPreviewPalette = palette
+        guard !selectedChannel.isEmpty,
+              classifyChannel(selectedChannel) == .stm else { return }
+        selectedPalette = palette
+        if mode == .single {
+            refreshSelectedImage(resetScale: false)
+        } else {
+            invalidateActiveRender(clearFrame: false)
+        }
+    }
+
     func applyDefaultsFromSelection() {
         guard let file = selectedFile else { return }
         selectedChannel = file.defaultChannel ?? file.channels.first?.name ?? ""
         let channel = file.channels.first { $0.name == selectedChannel } ?? file.channels.first
         selectedDirection = channel?.directions.first ?? .fwd
-        selectedPalette = defaultPalette(for: selectedChannel)
+        selectedPalette = previewPalette(for: selectedChannel)
         selectedProcessing = defaultProcessing(for: selectedChannel)
         invertPalette = false
         scalePreset = .full
@@ -3516,7 +3548,7 @@ final class AppModel: ObservableObject {
         if !channel.directions.contains(selectedDirection) {
             selectedDirection = channel.directions.first ?? .fwd
         }
-        selectedPalette = defaultPalette(for: selectedChannel)
+        selectedPalette = previewPalette(for: selectedChannel)
         selectedProcessing = defaultProcessing(for: selectedChannel)
         if mode == .single {
             refreshSelectedImage(resetScale: true)
@@ -3585,7 +3617,7 @@ final class AppModel: ObservableObject {
         let channelInfo = file.channels.first(where: { $0.name == channel }) ?? file.channels.first(where: { $0.name == defaultChannel })
         let direction = usingSelection ? selectedDirection : (channelInfo?.directions.first ?? .fwd)
         let processing = usingSelection ? selectedProcessing : defaultProcessing(for: channel)
-        let palette = usingSelection ? selectedPalette : defaultPalette(for: channel)
+        let palette = usingSelection ? selectedPalette : previewPalette(for: channel)
         let invert = usingSelection ? invertPalette : false
         let key = "\(file.path.path)|thumb|\(channel)|\(direction.rawValue)|\(processing.rawValue)|\(palette.rawValue)|\(invert)"
         if let cached = thumbnailCache.object(forKey: key as NSString) {
@@ -4532,6 +4564,7 @@ final class AppModel: ObservableObject {
         static let inspectorWidth = "native.inspectorWidth"
         static let sidebarVisible = "native.sidebarVisible"
         static let inspectorVisible = "native.inspectorVisible"
+        static let stmPreviewPalette = "native.stmPreviewPalette"
         static let lastFolder = "native.lastFolder"
         static let histogramBins = "native.histogramBins"
         static let gridDensity = "native.gridDensity"
@@ -4607,6 +4640,12 @@ final class AppModel: ObservableObject {
     private static func loadBool(_ key: String, fallback: Bool) -> Bool {
         guard UserDefaults.standard.object(forKey: key) != nil else { return fallback }
         return UserDefaults.standard.bool(forKey: key)
+    }
+
+    private static func loadPalette(_ key: String, fallback: PaletteName) -> PaletteName {
+        guard let raw = UserDefaults.standard.string(forKey: key),
+              let palette = PaletteName(rawValue: raw) else { return fallback }
+        return palette
     }
 
     private static func loadInt(_ key: String, fallback: Int, range: ClosedRange<Int>) -> Int {
