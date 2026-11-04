@@ -42,7 +42,10 @@ struct ContentView: View {
                 onVisibilityChanged: { sidebar, inspector in
                     model.updatePaneVisibility(sidebar: sidebar, inspector: inspector)
                 },
-                onWidthsChanged: model.saveLayoutWidths
+                onWidthsChanged: model.saveLayoutWidths,
+                onLayoutAnimationChanged: { animating in
+                    model.setPaneLayoutAnimating(animating)
+                }
             ) {
                 SidebarView(model: model, filenameSearchFocus: $isFilenameSearchFocused)
             } content: {
@@ -2671,6 +2674,10 @@ struct GridBrowserView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
+        // Build the grid model once per data change, not once per layout pass.
+        // GeometryReader re-runs its closure on every animation frame, and the
+        // display-item projection is O(files + spectra).
+        let displayItems = model.visibleDisplayItems
         GeometryReader { geometry in
             let metrics = AdaptiveGridMetrics(
                 containerWidth: Double(geometry.size.width),
@@ -2686,7 +2693,7 @@ struct GridBrowserView: View {
                             columns: columns(for: metrics),
                             spacing: 16
                         ) {
-                            ForEach(model.visibleDisplayItems) { item in
+                            ForEach(displayItems) { item in
                                 switch item {
                                 case .sxm(let file):
                                     ThumbnailCard(
@@ -2819,11 +2826,13 @@ struct ThumbnailCard: View {
                 RoundedRectangle(cornerRadius: 5)
                     .fill(AppTheme.imageWell(for: colorScheme))
                 if let image {
-                    Image(nsImage: image)
-                        .resizable()
-                        .interpolation(.high)
-                        .scaledToFit()
-                        .padding(6)
+                    LayerImageView(
+                        image: image,
+                        scaling: .aspectFit,
+                        filter: .linear
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(6)
                     SpectroscopyMarkerLayer(model: model, file: file)
                         .padding(6)
                 } else {
@@ -2979,10 +2988,13 @@ struct SpectroscopyMarkerLayer: View {
     @ObservedObject var model: AppModel
     let file: SXMMetadata
     var isInteractive = false
+    /// Explicit image rect in the layer's coordinate space. When nil the
+    /// image is aspect-fit inside the available space (grid thumbnails).
+    var rectOverride: CGRect?
 
     var body: some View {
         GeometryReader { proxy in
-            let rect = imageRect(in: proxy.size)
+            let rect = rectOverride ?? imageRect(in: proxy.size)
             ForEach(model.spectraForMarkers(on: file)) { spectrum in
                 let visualStyle = spectrumVisualStyle(
                     for: spectrum
@@ -3617,34 +3629,41 @@ private struct SingleImageCanvas: View {
             visibleImageRect: visibleImageRect
         )
 
-        ZStack(alignment: .topLeading) {
-            ZStack {
-                Image(nsImage: frame.image)
-                    .resizable()
-                    .interpolation(.none)
-                    .frame(
-                        width: scaledImageSize.width,
-                        height: scaledImageSize.height
-                    )
+        let imageRect = CGRect(
+            x: displayedTransform.translation.x,
+            y: displayedTransform.translation.y,
+            width: scaledImageSize.width,
+            height: scaledImageSize.height
+        )
 
-                SpectroscopyMarkerLayer(
-                    model: model,
-                    file: file,
-                    isInteractive: true
-                )
-                .frame(
-                    width: scaledImageSize.width,
-                    height: scaledImageSize.height
-                )
-            }
+        ZStack(alignment: .topLeading) {
+            LayerImageView(
+                image: frame.image,
+                scaling: .transform(
+                    scale: CGFloat(displayedTransform.scale),
+                    translation: CGPoint(
+                        x: displayedTransform.translation.x,
+                        y: displayedTransform.translation.y
+                    )
+                ),
+                filter: .nearest
+            )
             .frame(
-                width: scaledImageSize.width,
-                height: scaledImageSize.height
+                width: viewportSize.width,
+                height: viewportSize.height
             )
-            .offset(
-                x: displayedTransform.translation.x,
-                y: displayedTransform.translation.y
+
+            SpectroscopyMarkerLayer(
+                model: model,
+                file: file,
+                isInteractive: true,
+                rectOverride: imageRect
             )
+            .frame(
+                width: viewportSize.width,
+                height: viewportSize.height
+            )
+            .zIndex(1)
 
             if let scaleBar {
                 let overlayWidth =
@@ -3660,6 +3679,7 @@ private struct SingleImageCanvas: View {
                             - ScreenScaleBar.edgeInset
                             - ScreenScaleBar.height / 2
                     )
+                    .zIndex(2)
             }
         }
         .frame(

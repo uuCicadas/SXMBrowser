@@ -220,6 +220,15 @@ final class AppModel: ObservableObject {
     @Published private(set) var actualInspectorVisible = true
     @Published private(set) var sidebarVisibilityRequestID: UUID?
     @Published private(set) var inspectorVisibilityRequestID: UUID?
+    /// True while the native split view animates a pane collapse or expansion.
+    /// Geometry-derived state is deferred so SwiftUI does not rebuild the whole
+    /// window on every animation frame.
+    @Published private(set) var isPaneLayoutAnimating = false
+    private var pendingViewerGeometry: (
+        imageSize: CGSize,
+        viewportSize: CGSize
+    )?
+    private var pendingGridNavigationColumnCount: Int?
 
     @Published private(set) var datasetLoadState: DatasetLoadState =
         .idle
@@ -724,6 +733,25 @@ final class AppModel: ObservableObject {
         if actualInspectorVisible != inspector { actualInspectorVisible = inspector }
     }
 
+    /// Called by the split view around its collapse/expand animation. Deferring
+    /// viewport-derived work keeps the animation off the SwiftUI rebuild path.
+    func setPaneLayoutAnimating(_ animating: Bool) {
+        guard isPaneLayoutAnimating != animating else { return }
+        isPaneLayoutAnimating = animating
+        guard !animating else { return }
+        if let pending = pendingViewerGeometry {
+            pendingViewerGeometry = nil
+            reconcileViewerGeometry(
+                imageSize: pending.imageSize,
+                viewportSize: pending.viewportSize
+            )
+        }
+        if let columns = pendingGridNavigationColumnCount {
+            pendingGridNavigationColumnCount = nil
+            setGridNavigationColumnCount(columns)
+        }
+    }
+
     func toggleSidebar() {
         isSidebarVisible = !actualSidebarVisible
         sidebarVisibilityRequestID = UUID()
@@ -760,6 +788,10 @@ final class AppModel: ObservableObject {
 
     func setGridNavigationColumnCount(_ value: Int) {
         let normalized = max(1, value)
+        if isPaneLayoutAnimating {
+            pendingGridNavigationColumnCount = normalized
+            return
+        }
         guard gridNavigationColumnCount != normalized else {
             return
         }
@@ -2953,6 +2985,10 @@ final class AppModel: ObservableObject {
         imageSize: CGSize,
         viewportSize: CGSize
     ) {
+        if isPaneLayoutAnimating {
+            pendingViewerGeometry = (imageSize, viewportSize)
+            return
+        }
         var updated = viewerTransform
         updated.reconcile(
             imageSize: ViewerSize(

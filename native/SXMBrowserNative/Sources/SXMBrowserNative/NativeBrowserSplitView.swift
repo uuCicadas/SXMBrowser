@@ -2,6 +2,12 @@ import AppKit
 import SXMBrowserAppCore
 import SwiftUI
 
+/// Shared timing for native pane collapse/expand. A slightly longer,
+/// decelerating curve reads smoother than the previous 0.20s ease-in-ease-out.
+private enum PaneAnimation {
+    static let duration: TimeInterval = 0.26
+}
+
 struct NativeBrowserSplitView<Sidebar: View, Content: View, Inspector: View>: NSViewControllerRepresentable {
     @Binding var sidebarVisible: Bool
     @Binding var inspectorVisible: Bool
@@ -11,6 +17,7 @@ struct NativeBrowserSplitView<Sidebar: View, Content: View, Inspector: View>: NS
     let inspectorVisibilityRequestID: UUID?
     let onVisibilityChanged: (Bool, Bool) -> Void
     let onWidthsChanged: () -> Void
+    let onLayoutAnimationChanged: (Bool) -> Void
     @ViewBuilder var sidebar: () -> Sidebar
     @ViewBuilder var content: () -> Content
     @ViewBuilder var inspector: () -> Inspector
@@ -39,7 +46,8 @@ struct NativeBrowserSplitView<Sidebar: View, Content: View, Inspector: View>: NS
                 sidebarWidth = left
                 inspectorWidth = right
                 onWidthsChanged()
-            }
+            },
+            onLayoutAnimationChanged: onLayoutAnimationChanged
         )
     }
 }
@@ -73,6 +81,8 @@ final class NativeBrowserSplitController: NSSplitViewController {
     private var onUserSidebarChange: ((Bool) -> Void)?
     private var onUserInspectorChange: ((Bool) -> Void)?
     private var onWidthsChanged: ((CGFloat, CGFloat) -> Void)?
+    private var onLayoutAnimationChanged: ((Bool) -> Void)?
+    private var pendingPaneViews: (sidebar: AnyView, content: AnyView, inspector: AnyView)?
 
     override func loadView() {
         let nativeSplit = BrowserDividerSplitView()
@@ -128,12 +138,18 @@ final class NativeBrowserSplitController: NSSplitViewController {
         onVisibilityChanged: @escaping (Bool, Bool) -> Void,
         onUserSidebarChange: @escaping (Bool) -> Void,
         onUserInspectorChange: @escaping (Bool) -> Void,
-        onWidthsChanged: @escaping (CGFloat, CGFloat) -> Void
+        onWidthsChanged: @escaping (CGFloat, CGFloat) -> Void,
+        onLayoutAnimationChanged: @escaping (Bool) -> Void
     ) {
         _ = view
-        sidebarHost.rootView = sidebar
-        contentHost.rootView = content
-        inspectorHost.rootView = inspector
+        let views = (sidebar: sidebar, content: content, inspector: inspector)
+        if layoutAnimationID == nil {
+            install(views)
+        } else {
+            // Replacing the hosting roots mid-animation forces a full SwiftUI
+            // rebuild on the animation path; install them once it settles.
+            pendingPaneViews = views
+        }
         let hasVisibilityRequest = lastLayout != nil && (
             (sidebarRequest != nil && sidebarRequest != self.sidebarRequest)
                 || (inspectorRequest != nil && inspectorRequest != self.inspectorRequest)
@@ -154,6 +170,7 @@ final class NativeBrowserSplitController: NSSplitViewController {
         self.onUserSidebarChange = onUserSidebarChange
         self.onUserInspectorChange = onUserInspectorChange
         self.onWidthsChanged = onWidthsChanged
+        self.onLayoutAnimationChanged = onLayoutAnimationChanged
         applyLayout(animated: hasVisibilityRequest)
     }
 
@@ -194,17 +211,21 @@ final class NativeBrowserSplitController: NSSplitViewController {
             layoutAnimationID = animationID
             animatedLayout = layout
             animationContainerWidth = splitView.bounds.width
+            reportLayoutAnimation(true)
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.20
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                context.duration = PaneAnimation.duration
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                context.allowsImplicitAnimation = true
                 setPaneVisibility(layout, animated: true)
             } completionHandler: { [weak self] in
                 DispatchQueue.main.async {
                     guard let self, self.layoutAnimationID == animationID else { return }
                     self.layoutAnimationID = nil
                     self.animatedLayout = nil
+                    self.installPendingPaneViews()
                     self.lastLayout = nil
                     self.applyLayout()
+                    self.reportLayoutAnimation(false)
                 }
             }
             // Commands should toggle the destination state even while the pane is moving.
@@ -216,17 +237,21 @@ final class NativeBrowserSplitController: NSSplitViewController {
             // A repeated command or a resize takes precedence over an in-flight animation.
             layoutAnimationID = nil
             animatedLayout = nil
+            installPendingPaneViews()
+            reportLayoutAnimation(false)
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0
-                setPaneVisibility(layout, animated: true)
+                setPaneVisibility(layout, animated: false)
             }
         }
         setPaneVisibility(layout, animated: false)
         splitView.layoutSubtreeIfNeeded()
-        if layout.showsSidebar {
+        if layout.showsSidebar,
+           abs(sidebarHost.view.frame.width - CGFloat(layout.sidebarWidth)) > 0.5 {
             splitView.setPosition(CGFloat(layout.sidebarWidth), ofDividerAt: 0)
         }
-        if layout.showsInspector {
+        if layout.showsInspector,
+           abs(inspectorHost.view.frame.width - CGFloat(layout.inspectorWidth)) > 0.5 {
             splitView.setPosition(
                 splitView.bounds.width - CGFloat(layout.inspectorWidth),
                 ofDividerAt: 1
@@ -247,9 +272,32 @@ final class NativeBrowserSplitController: NSSplitViewController {
 
     private func finishLayoutAnimation() {
         guard layoutAnimationID != nil else { return }
+        layoutAnimationID = nil
         animatedLayout = nil
+        installPendingPaneViews()
+        reportLayoutAnimation(false)
         lastLayout = nil
         applyLayout()
+    }
+
+    private func install(
+        _ views: (sidebar: AnyView, content: AnyView, inspector: AnyView)
+    ) {
+        sidebarHost.rootView = views.sidebar
+        contentHost.rootView = views.content
+        inspectorHost.rootView = views.inspector
+    }
+
+    private func installPendingPaneViews() {
+        guard let views = pendingPaneViews else { return }
+        pendingPaneViews = nil
+        install(views)
+    }
+
+    private func reportLayoutAnimation(_ animating: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            self?.onLayoutAnimationChanged?(animating)
+        }
     }
 
     private func finishDividerDrag() {
