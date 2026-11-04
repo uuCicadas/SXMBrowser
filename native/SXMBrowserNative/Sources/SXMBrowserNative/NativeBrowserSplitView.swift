@@ -17,7 +17,7 @@ struct NativeBrowserSplitView<Sidebar: View, Content: View, Inspector: View>: NS
     let inspectorVisibilityRequestID: UUID?
     let onVisibilityChanged: (Bool, Bool) -> Void
     let onWidthsChanged: () -> Void
-    let onLayoutAnimationChanged: (Bool) -> Void
+    let onLayoutInteractionChanged: (Bool) -> Void
     @ViewBuilder var sidebar: () -> Sidebar
     @ViewBuilder var content: () -> Content
     @ViewBuilder var inspector: () -> Inspector
@@ -47,7 +47,7 @@ struct NativeBrowserSplitView<Sidebar: View, Content: View, Inspector: View>: NS
                 inspectorWidth = right
                 onWidthsChanged()
             },
-            onLayoutAnimationChanged: onLayoutAnimationChanged
+            onLayoutInteractionChanged: onLayoutInteractionChanged
         )
     }
 }
@@ -81,7 +81,7 @@ final class NativeBrowserSplitController: NSSplitViewController {
     private var onUserSidebarChange: ((Bool) -> Void)?
     private var onUserInspectorChange: ((Bool) -> Void)?
     private var onWidthsChanged: ((CGFloat, CGFloat) -> Void)?
-    private var onLayoutAnimationChanged: ((Bool) -> Void)?
+    private var onLayoutInteractionChanged: ((Bool) -> Void)?
     private var pendingPaneViews: (sidebar: AnyView, content: AnyView, inspector: AnyView)?
 
     override func loadView() {
@@ -94,6 +94,7 @@ final class NativeBrowserSplitController: NSSplitViewController {
             self.dragStartVisibility = (!self.sidebarItem.isCollapsed, !self.inspectorItem.isCollapsed)
             self.draggedDividerIndex = dividerIndex
             self.dragStartWidths = (self.sidebarHost.view.frame.width, self.inspectorHost.view.frame.width)
+            self.reportLayoutInteraction(true)
         }
         nativeSplit.onDragEnd = { [weak self] in self?.finishDividerDrag() }
         splitView = nativeSplit
@@ -139,7 +140,7 @@ final class NativeBrowserSplitController: NSSplitViewController {
         onUserSidebarChange: @escaping (Bool) -> Void,
         onUserInspectorChange: @escaping (Bool) -> Void,
         onWidthsChanged: @escaping (CGFloat, CGFloat) -> Void,
-        onLayoutAnimationChanged: @escaping (Bool) -> Void
+        onLayoutInteractionChanged: @escaping (Bool) -> Void
     ) {
         _ = view
         let views = (sidebar: sidebar, content: content, inspector: inspector)
@@ -170,7 +171,7 @@ final class NativeBrowserSplitController: NSSplitViewController {
         self.onUserSidebarChange = onUserSidebarChange
         self.onUserInspectorChange = onUserInspectorChange
         self.onWidthsChanged = onWidthsChanged
-        self.onLayoutAnimationChanged = onLayoutAnimationChanged
+        self.onLayoutInteractionChanged = onLayoutInteractionChanged
         applyLayout(animated: hasVisibilityRequest)
     }
 
@@ -211,7 +212,7 @@ final class NativeBrowserSplitController: NSSplitViewController {
             layoutAnimationID = animationID
             animatedLayout = layout
             animationContainerWidth = splitView.bounds.width
-            reportLayoutAnimation(true)
+            reportLayoutInteraction(true)
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = PaneAnimation.duration
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -225,7 +226,7 @@ final class NativeBrowserSplitController: NSSplitViewController {
                     self.installPendingPaneViews()
                     self.lastLayout = nil
                     self.applyLayout()
-                    self.reportLayoutAnimation(false)
+                    self.reportLayoutInteraction(false)
                 }
             }
             // Commands should toggle the destination state even while the pane is moving.
@@ -238,7 +239,7 @@ final class NativeBrowserSplitController: NSSplitViewController {
             layoutAnimationID = nil
             animatedLayout = nil
             installPendingPaneViews()
-            reportLayoutAnimation(false)
+            reportLayoutInteraction(false)
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0
                 setPaneVisibility(layout, animated: false)
@@ -275,7 +276,7 @@ final class NativeBrowserSplitController: NSSplitViewController {
         layoutAnimationID = nil
         animatedLayout = nil
         installPendingPaneViews()
-        reportLayoutAnimation(false)
+        reportLayoutInteraction(false)
         lastLayout = nil
         applyLayout()
     }
@@ -294,9 +295,9 @@ final class NativeBrowserSplitController: NSSplitViewController {
         install(views)
     }
 
-    private func reportLayoutAnimation(_ animating: Bool) {
+    private func reportLayoutInteraction(_ animating: Bool) {
         DispatchQueue.main.async { [weak self] in
-            self?.onLayoutAnimationChanged?(animating)
+            self?.onLayoutInteractionChanged?(animating)
         }
     }
 
@@ -340,6 +341,7 @@ final class NativeBrowserSplitController: NSSplitViewController {
         lastLayout = nil
         reportVisibility(left, right)
         applyLayout()
+        reportLayoutInteraction(false)
     }
 
     private func reportVisibility(_ left: Bool, _ right: Bool) {

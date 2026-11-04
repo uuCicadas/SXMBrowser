@@ -220,10 +220,16 @@ final class AppModel: ObservableObject {
     @Published private(set) var actualInspectorVisible = true
     @Published private(set) var sidebarVisibilityRequestID: UUID?
     @Published private(set) var inspectorVisibilityRequestID: UUID?
-    /// True while the native split view animates a pane collapse or expansion.
-    /// Geometry-derived state is deferred so SwiftUI does not rebuild the whole
-    /// window on every animation frame.
-    @Published private(set) var isPaneLayoutAnimating = false
+    /// Interactions that continuously change the image viewport defer
+    /// geometry-derived state so SwiftUI does not rebuild the whole window on
+    /// every frame. `splitLayoutInteracting` covers native pane animation and
+    /// divider dragging; `viewportResizing` covers the spectroscopy drawer and
+    /// live window resize.
+    private var splitLayoutInteracting = false
+    private var viewportResizing = false
+    private var defersViewportGeometry: Bool {
+        splitLayoutInteracting || viewportResizing
+    }
     private var pendingViewerGeometry: (
         imageSize: CGSize,
         viewportSize: CGSize
@@ -733,12 +739,23 @@ final class AppModel: ObservableObject {
         if actualInspectorVisible != inspector { actualInspectorVisible = inspector }
     }
 
-    /// Called by the split view around its collapse/expand animation. Deferring
-    /// viewport-derived work keeps the animation off the SwiftUI rebuild path.
-    func setPaneLayoutAnimating(_ animating: Bool) {
-        guard isPaneLayoutAnimating != animating else { return }
-        isPaneLayoutAnimating = animating
-        guard !animating else { return }
+    /// Called by the split view while panes animate or a divider is dragged.
+    func setSplitLayoutInteracting(_ interacting: Bool) {
+        guard splitLayoutInteracting != interacting else { return }
+        splitLayoutInteracting = interacting
+        flushDeferredViewportGeometry()
+    }
+
+    /// Called while the spectroscopy drawer is dragged or the window is
+    /// live-resizing, both of which resize the image viewport continuously.
+    func setViewportResizing(_ resizing: Bool) {
+        guard viewportResizing != resizing else { return }
+        viewportResizing = resizing
+        flushDeferredViewportGeometry()
+    }
+
+    private func flushDeferredViewportGeometry() {
+        guard !defersViewportGeometry else { return }
         if let pending = pendingViewerGeometry {
             pendingViewerGeometry = nil
             reconcileViewerGeometry(
@@ -788,7 +805,7 @@ final class AppModel: ObservableObject {
 
     func setGridNavigationColumnCount(_ value: Int) {
         let normalized = max(1, value)
-        if isPaneLayoutAnimating {
+        if defersViewportGeometry {
             pendingGridNavigationColumnCount = normalized
             return
         }
@@ -2985,7 +3002,7 @@ final class AppModel: ObservableObject {
         imageSize: CGSize,
         viewportSize: CGSize
     ) {
-        if isPaneLayoutAnimating {
+        if defersViewportGeometry {
             pendingViewerGeometry = (imageSize, viewportSize)
             return
         }

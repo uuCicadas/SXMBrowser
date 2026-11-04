@@ -9,6 +9,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## 2.3.0 - 2026-08-26
 
+- Build 86 (2026-11-04): Keep spectroscopy-drawer, divider, and window resizing smooth by deferring viewport geometry updates during continuous layout interactions, and redraw spectrum curves from stored column arrays instead of allocating point arrays on every frame.
 - Build 85 (2026-11-04): Smooth pane show/hide and image zoom: defer viewport-derived SwiftUI updates while panes animate, build grid items once per data change instead of per layout pass, and composite the single-image canvas and thumbnails with layer-backed views.
 - Build 84 (2026-10-26): Move the Single viewer scale bar to the lower-right image corner and remove the mouse-following probe reticle and continuous hover sampling.
 - Build 83 (2026-10-26): Remove the Single viewer's upper-right data probe card and restyle its lower-left scale bar as centered white text above a solid white line, without a panel or end caps; retain zoom-aware physical scale lengths.

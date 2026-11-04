@@ -321,6 +321,26 @@ public struct SpectroscopyGroup: Identifiable, Hashable, Sendable {
         )
     }
 
+    /// Returns the stored column arrays without rebuilding a point array.
+    /// Plot redraws use this to avoid allocating and copying every sample on
+    /// each layout pass.
+    public func columnSeries(
+        for spectrum: SpectroscopyFile,
+        xColumn: String,
+        yColumn: String
+    ) -> (x: [Double], y: [Double])? {
+        guard spectra.contains(where: { $0.id == spectrum.id }),
+              spectrum.kind == kind,
+              spectrum.curve.columnSchema == columnSchema,
+              let canonicalX = canonicalColumn(matching: xColumn),
+              let canonicalY = canonicalColumn(matching: yColumn),
+              let xValues = spectrum.curve.valuesByColumn[canonicalX],
+              let yValues = spectrum.curve.valuesByColumn[canonicalY] else {
+            return nil
+        }
+        return (xValues, yValues)
+    }
+
     public static func == (lhs: SpectroscopyGroup, rhs: SpectroscopyGroup) -> Bool {
         lhs.renderID == rhs.renderID
     }

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SXMBrowserAppCore
 import SXMBrowserCore
 import SwiftUI
@@ -43,8 +44,8 @@ struct ContentView: View {
                     model.updatePaneVisibility(sidebar: sidebar, inspector: inspector)
                 },
                 onWidthsChanged: model.saveLayoutWidths,
-                onLayoutAnimationChanged: { animating in
-                    model.setPaneLayoutAnimating(animating)
+                onLayoutInteractionChanged: { interacting in
+                    model.setSplitLayoutInteracting(interacting)
                 }
             ) {
                 SidebarView(model: model, filenameSearchFocus: $isFilenameSearchFocused)
@@ -101,6 +102,20 @@ struct ContentView: View {
             MetadataImportPreviewSheet(model: model)
         }
         .onAppear { model.openStartupFolder() }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: NSWindow.willStartLiveResizeNotification
+            )
+        ) { _ in
+            model.setViewportResizing(true)
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: NSWindow.didEndLiveResizeNotification
+            )
+        ) { _ in
+            model.setViewportResizing(false)
+        }
         .onChange(
             of: model.filenameSearchFocusRequestID
         ) { _, requestID in
@@ -3263,89 +3278,118 @@ struct SpectroscopyPlotView: View {
         }
     }
 
-    private func drawCurves(context: inout GraphicsContext, plot: CGRect, ranges: (xMin: Double, xMax: Double, yMin: Double, yMax: Double)) {
-        let orderedSpectra = spectra.filter {
-            $0.id != focusedSpectrumID
-        } + spectra.filter {
-            $0.id == focusedSpectrumID
-        }
-        for spectrum in orderedSpectra {
-            guard let points = group.points(
-                for: spectrum,
-                xColumn: xColumn,
-                yColumn: yColumn
-            ) else {
-                continue
-            }
-            var path = Path()
-            var didMove = false
-            for pointValue in points where pointValue.x.isFinite && pointValue.y.isFinite {
-                let xValue = pointValue.x
-                let yValue = pointValue.y
-                let x = plot.minX + CGFloat((xValue - ranges.xMin) / max(1e-30, ranges.xMax - ranges.xMin)) * plot.width
-                let y = plot.maxY - CGFloat((yValue - ranges.yMin) / max(1e-30, ranges.yMax - ranges.yMin)) * plot.height
-                let point = CGPoint(x: x, y: y)
-                if didMove {
-                    path.addLine(to: point)
-                } else {
-                    path.move(to: point)
-                    didMove = true
-                }
-            }
-            let isFocused = spectrum.id == focusedSpectrumID
-            let visualStyle = spectrumVisualStyle(
-                for: spectrum
+    private func drawCurves(
+        context: inout GraphicsContext,
+        plot: CGRect,
+        ranges: (xMin: Double, xMax: Double, yMin: Double, yMax: Double)
+    ) {
+        for spectrum in spectra where spectrum.id != focusedSpectrumID {
+            drawCurve(
+                spectrum,
+                context: &context,
+                plot: plot,
+                ranges: ranges
             )
-            let underlayWidth: CGFloat
-            let colorWidth: CGFloat
-            if isFocused {
-                underlayWidth =
-                    colorSchemeContrast == .increased
-                    ? 5.2
-                    : 4.6
-                colorWidth =
-                    colorSchemeContrast == .increased
-                    ? 3.2
-                    : 2.8
+        }
+        if let focused = spectra.first(where: {
+            $0.id == focusedSpectrumID
+        }) {
+            drawCurve(
+                focused,
+                context: &context,
+                plot: plot,
+                ranges: ranges
+            )
+        }
+    }
+
+    private func drawCurve(
+        _ spectrum: SpectroscopyFile,
+        context: inout GraphicsContext,
+        plot: CGRect,
+        ranges: (xMin: Double, xMax: Double, yMin: Double, yMax: Double)
+    ) {
+        guard let series = group.columnSeries(
+            for: spectrum,
+            xColumn: xColumn,
+            yColumn: yColumn
+        ) else {
+            return
+        }
+        let pointCount = min(series.x.count, series.y.count)
+        let xSpan = max(1e-30, ranges.xMax - ranges.xMin)
+        let ySpan = max(1e-30, ranges.yMax - ranges.yMin)
+        var path = Path()
+        var didMove = false
+        for index in 0..<pointCount {
+            let xValue = series.x[index]
+            let yValue = series.y[index]
+            guard xValue.isFinite, yValue.isFinite else { continue }
+            let x = plot.minX
+                + CGFloat((xValue - ranges.xMin) / xSpan) * plot.width
+            let y = plot.maxY
+                - CGFloat((yValue - ranges.yMin) / ySpan) * plot.height
+            let point = CGPoint(x: x, y: y)
+            if didMove {
+                path.addLine(to: point)
             } else {
-                underlayWidth =
-                    colorSchemeContrast == .increased
-                    ? 3.4
-                    : 2.8
-                colorWidth =
-                    colorSchemeContrast == .increased
-                    ? 2
-                    : 1.7
+                path.move(to: point)
+                didMove = true
             }
-            if isFocused {
-                context.stroke(
-                    path,
-                    with: .color(.white.opacity(0.92)),
-                    style: spectrumStrokeStyle(
-                        visualStyle.pattern,
-                        lineWidth: underlayWidth + 2,
-                        lineCap: .butt
-                    )
-                )
-            }
+        }
+        let isFocused = spectrum.id == focusedSpectrumID
+        let visualStyle = spectrumVisualStyle(
+            for: spectrum
+        )
+        let underlayWidth: CGFloat
+        let colorWidth: CGFloat
+        if isFocused {
+            underlayWidth =
+                colorSchemeContrast == .increased
+                ? 5.2
+                : 4.6
+            colorWidth =
+                colorSchemeContrast == .increased
+                ? 3.2
+                : 2.8
+        } else {
+            underlayWidth =
+                colorSchemeContrast == .increased
+                ? 3.4
+                : 2.8
+            colorWidth =
+                colorSchemeContrast == .increased
+                ? 2
+                : 1.7
+        }
+        if isFocused {
             context.stroke(
                 path,
-                with: .color(.black.opacity(0.72)),
+                with: .color(.white.opacity(0.92)),
                 style: spectrumStrokeStyle(
                     visualStyle.pattern,
-                    lineWidth: underlayWidth,
+                    lineWidth: underlayWidth + 2,
                     lineCap: .butt
                 )
             )
-            context.stroke(
-                path,
-                with: .color(spectrumColor(visualStyle)),
-                style: spectrumStrokeStyle(
-                    visualStyle.pattern,
-                    lineWidth: colorWidth
-                )
-            )
         }
+        context.stroke(
+            path,
+            with: .color(.black.opacity(0.72)),
+            style: spectrumStrokeStyle(
+                visualStyle.pattern,
+                lineWidth: underlayWidth,
+                lineCap: .butt
+            )
+        )
+        context.stroke(
+            path,
+            with: .color(spectrumColor(visualStyle)),
+            style: spectrumStrokeStyle(
+                visualStyle.pattern,
+                lineWidth: colorWidth
+            )
+        )
     }
 
     private var plotAccessibilityValue: String {
@@ -3371,25 +3415,50 @@ struct SpectroscopyPlotView: View {
     }
 
     private func dataRanges() -> (xMin: Double, xMax: Double, yMin: Double, yMax: Double) {
-        let points = spectra.flatMap {
-            group.points(
-                for: $0,
+        var xMin = Double.infinity
+        var xMax = -Double.infinity
+        var yMin = Double.infinity
+        var yMax = -Double.infinity
+        var hasX = false
+        var hasY = false
+        for spectrum in spectra {
+            guard let series = group.columnSeries(
+                for: spectrum,
                 xColumn: xColumn,
                 yColumn: yColumn
-            ) ?? []
+            ) else {
+                continue
+            }
+            let count = min(series.x.count, series.y.count)
+            for index in 0..<count {
+                let x = series.x[index]
+                let y = series.y[index]
+                if x.isFinite {
+                    xMin = Swift.min(xMin, x)
+                    xMax = Swift.max(xMax, x)
+                    hasX = true
+                }
+                if y.isFinite {
+                    yMin = Swift.min(yMin, y)
+                    yMax = Swift.max(yMax, y)
+                    hasY = true
+                }
+            }
         }
-        let xs = points.map { $0.x }.filter(\.isFinite)
-        let ys = points.map { $0.y }.filter(\.isFinite)
-        let xMin = xs.min() ?? 0
-        var xMax = xs.max() ?? 1
-        var yMin = ys.min() ?? 0
-        var yMax = ys.max() ?? 1
-        if xMax <= xMin { xMax = xMin + 1 }
-        if yMax <= yMin { yMax = yMin + 1 }
-        let yPad = (yMax - yMin) * 0.06
-        yMin -= yPad
-        yMax += yPad
-        return (xMin, xMax, yMin, yMax)
+        let resolvedXMin = hasX ? xMin : 0
+        var resolvedXMax = hasX ? xMax : 1
+        var resolvedYMin = hasY ? yMin : 0
+        var resolvedYMax = hasY ? yMax : 1
+        if resolvedXMax <= resolvedXMin {
+            resolvedXMax = resolvedXMin + 1
+        }
+        if resolvedYMax <= resolvedYMin {
+            resolvedYMax = resolvedYMin + 1
+        }
+        let yPad = (resolvedYMax - resolvedYMin) * 0.06
+        resolvedYMin -= yPad
+        resolvedYMax += yPad
+        return (resolvedXMin, resolvedXMax, resolvedYMin, resolvedYMax)
     }
 }
 
@@ -3505,6 +3574,14 @@ struct SingleImageView: View {
         ) { _, height in
             if !isResizingDrawer {
                 liveDrawerHeight = CGFloat(height)
+            }
+        }
+        .onChange(of: isResizingDrawer) { _, resizing in
+            model.setViewportResizing(resizing)
+        }
+        .onDisappear {
+            if isResizingDrawer {
+                model.setViewportResizing(false)
             }
         }
         .transaction { transaction in
