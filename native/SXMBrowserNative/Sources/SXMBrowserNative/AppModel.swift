@@ -138,6 +138,7 @@ final class AppModel: ObservableObject {
     private struct ThumbnailTaskEntry {
         let token: UUID
         let task: Task<UncheckedSendableImage?, Never>
+        var waiterIDs: Set<UUID>
     }
 
     private struct DatasetMetadataPreparation {
@@ -2359,6 +2360,11 @@ final class AppModel: ObservableObject {
     }
 
     func selectAll() {
+        if let textResponder = NSApp.keyWindow?.firstResponder as? NSText {
+            textResponder.selectAll(nil)
+            return
+        }
+        guard !visibleFiles.isEmpty else { return }
         updateSelection { state, visibleIDs in
             state.selectAll(in: visibleIDs)
         }
@@ -2506,9 +2512,9 @@ final class AppModel: ObservableObject {
         containing file: SXMMetadata,
         tagContext: UUID? = nil
     ) {
-        for target in contextFiles(containing: file, tagContext: tagContext) {
-            NSWorkspace.shared.open(target.path)
-        }
+        requestFilenameSearchBlur()
+        select(file, tagContext: tagContext)
+        setMode(.single)
     }
 
     func addTag(
@@ -2821,10 +2827,14 @@ final class AppModel: ObservableObject {
                 try FileManager.default.trashItem(at: file.path, resultingItemURL: nil)
                 trashedIDs.insert(file.id)
                 trashedNames.append(file.filename)
-                removeCachedData(for: file.path)
+                removeCachedData(for: file.path, clearThumbnails: false)
             } catch {
                 failedNames.append(file.filename)
             }
+        }
+        if !trashedIDs.isEmpty {
+            thumbnailCache.removeAllObjects()
+            cancelThumbnailTasks()
         }
 
         guard !trashedIDs.isEmpty else {
@@ -2946,7 +2956,7 @@ final class AppModel: ObservableObject {
     /// Palette used for previews and thumbnails when the user has not made an
     /// explicit per-image selection. AFM always keeps the neutral gray map.
     func previewPalette(for channelName: String) -> PaletteName {
-        classifyChannel(channelName) == .afm ? .gray : stmPreviewPalette
+        classifyChannel(channelName).usesSTMPalette ? stmPreviewPalette : .gray
     }
 
     /// Replaces the STM preview palette everywhere: the persisted default,
@@ -2954,7 +2964,7 @@ final class AppModel: ObservableObject {
     func setSTMPreviewPalette(_ palette: PaletteName) {
         stmPreviewPalette = palette
         guard !selectedChannel.isEmpty,
-              classifyChannel(selectedChannel) == .stm else { return }
+              classifyChannel(selectedChannel).usesSTMPalette else { return }
         selectedPalette = palette
         if mode == .single {
             refreshSelectedImage(resetScale: false)
@@ -3612,6 +3622,7 @@ final class AppModel: ObservableObject {
     }
 
     func thumbnail(for file: SXMMetadata, usingSelection: Bool = false) async -> NSImage? {
+        guard !Task.isCancelled else { return nil }
         let defaultChannel = file.defaultChannel ?? file.channels.first?.name ?? ""
         let channel = usingSelection && !selectedChannel.isEmpty ? selectedChannel : defaultChannel
         let channelInfo = file.channels.first(where: { $0.name == channel }) ?? file.channels.first(where: { $0.name == defaultChannel })
@@ -3619,34 +3630,72 @@ final class AppModel: ObservableObject {
         let processing = usingSelection ? selectedProcessing : defaultProcessing(for: channel)
         let palette = usingSelection ? selectedPalette : previewPalette(for: channel)
         let invert = usingSelection ? invertPalette : false
-        let key = "\(file.path.path)|thumb|\(channel)|\(direction.rawValue)|\(processing.rawValue)|\(palette.rawValue)|\(invert)"
+        let modifiedBits = String(file.modifiedTime.timeIntervalSince1970.bitPattern, radix: 16)
+        let key = "\(file.path.path)|\(modifiedBits)|thumb|\(channel)|\(direction.rawValue)|\(processing.rawValue)|\(palette.rawValue)|\(invert)"
         if let cached = thumbnailCache.object(forKey: key as NSString) {
             return cached
         }
 
-        if let existing = thumbnailTasks[key] {
-            return await existing.task.value?.image
+        let waiterID = UUID()
+        let entry: ThumbnailTaskEntry
+        if var existing = thumbnailTasks[key] {
+            existing.waiterIDs.insert(waiterID)
+            thumbnailTasks[key] = existing
+            entry = existing
+        } else {
+            let token = UUID()
+            let task = Task { @MainActor [weak self] () -> UncheckedSendableImage? in
+                guard let image = await self?.generateThumbnail(
+                    for: file,
+                    cacheKey: key,
+                    channel: channel,
+                    direction: direction,
+                    processing: processing,
+                    palette: palette,
+                    invert: invert
+                ) else { return nil }
+                return UncheckedSendableImage(image)
+            }
+            let created = ThumbnailTaskEntry(token: token, task: task, waiterIDs: [waiterID])
+            thumbnailTasks[key] = created
+            entry = created
         }
 
-        let token = UUID()
-        let task = Task { @MainActor [weak self] () -> UncheckedSendableImage? in
-            guard let image = await self?.generateThumbnail(
-                for: file,
-                cacheKey: key,
-                channel: channel,
-                direction: direction,
-                processing: processing,
-                palette: palette,
-                invert: invert
-            ) else { return nil }
-            return UncheckedSendableImage(image)
+        let image = await withTaskCancellationHandler {
+            await entry.task.value?.image
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelThumbnailWaiter(
+                    waiterID,
+                    forKey: key,
+                    token: entry.token
+                )
+            }
         }
-        thumbnailTasks[key] = ThumbnailTaskEntry(token: token, task: task)
-        let image = await task.value?.image
-        if thumbnailTasks[key]?.token == token {
-            thumbnailTasks.removeValue(forKey: key)
+        if var current = thumbnailTasks[key], current.token == entry.token {
+            current.waiterIDs.remove(waiterID)
+            if current.waiterIDs.isEmpty {
+                thumbnailTasks.removeValue(forKey: key)
+            } else {
+                thumbnailTasks[key] = current
+            }
         }
         return image
+    }
+
+    private func cancelThumbnailWaiter(
+        _ waiterID: UUID,
+        forKey key: String,
+        token: UUID
+    ) {
+        guard var entry = thumbnailTasks[key], entry.token == token else { return }
+        entry.waiterIDs.remove(waiterID)
+        if entry.waiterIDs.isEmpty {
+            thumbnailTasks.removeValue(forKey: key)
+            entry.task.cancel()
+        } else {
+            thumbnailTasks[key] = entry
+        }
     }
 
     func refreshSelectedImage(resetScale: Bool) {
@@ -3934,6 +3983,9 @@ final class AppModel: ObservableObject {
     }
 
     private func filesMatchingSearch(in candidates: [SXMMetadata]) -> [SXMMetadata] {
+        if appliedFilenameSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return candidates
+        }
         let projection = FilenameSearchProjection(
             query: appliedFilenameSearch,
             candidates: candidates.map { file in
@@ -3950,7 +4002,7 @@ final class AppModel: ObservableObject {
         return candidates.filter { matchingIDs.contains($0.id) }
     }
 
-    private func removeCachedData(for url: URL) {
+    private func removeCachedData(for url: URL, clearThumbnails: Bool = true) {
         let path = url.standardizedFileURL.path
         renderCoordinator.removeMatrixEntries(
             forStandardizedPath: path
@@ -3958,8 +4010,10 @@ final class AppModel: ObservableObject {
         if selectedFile?.path.standardizedFileURL.path == path {
             renderCoordinator.discardProcessedData()
         }
-        thumbnailCache.removeAllObjects()
-        cancelThumbnailTasks()
+        if clearThumbnails {
+            thumbnailCache.removeAllObjects()
+            cancelThumbnailTasks()
+        }
     }
 
     private func ensureSelectionIsVisible() {
@@ -4083,18 +4137,50 @@ final class AppModel: ObservableObject {
             session.pathIndex.sxmPath(for: $0.id)
         })
         guard !deletedPaths.isEmpty else { return }
-        performTagMutation(
-            failurePrefix: "Files were deleted, but tag metadata cleanup failed"
-        ) { record in
-            for tag in record.tags {
-                try record.replaceTagMembers(
-                    id: tag.id,
-                    with: tag.sxmPaths.filter {
-                        !deletedPaths.contains($0)
-                    }
+        let updatedAt = Date()
+        performMetadataMutation(
+            unavailableMessage: metadataUnavailableForTagChangesMessage,
+            failurePrefix: "Files were deleted, but tag metadata cleanup failed",
+            mutation: { record in
+                for tag in record.tags {
+                    try record.replaceTagMembers(
+                        id: tag.id,
+                        with: tag.sxmPaths.filter {
+                            !deletedPaths.contains($0)
+                        }
+                    )
+                }
+                let remainingAssociations = record.manualAssociations.filter {
+                    !deletedPaths.contains($0.sxmPath)
+                }
+                if remainingAssociations != record.manualAssociations {
+                    try record.replaceManualAssociations(
+                        with: remainingAssociations,
+                        updatedAt: updatedAt
+                    )
+                }
+                let remainingAxisPreferences = record.spectrumAxisPreferences.filter {
+                    !deletedPaths.contains($0.key.sxmPath)
+                }
+                if remainingAxisPreferences != record.spectrumAxisPreferences {
+                    try record.replaceSpectrumAxisPreferences(
+                        with: remainingAxisPreferences,
+                        updatedAt: updatedAt
+                    )
+                }
+            },
+            onVerified: { [weak self] updatedSession in
+                guard let self else { return }
+                publishUpdatedTagPresentation(
+                    tags: updatedSession.verifiedRecord.tags,
+                    expandingTagID: nil,
+                    activeTagResolution: .firstAvailable,
+                    datasetID: updatedSession.datasetID
                 )
+                restoreManualSpectrumAssociations()
+                rebuildSpectrumGroups()
             }
-        }
+        )
     }
 
     private func performTagMutation(

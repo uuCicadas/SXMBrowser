@@ -79,7 +79,7 @@ check_sample_directory() {
 build_debug() {
     (
         cd "$PROJECT"
-        swift build -c debug --scratch-path "$BUILD_DIR"
+        swift build --disable-sandbox -c debug --scratch-path "$BUILD_DIR"
     )
 }
 

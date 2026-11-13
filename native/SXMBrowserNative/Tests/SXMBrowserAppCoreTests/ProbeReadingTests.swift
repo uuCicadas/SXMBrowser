@@ -183,7 +183,7 @@ func pixelCoordinatesValidateCentersBoundsAndLinearIndices() {
 }
 
 @Test
-func scanTransformMatchesExistingMarkerSemanticsForDownAndUp() {
+func scanTransformMatchesNormalizedImageFrameForDownAndUp() {
     let offset = PhysicalScanCoordinate(x: 10, y: -20)!
     let center = PhysicalScanCoordinate(x: 10, y: -20)!
     let positiveCorner = PhysicalScanCoordinate(
@@ -215,7 +215,11 @@ func scanTransformMatchesExistingMarkerSemanticsForDownAndUp() {
     )
     #expect(
         up.normalizedCoordinate(for: positiveCorner)
-            == NormalizedScanCoordinate(u: 1, v: 1)
+            == NormalizedScanCoordinate(u: 1, v: 0)
+    )
+    #expect(
+        up.physicalCoordinate(for: NormalizedScanCoordinate(u: 1, v: 0)!)
+            == positiveCorner
     )
     #expect(
         ScanVerticalDirection.resolve(
@@ -225,6 +229,11 @@ func scanTransformMatchesExistingMarkerSemanticsForDownAndUp() {
     #expect(
         ScanVerticalDirection.resolve(
             scanDirection: "pickup"
+        ) == .down
+    )
+    #expect(
+        ScanVerticalDirection.resolve(
+            scanDirection: "SCAN UP"
         ) == .up
     )
 }
@@ -246,7 +255,7 @@ func angleOffsetAndNonSquareRangeUseTheMarkerRotationConvention() {
     #expect(
         normalized.map {
             probeClose($0.u, 0.5)
-                && probeClose($0.v, 0.75)
+                && probeClose($0.v, 0.25)
         } == true
     )
     let physical = normalized.flatMap {

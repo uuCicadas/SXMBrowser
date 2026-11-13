@@ -13,8 +13,13 @@ public enum ScanDirection: String, CaseIterable, Codable, Sendable {
 }
 
 public enum ChannelKind: String, Codable, Sendable {
-    case stm
+    case topography
+    case conductanceOrCurrent
     case afm
+
+    public var usesSTMPalette: Bool {
+        self != .afm
+    }
 }
 
 public enum ProcessingMode: String, CaseIterable, Codable, Sendable {
@@ -259,19 +264,31 @@ public struct RenderOptions: Hashable, Sendable {
     }
 }
 
+/// Returns `true` when `:SCAN_DIR:` explicitly specifies an upward scan.
+public func isUpwardScanDirection(_ scanDir: String?) -> Bool {
+    guard let scanDir else { return false }
+    return scanDir
+        .split(whereSeparator: { !$0.isLetter })
+        .contains { $0.lowercased() == "up" }
+}
+
 public func classifyChannel(_ name: String) -> ChannelKind {
     let folded = name.lowercased()
     let afmKeywords = ["frequency shift", "freq", "df", "delta f", "amplitude", "excitation", "pll", "oc_"]
     if afmKeywords.contains(where: { folded.contains($0) }) || name.contains("Δf") {
         return .afm
     }
-    return .stm
+    let tokens = folded.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+    if tokens.contains("z") || folded.contains("topograph") || folded.contains("height") {
+        return .topography
+    }
+    return .conductanceOrCurrent
 }
 
 public func defaultPalette(for channelName: String) -> PaletteName {
-    classifyChannel(channelName) == .afm ? .gray : .duskViolet
+    classifyChannel(channelName).usesSTMPalette ? .duskViolet : .gray
 }
 
 public func defaultProcessing(for channelName: String) -> ProcessingMode {
-    classifyChannel(channelName) == .afm ? .raw : .planeLinear
+    classifyChannel(channelName) == .topography ? .planeLinear : .raw
 }

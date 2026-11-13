@@ -141,6 +141,7 @@ public final class SXMParser: Sendable {
             width: currentMetadata.pixels.width,
             height: currentMetadata.pixels.height,
             specs: specs,
+            scanDir: currentMetadata.scanDir,
             encoding: encoding
         )
         try Task.checkCancellation()
@@ -208,6 +209,7 @@ public final class SXMParser: Sendable {
             layout: layout,
             matrixIndex: matrixIndex,
             direction: key.direction,
+            scanDir: currentMetadata.scanDir,
             encoding: encoding
         )
     }
@@ -289,6 +291,7 @@ public final class SXMParser: Sendable {
         width: Int,
         height: Int,
         specs: [ChannelSpec],
+        scanDir: String?,
         encoding: SXMStorageEncoding
     ) throws -> [MatrixKey: Matrix] {
         try Task.checkCancellation()
@@ -327,6 +330,7 @@ public final class SXMParser: Sendable {
                     width: layout.width,
                     height: layout.height,
                     direction: direction,
+                    scanDir: scanDir,
                     encoding: encoding
                 )
                 try Task.checkCancellation()
@@ -447,6 +451,7 @@ public final class SXMParser: Sendable {
         layout: MatrixLayout,
         matrixIndex: Int,
         direction: ScanDirection,
+        scanDir: String?,
         encoding: SXMStorageEncoding
     ) throws -> Matrix {
         try Task.checkCancellation()
@@ -496,6 +501,7 @@ public final class SXMParser: Sendable {
             width: layout.width,
             height: layout.height,
             direction: direction,
+            scanDir: scanDir,
             encoding: encoding
         )
         return Matrix(
@@ -511,6 +517,7 @@ public final class SXMParser: Sendable {
         width: Int,
         height: Int,
         direction: ScanDirection,
+        scanDir: String?,
         encoding: SXMStorageEncoding
     ) throws -> [Float] {
         var values = [Float](repeating: 0, count: itemCount)
@@ -536,6 +543,13 @@ public final class SXMParser: Sendable {
         }
         if direction == .bwd {
             values = try flipHorizontally(
+                values: values,
+                width: width,
+                height: height
+            )
+        }
+        if isUpwardScanDirection(scanDir) {
+            values = try flipVertically(
                 values: values,
                 width: width,
                 height: height
@@ -762,20 +776,17 @@ private func parseSingleFloat(_ value: String?) -> Double? {
     return value.split(whereSeparator: \.isWhitespace).first.flatMap { Double($0) }
 }
 
+private let sxmRecordedTimeParser = POSIXDateParser(formats: [
+    "dd.MM.yyyy HH:mm:ss",
+    "dd.MM.yy HH:mm:ss",
+    "yyyy-MM-dd HH:mm:ss",
+    "MM/dd/yyyy HH:mm:ss",
+])
+
 private func parseRecordedTime(_ header: [String: String]) -> Date? {
     guard let dateValue = cleanSingleLine(header["REC_DATE"]) else { return nil }
     let timeValue = cleanSingleLine(header["REC_TIME"]) ?? "00:00:00"
-    let raw = "\(dateValue) \(timeValue)"
-    let formats = ["dd.MM.yyyy HH:mm:ss", "dd.MM.yy HH:mm:ss", "yyyy-MM-dd HH:mm:ss", "MM/dd/yyyy HH:mm:ss"]
-    for format in formats {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = format
-        if let date = formatter.date(from: raw) {
-            return date
-        }
-    }
-    return nil
+    return sxmRecordedTimeParser.date(from: "\(dateValue) \(timeValue)")
 }
 
 private func parseZControllerOn(_ value: String) -> Bool? {
@@ -835,6 +846,22 @@ private func flipHorizontally(
             }
             output[y * width + x] = values[y * width + (width - 1 - x)]
         }
+    }
+    return output
+}
+
+private func flipVertically(
+    values: [Float],
+    width: Int,
+    height: Int
+) throws -> [Float] {
+    guard height > 1, width > 0 else { return values }
+    var output = [Float](repeating: 0, count: values.count)
+    for y in 0..<height {
+        try Task.checkCancellation()
+        let srcStart = (height - 1 - y) * width
+        let dstStart = y * width
+        output[dstStart..<(dstStart + width)] = values[srcStart..<(srcStart + width)]
     }
     return output
 }

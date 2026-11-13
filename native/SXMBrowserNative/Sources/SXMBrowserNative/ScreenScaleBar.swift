@@ -20,6 +20,8 @@ struct ScreenScaleBar: View {
                 .frame(height: 4)
         }
         .foregroundStyle(.white)
+        .shadow(color: .black.opacity(0.75), radius: 1.5, x: 0, y: 0.5)
+        .shadow(color: .black.opacity(0.4), radius: 3, x: 0, y: 1)
         .frame(
             width: CGFloat(scaleBar.screenLengthPoints),
             height: Self.height,

@@ -4,6 +4,9 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+## 2.4.1 - 2026-11-13
+
+- Build 92 (2026-11-13): Calibrate scan-up orientation, channel defaults, sRGB rendering, scale input, and concurrency safety for 2.4.1 (flip `:SCAN_DIR: up` rows & unify `ScanCoordinateTransform` Y frame; restrict default `Plane linear fit` to topography channels; explicit `sRGB` across image/thumbnail/PNG export without `NSImage.lockFocus()`; buffered `ScaleField` engineering/SI editing; `Cmd+A` text-field forwarding & in-app context `Open`; empty-search short-circuit, `modifiedTime`-keyed thumbnail invalidation & cancellation-safe `AsyncLimiter`; lock-protected `POSIXDateParser` & 64 MiB `.dat` preflight; batch delete metadata cleanup; linear minification, contrast-shadowed `ScreenScaleBar`, balanced cursor push/pop, and `clean_builds.command`).
 - Build 91 (2026-11-04): Remove the zoom in and zoom out buttons from the toolbar and keep zoom presets in the zoom menu.
 - Build 90 (2026-11-04): Draw the toolbar STM palette chip in sRGB so it keeps the palette colors.
 - Build 89 (2026-11-04): Add a global STM preview palette picker to the toolbar and keep the inspector toggle at the trailing edge.
@@ -17,7 +20,7 @@ All notable local builds of SXM Browser are recorded here.
 - Build 86 (2026-11-04): Keep spectroscopy-drawer, divider, and window resizing smooth by deferring viewport geometry updates during continuous layout interactions, and redraw spectrum curves from stored column arrays instead of allocating point arrays on every frame.
 - Build 85 (2026-11-04): Smooth pane show/hide and image zoom: defer viewport-derived SwiftUI updates while panes animate, build grid items once per data change instead of per layout pass, and composite the single-image canvas and thumbnails with layer-backed views.
 
-## 2.3.0 - 2026-08-26
+## 2.3.0 - 2026-10-26
 
 - Build 84 (2026-10-26): Move the Single viewer scale bar to the lower-right image corner and remove the mouse-following probe reticle and continuous hover sampling.
 - Build 83 (2026-10-26): Remove the Single viewer's upper-right data probe card and restyle its lower-left scale bar as centered white text above a solid white line, without a panel or end caps; retain zoom-aware physical scale lengths.

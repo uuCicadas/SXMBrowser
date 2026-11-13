@@ -2911,9 +2911,11 @@ struct ThumbnailCard: View {
     }
 
     private var thumbnailTaskID: String {
+        let modifiedBits = String(file.modifiedTime.timeIntervalSince1970.bitPattern, radix: 16)
         if isCurrent {
             return [
                 file.id.uuidString,
+                modifiedBits,
                 "selected",
                 model.selectedChannel,
                 model.selectedDirection.rawValue,
@@ -2922,7 +2924,7 @@ struct ThumbnailCard: View {
                 String(model.invertPalette)
             ].joined(separator: "|")
         }
-        return "\(file.id.uuidString)|default|\(model.stmPreviewPalette.rawValue)"
+        return "\(file.id.uuidString)|\(modifiedBits)|default|\(model.stmPreviewPalette.rawValue)"
     }
 
     var body: some View {
@@ -5167,30 +5169,43 @@ struct StatsGrid: View {
 struct ScaleField: View {
     let title: String
     @Binding var value: Double?
-    @State private var text = ""
+    @State private var draftText = ""
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            TextField("", text: Binding(
-                get: {
-                    if text.isEmpty, let value {
-                        return compact(value)
-                    }
-                    return text
-                },
-                set: { newValue in
-                    text = newValue
-                    value = Double(newValue)
+            TextField("", text: $draftText)
+                .focused($isFocused)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.caption, design: .monospaced))
+                .onSubmit {
+                    commitDraft()
                 }
-            ))
-            .textFieldStyle(.roundedBorder)
-            .font(.system(.caption, design: .monospaced))
+        }
+        .onAppear {
+            draftText = value.map(compact) ?? ""
         }
         .onChange(of: value) { _, newValue in
-            text = newValue.map(compact) ?? ""
+            guard !isFocused else { return }
+            draftText = newValue.map(compact) ?? ""
+        }
+        .onChange(of: isFocused) { _, focused in
+            if !focused {
+                commitDraft()
+            }
+        }
+    }
+
+    private func commitDraft() {
+        let trimmed = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let parsed = parseEngineeringDouble(trimmed) {
+            value = parsed
+            draftText = compact(parsed)
+        } else {
+            draftText = value.map(compact) ?? ""
         }
     }
 }
@@ -5537,14 +5552,34 @@ func compact(_ value: Double) -> String {
     return String(format: "%.3e", value)
 }
 
+private struct CursorModifier: ViewModifier {
+    let cursor: NSCursor
+    @State private var isPushed = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { inside in
+                if inside {
+                    if !isPushed {
+                        cursor.push()
+                        isPushed = true
+                    }
+                } else if isPushed {
+                    NSCursor.pop()
+                    isPushed = false
+                }
+            }
+            .onDisappear {
+                if isPushed {
+                    NSCursor.pop()
+                    isPushed = false
+                }
+            }
+    }
+}
+
 private extension View {
     func cursor(_ cursor: NSCursor) -> some View {
-        onHover { inside in
-            if inside {
-                cursor.push()
-            } else {
-                NSCursor.pop()
-            }
-        }
+        modifier(CursorModifier(cursor: cursor))
     }
 }

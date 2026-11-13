@@ -1,4 +1,5 @@
 import Foundation
+import SXMBrowserCore
 
 public struct NormalizedScanCoordinate:
     Equatable,
@@ -38,9 +39,7 @@ public enum ScanVerticalDirection:
     public static func resolve(
         scanDirection: String?
     ) -> ScanVerticalDirection {
-        (scanDirection ?? "").lowercased().contains("up")
-            ? .up
-            : .down
+        isUpwardScanDirection(scanDirection) ? .up : .down
     }
 }
 
@@ -103,13 +102,9 @@ public struct ScanCoordinateTransform:
         let scanX = cosine * dx - sine * dy
         let scanY = sine * dx + cosine * dy
         let u = 0.5 + scanX / rangeX
-        let v: Double
-        switch verticalDirection {
-        case .up:
-            v = 0.5 + scanY / rangeY
-        case .down:
-            v = 0.5 - scanY / rangeY
-        }
+        // SXMParser normalizes both downward and upward scans so row 0 (v = 0)
+        // always sits at physical +scanY.
+        let v = 0.5 - scanY / rangeY
         return NormalizedScanCoordinate(u: u, v: v)
     }
 
@@ -117,13 +112,7 @@ public struct ScanCoordinateTransform:
         for normalized: NormalizedScanCoordinate
     ) -> PhysicalScanCoordinate? {
         let scanX = (normalized.u - 0.5) * rangeX
-        let scanY: Double
-        switch verticalDirection {
-        case .up:
-            scanY = (normalized.v - 0.5) * rangeY
-        case .down:
-            scanY = (0.5 - normalized.v) * rangeY
-        }
+        let scanY = (0.5 - normalized.v) * rangeY
         let dx = cosine * scanX + sine * scanY
         let dy = -sine * scanX + cosine * scanY
         return PhysicalScanCoordinate(

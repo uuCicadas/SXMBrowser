@@ -542,7 +542,7 @@ private func metadata(
                 name: "Z",
                 unit: "m",
                 directions: [.fwd, .bwd],
-                kind: .stm
+                kind: .topography
             ),
         ],
         defaultChannel: "Z"

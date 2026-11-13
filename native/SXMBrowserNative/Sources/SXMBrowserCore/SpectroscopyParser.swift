@@ -2,6 +2,7 @@ import Foundation
 
 public enum SpectroscopyParserError: LocalizedError, Sendable {
     case cannotRead(URL)
+    case fileTooLarge(URL, byteCount: UInt64, maximumByteCount: UInt64)
     case missingData(URL)
     case missingColumns(URL)
     case insufficientValidRows(URL, validRowCount: Int, badLineCount: Int)
@@ -9,6 +10,8 @@ public enum SpectroscopyParserError: LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .cannotRead(let url): "Cannot read spectroscopy file: \(url.lastPathComponent)"
+        case .fileTooLarge(let url, let byteCount, let maximumByteCount):
+            "Spectroscopy file is too large (\(byteCount) bytes; maximum \(maximumByteCount) bytes): \(url.lastPathComponent)"
         case .missingData(let url): "No [DATA] section found: \(url.lastPathComponent)"
         case .missingColumns(let url): "No plottable columns found: \(url.lastPathComponent)"
         case .insufficientValidRows(let url, let validRowCount, let badLineCount):
@@ -27,6 +30,10 @@ public enum SpectroscopyParserError: LocalizedError, Sendable {
 }
 
 public final class SpectroscopyParser: Sendable {
+    public static let maximumFileByteCount: UInt64 = 64 * 1_024 * 1_024
+    private static let headerSniffByteCount = 262_144
+    private static let dataMarkerBytes = Data("[DATA]".utf8)
+
     public init() {}
 
     public func scanFolder(_ folder: URL) throws -> ScanReport<SpectroscopyFile> {
@@ -83,8 +90,48 @@ public final class SpectroscopyParser: Sendable {
         _ url: URL
     ) throws -> (file: SpectroscopyFile, badLineCount: Int) {
         try Task.checkCancellation()
-        guard let data = try? Data(contentsOf: url),
-              let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else {
+        guard let handle = try? FileHandle(forReadingFrom: url) else {
+            throw SpectroscopyParserError.cannotRead(url)
+        }
+        defer { try? handle.close() }
+
+        let byteCount = try handle.seekToEnd()
+        guard byteCount <= Self.maximumFileByteCount else {
+            throw SpectroscopyParserError.fileTooLarge(
+                url,
+                byteCount: byteCount,
+                maximumByteCount: Self.maximumFileByteCount
+            )
+        }
+
+        try handle.seek(toOffset: 0)
+        let prefixLimit = min(Int(byteCount), Self.headerSniffByteCount)
+        let prefix = try readUpTo(handle, count: prefixLimit)
+        try Task.checkCancellation()
+
+        let markerRange = prefix.range(of: Self.dataMarkerBytes)
+        let nulSearchSlice = markerRange.map { prefix[..<$0.lowerBound] } ?? prefix[...]
+        if nulSearchSlice.contains(0x00) {
+            throw SpectroscopyParserError.missingData(url)
+        }
+        if byteCount > UInt64(Self.headerSniffByteCount), markerRange == nil {
+            throw SpectroscopyParserError.missingData(url)
+        }
+
+        var data = prefix
+        let totalBytes = Int(byteCount)
+        if data.count < totalBytes {
+            data.reserveCapacity(totalBytes)
+            let chunkSize = 1_048_576
+            while data.count < totalBytes {
+                try Task.checkCancellation()
+                let chunk = try readUpTo(handle, count: min(chunkSize, totalBytes - data.count))
+                if chunk.isEmpty { break }
+                data.append(chunk)
+            }
+        }
+
+        guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else {
             throw SpectroscopyParserError.cannotRead(url)
         }
         try Task.checkCancellation()
@@ -279,21 +326,25 @@ private func parsePosition(_ header: [String: String]) -> (x: Double, y: Double)
     return (x, y)
 }
 
+private let spectroscopyDateParser = POSIXDateParser(formats: [
+    "dd.MM.yyyy HH:mm:ss",
+    "dd.MM.yy HH:mm:ss",
+    "yyyy-MM-dd HH:mm:ss",
+])
+
 private func parseSpectroscopyDate(_ value: String?) -> Date? {
     guard let value else { return nil }
-    let formats = ["dd.MM.yyyy HH:mm:ss", "dd.MM.yy HH:mm:ss", "yyyy-MM-dd HH:mm:ss"]
-    for format in formats {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = format
-        if let date = formatter.date(from: value.trimmingCharacters(in: .whitespacesAndNewlines)) {
-            return date
-        }
-    }
-    return nil
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    return spectroscopyDateParser.date(from: trimmed)
 }
 
-private func parseEngineeringDouble(_ raw: String) -> Double? {
+private func readUpTo(_ handle: FileHandle, count: Int) throws -> Data {
+    guard count > 0 else { return Data() }
+    return try handle.read(upToCount: count) ?? Data()
+}
+
+public func parseEngineeringDouble(_ raw: String) -> Double? {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty, trimmed.uppercased() != "N/A" else { return nil }
     let normalized = trimmed.replacingOccurrences(of: "E", with: "e")
@@ -305,9 +356,13 @@ private func parseEngineeringDouble(_ raw: String) -> Double? {
         return direct.isFinite ? direct : nil
     }
     for (suffix, multiplier) in multipliers {
-        if normalized.hasSuffix(suffix), let value = Double(normalized.dropLast(suffix.count)) {
-            let scaled = value * multiplier
-            return scaled.isFinite ? scaled : nil
+        if normalized.hasSuffix(suffix) {
+            let numberPart = normalized.dropLast(suffix.count)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let value = Double(numberPart) {
+                let scaled = value * multiplier
+                return scaled.isFinite ? scaled : nil
+            }
         }
     }
     return nil

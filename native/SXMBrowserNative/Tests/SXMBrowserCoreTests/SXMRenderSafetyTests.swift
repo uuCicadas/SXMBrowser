@@ -1,3 +1,6 @@
+import CoreGraphics
+import Foundation
+import ImageIO
 import Testing
 @testable import SXMBrowserCore
 
@@ -102,4 +105,57 @@ func allNaNMatrixHasNoStatisticsOrAutomaticScale() {
 
     #expect(SXMRenderer.histogram(matrix) == nil)
     #expect(SXMRenderer.automaticScale(matrix) == nil)
+}
+
+@Test
+func renderedImagesAndPNGExportUseExplicitSRGBAndBackgroundSafeDownsampling() async throws {
+    let matrix = Matrix(
+        width: 256,
+        height: 128,
+        values: (0..<(256 * 128)).map(Float.init)
+    )
+
+    let fullImage = try SXMRenderer.renderImage(
+        matrix: matrix,
+        options: RenderOptions(
+            channel: "Z",
+            direction: .fwd,
+            processing: .raw,
+            palette: .duskViolet
+        )
+    )
+    let fullCG = try #require(fullImage.cgImage(forProposedRect: nil, context: nil, hints: nil))
+    #expect(fullCG.colorSpace?.name == CGColorSpace.sRGB)
+
+    let thumbDims: (width: Int, height: Int, colorSpaceName: String?) = try await Task.detached {
+        let thumb = try SXMRenderer.renderImage(
+            matrix: matrix,
+            options: RenderOptions(
+                channel: "Z",
+                direction: .fwd,
+                processing: .raw,
+                palette: .duskViolet,
+                outputSize: 64
+            )
+        )
+        let cg = try #require(thumb.cgImage(forProposedRect: nil, context: nil, hints: nil))
+        return (Int(thumb.size.width), Int(thumb.size.height), cg.colorSpace?.name as String?)
+    }.value
+
+    #expect(thumbDims.width == 64)
+    #expect(thumbDims.height == 32)
+    #expect(thumbDims.colorSpaceName == (CGColorSpace.sRGB as String))
+
+    let png = try SXMRenderer.pngData(
+        matrix: matrix,
+        options: RenderOptions(
+            channel: "Z",
+            direction: .fwd,
+            processing: .raw,
+            palette: .duskViolet
+        )
+    )
+    let source = try #require(CGImageSourceCreateWithData(png as CFData, nil))
+    let decodedCG = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+    #expect(decodedCG.colorSpace?.name == CGColorSpace.sRGB)
 }

@@ -15,6 +15,9 @@ public enum SXMRenderError: LocalizedError {
 }
 
 public enum SXMRenderer {
+    fileprivate static let sRGBColorSpace =
+        CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+
     public static func processedMatrix(_ matrix: Matrix, processing: ProcessingMode) -> Matrix {
         try! processedMatrix(
             matrix,
@@ -219,28 +222,15 @@ public enum SXMRenderer {
         options: RenderOptions,
         cancellation: CancellationCheckpoint = .none
     ) throws -> NSImage {
-        let rgba = try colorize(
+        let cgImage = try renderProcessedCGImage(
             matrix: matrix,
-            palette: options.palette,
-            vmin: options.vmin,
-            vmax: options.vmax,
-            invert: options.invert,
+            options: options,
             cancellation: cancellation
         )
-        try cancellation.check()
-        guard let cgImage = makeCGImage(rgba: rgba, width: matrix.width, height: matrix.height) else {
-            throw SXMRenderError.imageCreationFailed
-        }
-        try cancellation.check()
-        let image = NSImage(cgImage: cgImage, size: NSSize(width: matrix.width, height: matrix.height))
-        if let outputSize = options.outputSize {
-            return try resized(
-                image,
-                maxSide: CGFloat(outputSize),
-                cancellation: cancellation
-            )
-        }
-        return image
+        return NSImage(
+            cgImage: cgImage,
+            size: NSSize(width: cgImage.width, height: cgImage.height)
+        )
     }
 
     public static func pngData(
@@ -248,19 +238,74 @@ public enum SXMRenderer {
         options: RenderOptions,
         cancellation: CancellationCheckpoint = .none
     ) throws -> Data {
-        let image = try renderImage(
-            matrix: matrix,
+        let processed = try processedMatrix(
+            matrix,
+            processing: options.processing,
+            cancellation: cancellation
+        )
+        let cgImage = try renderProcessedCGImage(
+            matrix: processed,
             options: options,
             cancellation: cancellation
         )
         try cancellation.check()
-        guard let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let png = rep.representation(using: .png, properties: [:]) else {
+        let rep = NSBitmapImageRep(cgImage: cgImage)
+        guard let png = rep.representation(using: .png, properties: [:]) else {
             throw SXMRenderError.imageCreationFailed
         }
         try cancellation.check()
         return png
+    }
+
+    private static func renderProcessedCGImage(
+        matrix: Matrix,
+        options: RenderOptions,
+        cancellation: CancellationCheckpoint
+    ) throws -> CGImage {
+        var resolvedMin = options.vmin
+        var resolvedMax = options.vmax
+        var targetMatrix = matrix
+
+        if let outputSize = options.outputSize,
+           outputSize > 0,
+           max(matrix.width, matrix.height) > outputSize * 2 {
+            if resolvedMin == nil || resolvedMax == nil {
+                let auto = try automaticScale(matrix, cancellation: cancellation)
+                resolvedMin = resolvedMin ?? auto?.vmin
+                resolvedMax = resolvedMax ?? auto?.vmax
+            }
+            targetMatrix = try downsampleMatrix(
+                matrix,
+                maxSide: outputSize * 2,
+                cancellation: cancellation
+            )
+        }
+
+        let rgba = try colorize(
+            matrix: targetMatrix,
+            palette: options.palette,
+            vmin: resolvedMin,
+            vmax: resolvedMax,
+            invert: options.invert,
+            cancellation: cancellation
+        )
+        try cancellation.check()
+        guard let cgImage = makeCGImage(
+            rgba: rgba,
+            width: targetMatrix.width,
+            height: targetMatrix.height
+        ) else {
+            throw SXMRenderError.imageCreationFailed
+        }
+        try cancellation.check()
+        if let outputSize = options.outputSize {
+            return try resizedCGImage(
+                cgImage,
+                maxSide: outputSize,
+                cancellation: cancellation
+            )
+        }
+        return cgImage
     }
 
     public static func automaticScale(_ matrix: Matrix) -> (vmin: Double, vmax: Double)? {
@@ -631,7 +676,7 @@ private func makeCGImage(rgba: [UInt8], width: Int, height: Int) -> CGImage? {
         bitsPerComponent: 8,
         bitsPerPixel: 32,
         bytesPerRow: width * 4,
-        space: CGColorSpaceCreateDeviceRGB(),
+        space: SXMRenderer.sRGBColorSpace,
         bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
         provider: provider,
         decode: nil,
@@ -640,19 +685,78 @@ private func makeCGImage(rgba: [UInt8], width: Int, height: Int) -> CGImage? {
     )
 }
 
-private func resized(
-    _ image: NSImage,
-    maxSide: CGFloat,
+private func downsampleMatrix(
+    _ matrix: Matrix,
+    maxSide: Int,
     cancellation: CancellationCheckpoint
-) throws -> NSImage {
+) throws -> Matrix {
+    let clampedMax = max(1, maxSide)
+    let longest = max(matrix.width, matrix.height)
+    guard longest > clampedMax else { return matrix }
+
+    let scale = Double(clampedMax) / Double(longest)
+    let targetWidth = max(1, Int((Double(matrix.width) * scale).rounded()))
+    let targetHeight = max(1, Int((Double(matrix.height) * scale).rounded()))
+    var output = [Float](repeating: .nan, count: targetWidth * targetHeight)
+
+    for dy in 0..<targetHeight {
+        try cancellation.check()
+        let srcYStart = (dy * matrix.height) / targetHeight
+        let srcYEnd = max(srcYStart + 1, ((dy + 1) * matrix.height) / targetHeight)
+        for dx in 0..<targetWidth {
+            let srcXStart = (dx * matrix.width) / targetWidth
+            let srcXEnd = max(srcXStart + 1, ((dx + 1) * matrix.width) / targetWidth)
+            var sum = 0.0
+            var count = 0
+            for sy in srcYStart..<min(matrix.height, srcYEnd) {
+                let rowOffset = sy * matrix.width
+                for sx in srcXStart..<min(matrix.width, srcXEnd) {
+                    let value = matrix.values[rowOffset + sx]
+                    if value.isFinite {
+                        sum += Double(value)
+                        count += 1
+                    }
+                }
+            }
+            if count > 0 {
+                output[dy * targetWidth + dx] = Float(sum / Double(count))
+            }
+        }
+    }
     try cancellation.check()
-    let size = image.size
-    let scale = min(1, maxSide / max(size.width, size.height))
-    let target = NSSize(width: max(1, size.width * scale), height: max(1, size.height * scale))
-    let output = NSImage(size: target)
-    output.lockFocus()
-    image.draw(in: NSRect(origin: .zero, size: target), from: .zero, operation: .copy, fraction: 1)
-    output.unlockFocus()
+    return Matrix(width: targetWidth, height: targetHeight, values: output)
+}
+
+private func resizedCGImage(
+    _ image: CGImage,
+    maxSide: Int,
+    cancellation: CancellationCheckpoint
+) throws -> CGImage {
     try cancellation.check()
-    return output
+    let clampedMax = max(1, maxSide)
+    let longest = max(image.width, image.height)
+    guard longest > clampedMax else { return image }
+
+    let scale = Double(clampedMax) / Double(longest)
+    let targetWidth = max(1, Int((Double(image.width) * scale).rounded()))
+    let targetHeight = max(1, Int((Double(image.height) * scale).rounded()))
+
+    guard let context = CGContext(
+        data: nil,
+        width: targetWidth,
+        height: targetHeight,
+        bitsPerComponent: 8,
+        bytesPerRow: 0,
+        space: SXMRenderer.sRGBColorSpace,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else {
+        throw SXMRenderError.imageCreationFailed
+    }
+    context.interpolationQuality = CGInterpolationQuality.high
+    context.draw(image, in: CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight))
+    try cancellation.check()
+    guard let resized = context.makeImage() else {
+        throw SXMRenderError.imageCreationFailed
+    }
+    return resized
 }

@@ -52,7 +52,6 @@ struct SXMBrowserNativeApp: App {
                     model.selectAll()
                 }
                 .keyboardShortcut("a")
-                .disabled(model.files.isEmpty)
 
                 Button("Move Selected SXM Files to Trash…") {
                     model.deleteSelectedFiles()

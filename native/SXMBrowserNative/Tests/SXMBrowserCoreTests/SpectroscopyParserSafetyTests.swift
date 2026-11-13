@@ -102,3 +102,37 @@ func duplicateDatColumnNamesAreMadeUnambiguous() throws {
     #expect(file.curve.valuesByColumn["Current"] == [1, 3])
     #expect(file.curve.valuesByColumn["Current (2)"] == [2, 4])
 }
+
+@Test
+func datRejectsOversizedAndBinaryFilesWithoutFullRead() throws {
+    let oversizedURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("spectroscopy-oversized-\(UUID().uuidString).dat")
+    FileManager.default.createFile(atPath: oversizedURL.path, contents: nil)
+    defer { try? FileManager.default.removeItem(at: oversizedURL) }
+
+    let oversizedHandle = try FileHandle(forWritingTo: oversizedURL)
+    try oversizedHandle.truncate(atOffset: SpectroscopyParser.maximumFileByteCount + 1)
+    try oversizedHandle.close()
+
+    var caughtOversized = false
+    do {
+        _ = try SpectroscopyParser().loadFile(oversizedURL)
+    } catch SpectroscopyParserError.fileTooLarge(_, let byteCount, let maximumByteCount) {
+        caughtOversized = byteCount == SpectroscopyParser.maximumFileByteCount + 1
+            && maximumByteCount == SpectroscopyParser.maximumFileByteCount
+    }
+    #expect(caughtOversized)
+
+    let binaryURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("spectroscopy-binary-\(UUID().uuidString).dat")
+    try Data([0x01, 0x00, 0x02, 0x03]).write(to: binaryURL)
+    defer { try? FileManager.default.removeItem(at: binaryURL) }
+
+    var caughtBinary = false
+    do {
+        _ = try SpectroscopyParser().loadFile(binaryURL)
+    } catch SpectroscopyParserError.missingData {
+        caughtBinary = true
+    }
+    #expect(caughtBinary)
+}

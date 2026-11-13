@@ -13,7 +13,7 @@ cd "$PROJECT"
 mkdir -p "$CACHE_DIR/clang" "$CACHE_DIR/swiftpm"
 export SWIFTPM_CACHE_PATH="$CACHE_DIR/swiftpm"
 export CLANG_MODULE_CACHE_PATH="$CACHE_DIR/clang"
-swift build -c release --scratch-path "$BUILD_DIR"
+swift build --disable-sandbox -c release --scratch-path "$BUILD_DIR"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"

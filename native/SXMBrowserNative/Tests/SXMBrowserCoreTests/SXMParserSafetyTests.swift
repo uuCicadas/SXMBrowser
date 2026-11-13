@@ -5,6 +5,7 @@ import Testing
 private func makeSXMFixture(
     pixels: String = "2 2",
     scanType: String? = "FLOAT MSBFIRST",
+    scanDir: String? = nil,
     direction: String = "forward",
     samples: [Float] = [],
     channelRows: [String]? = nil,
@@ -15,11 +16,14 @@ private func makeSXMFixture(
     let scanTypeSection = scanType.map {
         ":SCANIT_TYPE:\n\($0)\n"
     } ?? ""
+    let scanDirSection = scanDir.map {
+        ":SCAN_DIR:\n\($0)\n"
+    } ?? ""
     let rows = channelRows ?? ["0\tZ\tm\t\(direction)"]
     let header = """
     :NANONIS_VERSION:
     2
-    \(scanTypeSection):SCAN_PIXELS:
+    \(scanTypeSection)\(scanDirSection):SCAN_PIXELS:
     \(pixels)
     :DATA_INFO:
     Channel\tName\tUnit\tDirection
@@ -371,4 +375,59 @@ func duplicateChannelNamesAreRejected() throws {
         capturedParserError { try SXMParser().loadMetadata(url) }
             == .duplicateChannel(url, name: "Z")
     )
+}
+
+@Test
+func upwardScanDirectionFlipsRowsVerticallyToMatchDownwardPhysicalFrame() throws {
+    let parser = SXMParser()
+    let downURL = try makeSXMFixture(
+        pixels: "2 2",
+        scanDir: "down",
+        samples: [1, 2, 3, 4, 5, 6, 7, 8],
+        channelRows: ["0\tZ\tm\tboth"]
+    )
+    defer { try? FileManager.default.removeItem(at: downURL) }
+
+    let upURL = try makeSXMFixture(
+        pixels: "2 2",
+        scanDir: "up",
+        samples: [1, 2, 3, 4, 5, 6, 7, 8],
+        channelRows: ["0\tZ\tm\tboth"]
+    )
+    defer { try? FileManager.default.removeItem(at: upURL) }
+
+    let scanUpURL = try makeSXMFixture(
+        pixels: "2 2",
+        scanDir: "SCAN UP",
+        samples: [1, 2, 3, 4],
+        channelRows: ["0\tZ\tm\tforward"]
+    )
+    defer { try? FileManager.default.removeItem(at: scanUpURL) }
+
+    let pickupURL = try makeSXMFixture(
+        pixels: "2 2",
+        scanDir: "pickup",
+        samples: [1, 2, 3, 4],
+        channelRows: ["0\tZ\tm\tforward"]
+    )
+    defer { try? FileManager.default.removeItem(at: pickupURL) }
+
+    let downMeta = try parser.loadMetadata(downURL)
+    let upMeta = try parser.loadMetadata(upURL)
+    let scanUpMeta = try parser.loadMetadata(scanUpURL)
+    let pickupMeta = try parser.loadMetadata(pickupURL)
+
+    let downFull = try parser.loadFullFile(downMeta)
+    let upFull = try parser.loadFullFile(upMeta)
+    let fwdKey = MatrixKey(channel: "Z", direction: .fwd)
+    let bwdKey = MatrixKey(channel: "Z", direction: .bwd)
+
+    #expect(downFull.matrices[fwdKey]?.values == [1, 2, 3, 4])
+    #expect(downFull.matrices[bwdKey]?.values == [6, 5, 8, 7])
+    #expect(upFull.matrices[fwdKey]?.values == [3, 4, 1, 2])
+    #expect(upFull.matrices[bwdKey]?.values == [8, 7, 6, 5])
+    #expect(try parser.loadMatrix(upMeta, key: fwdKey).values == [3, 4, 1, 2])
+    #expect(try parser.loadMatrix(upMeta, key: bwdKey).values == [8, 7, 6, 5])
+    #expect(try parser.loadMatrix(scanUpMeta, key: fwdKey).values == [3, 4, 1, 2])
+    #expect(try parser.loadMatrix(pickupMeta, key: fwdKey).values == [1, 2, 3, 4])
 }

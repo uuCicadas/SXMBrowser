@@ -28,13 +28,13 @@ private func inspectorMetadata(
                 name: "Z",
                 unit: "m",
                 directions: [.fwd, .bwd],
-                kind: .stm
+                kind: .topography
             ),
             SXMChannel(
                 name: "Current",
                 unit: "A",
                 directions: [.fwd],
-                kind: .stm
+                kind: .conductanceOrCurrent
             ),
         ],
         defaultChannel: "Z"

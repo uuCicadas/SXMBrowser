@@ -42,7 +42,7 @@ final class LayerImageNSView: NSView {
         imageLayer.anchorPoint = .zero
         imageLayer.contentsGravity = .resize
         imageLayer.magnificationFilter = .nearest
-        imageLayer.minificationFilter = .nearest
+        imageLayer.minificationFilter = .linear
         layer?.addSublayer(imageLayer)
     }
 
@@ -91,7 +91,7 @@ final class LayerImageNSView: NSView {
             }
         }
         imageLayer.magnificationFilter = filter
-        imageLayer.minificationFilter = filter
+        imageLayer.minificationFilter = .linear
         self.scaling = scaling
         applyScaling()
     }

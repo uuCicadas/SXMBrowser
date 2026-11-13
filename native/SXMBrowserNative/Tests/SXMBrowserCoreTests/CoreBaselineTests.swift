@@ -22,9 +22,15 @@ func headerParserStopsAtScanEnd() {
 
 @Test
 func defaultDisplayRulesUseSTMPlaneFitAndAFMRawWithChannelPalette() {
-    for channel in ["Z", "Current"] {
-        #expect(classifyChannel(channel) == .stm)
+    for channel in ["Z", "Z (m)", "Height", "Topography"] {
+        #expect(classifyChannel(channel) == .topography)
         #expect(defaultProcessing(for: channel) == .planeLinear)
+        #expect(defaultPalette(for: channel) == .duskViolet)
+    }
+
+    for channel in ["Current", "Current (A)", "LI Demod 1 X", "dI/dV"] {
+        #expect(classifyChannel(channel) == .conductanceOrCurrent)
+        #expect(defaultProcessing(for: channel) == .raw)
         #expect(defaultPalette(for: channel) == .duskViolet)
     }
 
@@ -33,6 +39,27 @@ func defaultDisplayRulesUseSTMPlaneFitAndAFMRawWithChannelPalette() {
         #expect(defaultProcessing(for: channel) == .raw)
         #expect(defaultPalette(for: channel) == .gray)
     }
+}
+
+@Test
+func engineeringDoubleParsesSISuffixesScientificAndNegatives() {
+    func expectClose(_ raw: String, _ expected: Double) {
+        let parsed = parseEngineeringDouble(raw)
+        #expect(parsed != nil)
+        if let parsed {
+            #expect(abs(parsed - expected) <= abs(expected) * 1e-12 + 1e-30)
+        }
+    }
+
+    expectClose("200p", 200e-12)
+    expectClose("-1.5n", -1.5e-9)
+    expectClose("500u", 500e-6)
+    expectClose("10µ", 10e-6)
+    expectClose("-0.5", -0.5)
+    expectClose("1.5e-9", 1.5e-9)
+    expectClose("1.2k", 1200)
+    #expect(parseEngineeringDouble("1.5e") == nil)
+    #expect(parseEngineeringDouble("NaN") == nil)
 }
 
 @Test
