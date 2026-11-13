@@ -7,7 +7,7 @@ private let automaticConfiguration = SelectedRenderConfiguration(
     channel: "Z",
     direction: .fwd,
     processing: .lineLinear,
-    palette: .flame,
+    palette: .ember,
     invert: false,
     histogramBins: 256,
     scale: .automatic
@@ -17,7 +17,7 @@ private func configuration(
     channel: String = "Z",
     direction: ScanDirection = .fwd,
     processing: ProcessingMode = .lineLinear,
-    palette: PaletteName = .flame,
+    palette: PaletteName = .ember,
     invert: Bool = false,
     histogramBins: Int = 256,
     scale: RenderScaleRequest = .automatic

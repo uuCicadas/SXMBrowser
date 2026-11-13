@@ -4,6 +4,10 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+## 2.4.2 - 2026-11-13
+
+- Build 93 (2026-11-13): Add Ember as an STM preview palette option and remove the Flame and Deep Blue palettes.
+
 ## 2.4.1 - 2026-11-13
 
 - Build 92 (2026-11-13): Calibrate scan-up orientation, channel defaults, sRGB rendering, scale input, and concurrency safety for 2.4.1 (flip `:SCAN_DIR: up` rows & unify `ScanCoordinateTransform` Y frame; restrict default `Plane linear fit` to topography channels; explicit `sRGB` across image/thumbnail/PNG export without `NSImage.lockFocus()`; buffered `ScaleField` engineering/SI editing; `Cmd+A` text-field forwarding & in-app context `Open`; empty-search short-circuit, `modifiedTime`-keyed thumbnail invalidation & cancellation-safe `AsyncLimiter`; lock-protected `POSIXDateParser` & 64 MiB `.dat` preflight; batch delete metadata cleanup; linear minification, contrast-shadowed `ScreenScaleBar`, balanced cursor push/pop, and `clean_builds.command`).

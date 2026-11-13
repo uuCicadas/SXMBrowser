@@ -45,17 +45,15 @@ public enum ProcessingMode: String, CaseIterable, Codable, Sendable {
 public enum PaletteName: String, CaseIterable, Codable, Sendable {
     case blueViolet
     case duskViolet
-    case deepBlue
+    case ember
     case gray
-    case flame
 
     public var label: String {
         switch self {
         case .blueViolet: "Ink Violet"
         case .duskViolet: "Dusk Violet"
-        case .deepBlue: "Deep Blue"
+        case .ember: "Ember"
         case .gray: "Basic gray"
-        case .flame: "Flame"
         }
     }
 }

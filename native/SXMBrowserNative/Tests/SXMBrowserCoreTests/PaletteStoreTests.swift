@@ -33,31 +33,22 @@ func bundledPaletteCatalogUsesVersionControlledStops() {
             PaletteStop(1.00, 1.000, 1.000, 1.000),
         ]
     )
-    #expect(
-        store.stops(for: .flame) == [
-            PaletteStop(0.000000, 0.000000, 0.000000, 0.000000),
-            PaletteStop(0.007843, 0.003921, 0.006274, 0.022352),
-            PaletteStop(0.101960, 0.003921, 0.082352, 0.290196),
-            PaletteStop(0.200000, 0.003921, 0.341176, 0.584313),
-            PaletteStop(0.337254, 0.003921, 0.996078, 0.996078),
-            PaletteStop(0.666666, 0.950980, 0.003921, 0.003921),
-            PaletteStop(0.682352, 0.996078, 0.050588, 0.003921),
-            PaletteStop(1.000000, 0.996078, 0.996078, 0.003921),
-        ]
-    )
+    #expect(PaletteName.allCases == [.blueViolet, .duskViolet, .ember, .gray])
+    #expect(PaletteName(rawValue: "flame") == nil)
+    #expect(PaletteName(rawValue: "deepBlue") == nil)
 }
 
 @Test
 func selectedSTMPalettesMatchApprovedPreviews() {
     // Fingerprints cover every Double in the selected preview's stops, in order:
     // position, r, g, b, encoded as little-endian IEEE 754 values.
-    // B4: design/stm-palette-preview/saved/B4-deep-blue/palette.json
     // E Ink Violet: design/palette-survey-2026/palettes/E-ink-violet-blueViolet.json
     // H Dusk Violet: design/palette-survey-2026/palettes/H-dusk-violet.json
+    // J Ember: design/palette-survey-2026/palettes/J-ember.json
     let approvedFingerprints: [(PaletteName, String)] = [
         (.blueViolet, "eef29bb173702cd500a5668b6de08ace1f332bb0e0c6c0cde0c0f47c7c893528"),
         (.duskViolet, "5c48fafdc3d046448bb10d0388078288382730550bb655bb69419b0ee382dd08"),
-        (.deepBlue, "a48576bd35d240d1b2cbc3b4c4ce6e31c690dbe1b963a77762a7770bbe4b1805"),
+        (.ember, "b06bafb7097b0b0cfb6086354dbc40dacc8c9f58fcfa172362e560ff1a35be8d"),
     ]
 
     for (palette, expected) in approvedFingerprints {
@@ -207,11 +198,11 @@ func paletteCatalogRejectsStructuralAndRangeErrors() throws {
 
     var missing = completePaletteCatalog()
     var missingEntries = try #require(missing["palettes"] as? [[String: Any]])
-    missingEntries.removeAll { ($0["name"] as? String) == PaletteName.flame.rawValue }
+    missingEntries.removeAll { ($0["name"] as? String) == PaletteName.ember.rawValue }
     missing["palettes"] = missingEntries
     #expect(
         capturedPaletteError(missing)
-            == .missingPalettes([.flame])
+            == .missingPalettes([.ember])
     )
 
     var duplicate = completePaletteCatalog()

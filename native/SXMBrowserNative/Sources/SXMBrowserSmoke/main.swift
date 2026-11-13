@@ -332,7 +332,7 @@ private func runSmoke() throws {
     let validPaletteCount = PaletteName.allCases.filter {
         PaletteStore.shared.stops(for: $0).count >= 2
     }.count
-    let expectedPalettes: [PaletteName] = [.gray, .flame, .blueViolet, .duskViolet, .deepBlue]
+    let expectedPalettes: [PaletteName] = [.blueViolet, .duskViolet, .ember, .gray]
     guard Set(PaletteName.allCases) == Set(expectedPalettes),
           validPaletteCount == expectedPalettes.count else {
         throw SmokeFailure.contract(
@@ -342,14 +342,14 @@ private func runSmoke() throws {
         )
     }
 
-    // Exercise PNG export for both user-selected STM palettes. The canonical
+    // Exercise PNG export for user-selected STM palettes. The canonical
     // sample's first image can be an AFM channel and therefore render only gray.
     let paletteRamp = Matrix(
         width: 257,
         height: 1,
         values: (0...256).map { Float($0) / 256 }
     )
-    for palette in [PaletteName.blueViolet, .duskViolet, .deepBlue] {
+    for palette in [PaletteName.blueViolet, .duskViolet, .ember] {
         let options = RenderOptions(
             channel: "Z",
             direction: .fwd,

@@ -144,7 +144,7 @@ native/SXMBrowserNative
   - **Topography（`Z` / `Height` / `Topography`）**：默认 **Dusk Violet** + `Plane linear fit`（`Double` 精度全图最小二乘平面拟合扣除）。
   - **Conductance / Current（`Current`、`dI/dV`、`LI Demod` 等）**：默认 **Dusk Violet** + `Raw`，避免对非高度通道误做平面扣底。
   - **AFM / PLL（`Frequency Shift`、`Amplitude`、`Excitation`、`Phase`）**：默认 **Basic gray** + `Raw`。
-  - 可选配色包括 **Dusk Violet**、**Ink Violet**、**Deep Blue**、**Flame** 与 **Basic gray**。
+  - 可选配色包括 **Dusk Violet**、**Ink Violet**、**Ember** 与 **Basic gray**。
 - 解析 `.dat` 谱图文件的全部数据列，可在右栏按实验类型与列结构组切换并持久化 X/Y 轴、可见性与手动 SXM 关联；图上以彩色实心圆点标示测量位置并与当前聚焦谱图联动。
 - 支持基于安全域书签的数据集标签管理（重命名、删除、拖拽排序、原子元数据存储及导出/预览/安全导入）。
 - 右栏提供 Inspector 风格的 Color Scale 和 Histogram：`Full` / `1-99%` / `σ` 色阶、`Invert`、bins、直方图与纯 PNG 导出；色阶输入框支持科学计数法及 `p`、`n`、`u`、`µ`、`m`、`k`、`M`、`G` 等 SI 单位后缀，输入过程中不会被后台状态刷新覆盖。

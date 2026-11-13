@@ -552,7 +552,7 @@ private func metadata(
 private func renderConfiguration(
     direction: ScanDirection = .fwd,
     processing: ProcessingMode = .raw,
-    palette: PaletteName = .flame,
+    palette: PaletteName = .ember,
     invert: Bool = false,
     bins: Int = 256,
     scale: RenderScaleRequest = .automatic
@@ -866,7 +866,7 @@ func rapidImageChangesUseOneProcessingPipelineAndPublishNewest()
     var newestConfiguration = renderConfiguration()
     for index in 1..<100 {
         newestConfiguration = renderConfiguration(
-            palette: index.isMultiple(of: 2) ? .gray : .flame,
+            palette: index.isMultiple(of: 2) ? .gray : .ember,
             invert: !index.isMultiple(of: 2),
             scale: .locked(
                 min: Double(index),
