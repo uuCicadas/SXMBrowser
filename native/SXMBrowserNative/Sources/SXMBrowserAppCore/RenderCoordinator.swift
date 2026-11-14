@@ -141,19 +141,6 @@ public struct CoordinatorRenderedFrame {
     }
 }
 
-public struct ProbePixelValues: Equatable, Sendable {
-    public let rawValue: Double?
-    public let processedValue: Double?
-
-    public init(
-        rawValue: Double?,
-        processedValue: Double?
-    ) {
-        self.rawValue = rawValue
-        self.processedValue = processedValue
-    }
-}
-
 public enum RenderFailureStage: String, Equatable, Sendable {
     case matrixLoad
     case processing
@@ -221,7 +208,6 @@ public final class RenderCoordinator {
     }
 
     private struct ProcessedPayload: Sendable {
-        let source: Matrix
         let processed: Matrix
         let statistics: MatrixStatistics?
     }
@@ -448,73 +434,6 @@ public final class RenderCoordinator {
         }
     }
 
-    public func probePixelValues(
-        for request: RenderRequestIdentity<SXMMetadata.ID>,
-        at coordinate: PixelCoordinate
-    ) -> ProbePixelValues? {
-        probePixelValues(
-            for: request,
-            x: coordinate.x,
-            y: coordinate.y
-        )
-    }
-
-    public func probePixelValues(
-        for request: RenderRequestIdentity<SXMMetadata.ID>,
-        x: Int,
-        y: Int
-    ) -> ProbePixelValues? {
-        guard x >= 0,
-              y >= 0,
-              acceptsRenderRequest(request),
-              let activeRequest = renderRequestGate.activeRequest,
-              activeRequest == request,
-              request.datasetRevision
-                == renderRequestGate.datasetRevision,
-              let context = activeContext,
-              context.fileID == request.fileID,
-              context.configuration.imageConfiguration
-                == request.configuration,
-              let currentFrame = frame,
-              currentFrame.request == request,
-              currentFrame.configuration.imageConfiguration
-                == request.configuration,
-              let cache = readyCache(for: request.processedKey),
-              cache.key.datasetRevision
-                == renderRequestGate.datasetRevision else {
-            return nil
-        }
-
-        let source = cache.payload.source
-        let processed = cache.payload.processed
-        guard source.width > 0,
-              source.height > 0,
-              source.width == processed.width,
-              source.height == processed.height,
-              x < source.width,
-              y < source.height else {
-            return nil
-        }
-
-        let (rowOffset, rowOverflow) =
-            y.multipliedReportingOverflow(by: source.width)
-        let (index, indexOverflow) =
-            rowOffset.addingReportingOverflow(x)
-        guard !rowOverflow,
-              !indexOverflow,
-              index >= 0,
-              index < source.values.count,
-              index < processed.values.count else {
-            return nil
-        }
-
-        return ProbePixelValues(
-            rawValue: Self.finiteDouble(source.values[index]),
-            processedValue:
-                Self.finiteDouble(processed.values[index])
-        )
-    }
-
     private func startProcessing(
         for key: ProcessedRenderKey<SXMMetadata.ID>,
         file: SXMMetadata
@@ -619,7 +538,6 @@ public final class RenderCoordinator {
             }
             try Task.checkCancellation()
             return ProcessedPayload(
-                source: source,
                 processed: processed,
                 statistics: statistics
             )
@@ -1024,9 +942,5 @@ public final class RenderCoordinator {
                 max ?? automaticScale?.vmax ?? 1
             )
         }
-    }
-
-    private static func finiteDouble(_ value: Float) -> Double? {
-        value.isFinite ? Double(value) : nil
     }
 }

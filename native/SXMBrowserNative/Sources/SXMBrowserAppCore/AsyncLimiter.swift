@@ -1,20 +1,28 @@
 import Foundation
 
-/// Bounded concurrency gate supporting deterministic structured task cancellation.
+/// Bounded concurrency gate supporting deterministic structured task cancellation
+/// and configurable waiter scheduling order.
 public actor AsyncLimiter {
+    public enum AcquisitionOrder: Sendable {
+        case fifo
+        case lifo
+    }
+
     private struct Waiter {
         let id: UUID
         let continuation: CheckedContinuation<Bool, Never>
     }
 
     private let limit: Int
+    private let order: AcquisitionOrder
     private var available: Int
     private var waiters: [Waiter] = []
     private var activeWaiterScopes: Set<UUID> = []
     private var cancelledWaiterIDs: Set<UUID> = []
 
-    public init(limit: Int) {
+    public init(limit: Int, order: AcquisitionOrder = .fifo) {
         self.limit = max(1, limit)
+        self.order = order
         self.available = max(1, limit)
     }
 
@@ -61,8 +69,14 @@ public actor AsyncLimiter {
         if waiters.isEmpty {
             available = min(limit, available + 1)
         } else {
-            waiters.removeFirst().continuation.resume(returning: true)
+            let waiter = order == .lifo ? waiters.removeLast() : waiters.removeFirst()
+            waiter.continuation.resume(returning: true)
         }
+    }
+
+    /// Snapshot of currently waiting tasks (used in tests for deterministic scheduling assertions).
+    public var waiterCount: Int {
+        waiters.count
     }
 
     private func cancelWaiter(_ id: UUID) {

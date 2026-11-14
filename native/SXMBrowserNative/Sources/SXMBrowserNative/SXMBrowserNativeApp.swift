@@ -1,9 +1,10 @@
 import SXMBrowserAppCore
+import SXMBrowserNativeUI
 import SwiftUI
 
 @main
 struct SXMBrowserNativeApp: App {
-    @StateObject private var model = AppModel()
+    @State private var model = AppModel()
 
     var body: some Scene {
         WindowGroup {

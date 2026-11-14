@@ -4,6 +4,13 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+## 2.5.0 - 2026-11-14
+
+- Build 94 (2026-11-14): Complete the v2.5 architecture streamlining, fine-grained `@Observable` state split, and UI/file-operation responsiveness upgrade:
+  - Remove dead probe and responsive-layout code (`ProbePixelValues`, `ProbeReading`, `ResponsivePaneLayout`, and residual `probeReading`/`manuallyAssignedSXMIDBySpectrumID`/`manualTargetPathByDATPath` state) and drop `RenderCoordinator.ProcessedPayload.source`, cutting active full-image matrix retention by 50% while extracting `ScanCoordinateTransform` for `.dat` overlay coordinates (`D9`).
+  - Extract `SXMBrowserNativeUI` as a testable library target with `@MainActor` `SXMBrowserNativeUITests`, leaving `SXMBrowserNative` as a thin `@main` executable; migrate `AppModel` from `ObservableObject` to macOS 14 `@Observable` domain controllers (`DatasetSessionController`, `ImageViewerController`, `SpectroscopyController`, `ThumbnailPipeline`), cache versioned derived file lists (`sortedFiles`, `visibleFiles`, `visibleDisplayItems`, `files(forTagID:)`), and split `Views.swift` into domain subfolders with `SidebarStatusFooter` (`D6`, `D12`).
+  - Add LIFO viewport-priority scheduling (`AsyncLimiter(limit: 4, order: .lifo)`) to `ThumbnailPipeline`, replace dual `TapGesture` in `ThumbnailCard` with AppKit `InstantClickOverlay` (`GridCardClickAction`) for zero-delay single/double click dispatch, and run `FileManager.default.trashItem` off the main actor under `isDeletingFiles` busy locking and session guards (`D7`, `D10`).
+
 ## 2.4.2 - 2026-11-13
 
 - Build 93 (2026-11-13): Add Ember as an STM preview palette option and remove the Flame and Deep Blue palettes.

@@ -16,6 +16,7 @@ open "/Applications/SXM Browser.app"
 
 ```bash
 ./scripts/build_native_app.command   # 构建并签名 Release App (./SXM Browser.app)
+ditto "./SXM Browser.app" "/Applications/SXM Browser.app" # 同步至系统应用程序目录
 ./scripts/test_all.command           # 运行全量单元测试
 ./scripts/clean_builds.command       # 清理过期 .build-* / .build-cache-*（加 --all 清理全部）
 ```
@@ -99,7 +100,7 @@ Apple Silicon、macOS 14+ 的 Release 构建中执行。
 
 ```bash
 ./scripts/milestone_checkpoint.command \
-  v2.4.1 \
+  v2.5.0 \
   --sample-dir "/path/to/example-graph"
 ```
 
@@ -113,6 +114,8 @@ Apple Silicon、macOS 14+ 的 Release 构建中执行。
 ```text
 native/SXMBrowserNative
 ```
+
+包含 4 个核心代码目标：`SXMBrowserCore`（解析 / 数值拟合 / sRGB 渲染 / 调色板）、`SXMBrowserAppCore`（缓存 / 并发门控 / 元数据持久化）、`SXMBrowserNativeUI`（`@Observable` 域控制器与模块化视图）与 `SXMBrowserNative`（轻量 `@main` 入口），以及 `SXMBrowserSmoke`、`SXMBrowserBenchmark` 验收工具。架构基线与后续演进路线见 [ROADMAP.md](ROADMAP.md)。
 
 当前原生版已包含：文件夹与 `.sxm` 文件拖放导入、按文件名/记录时间/修改时间排序、侧栏右键应用内 `Open`、缩略图网格、单图自适应缩放、`:SCAN_DIR: up` 纵向方向归一化、按通道类型区分的默认配色与处理规则、channel/正反扫/processing/全局 STM 调色板切换、全链路 sRGB 色彩管理、谱图 `.dat` 全通道解析与 X/Y 通道切换、标签与数据集元数据持久化及导入导出、Inspector 风格 Color Scale（支持 SI 单位与科学计数法）、可拖动 Histogram、纯 PNG 导出。
 
@@ -152,10 +155,12 @@ native/SXMBrowserNative
 
 ## 性能策略
 
+- 采用 `SXMBrowserNativeUI` 模块分层与 macOS 14 `@Observable` 细粒度域控制器（`DatasetSessionController`、`ImageViewerController`、`SpectroscopyController`、`ThumbnailPipeline`），配合版本号缓存的 `sortedFiles` 与 `visibleFiles` 派生列表，消除无关视图树广播重绘与单帧重复排序。
 - 扫描文件夹时只读取 `.sxm` header 和通道元数据，不预加载图像矩阵。
 - `.dat` 谱图解析采用 64 MiB 文件上限与 256 KiB 头部预检（在整文件读取前过滤二进制 NUL 与异常大文件），并使用锁保护的共享 `POSIXDateParser` 避免高频分配 `DateFormatter`。
-- 图像、直方图和导出只在需要时按文件读取；大尺寸缩略图（> 2× 目标尺寸）在全矩阵完成处理与自适应色阶计算后再执行支持有限值的箱式下采样，并在 sRGB `CGContext` 中完成线程安全缩放。
-- 最近使用的数据文件、缩略图与 PNG 渲染结果采用有界缓存与支持取消感知的并发限流器，在文件删除或修改时间变化时准确失效。
+- 图像、直方图和导出只在需要时按文件读取；`RenderCoordinator.ProcessedPayload` 仅保留处理后显示矩阵与统计量，降低 50% 活动大图矩阵内存占用；大尺寸缩略图（> 2× 目标尺寸）在全矩阵完成处理与自适应色阶计算后再执行支持有限值的箱式下采样，并在 sRGB `CGContext` 中完成线程安全缩放。
+- 缩略图调度采用视口优先的后进先出并发门控（`AsyncLimiter(limit: 4, order: .lifo)`）与多等待者引用计数取消；网格卡片通过 AppKit `InstantClickOverlay` 实现零延迟单击选中与双击进入 Single 视图；批量移入废纸篓操作在后台执行并带并发忙锁保护。
+- 最近使用的数据文件、缩略图与 PNG 渲染结果采用有界缓存，在文件删除或修改时间变化时准确失效。
 - 网格模式下 Color Scale 和 Histogram 不生效，避免拖动色阶时重绘大量缩略图。
 - 性能基准使用确定性大端 SXM 数据和稀疏 payload，避免依赖用户样例、机器路径或占用约 500 MiB 的实际磁盘空间。
 
