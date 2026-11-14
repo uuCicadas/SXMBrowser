@@ -51,8 +51,7 @@ extension AppModel {
         case .single:
             refreshSelectedImage(resetScale: false)
         case .grid:
-            viewer.scaleRenderTask?.cancel()
-            renderCoordinator.invalidate(clearFrame: false)
+            invalidateActiveRender(clearFrame: false)
         }
     }
 
@@ -581,12 +580,30 @@ extension AppModel {
         scaleLocked = true
         scaleMin = min
         scaleMax = max
-        viewer.scaleRenderTask?.cancel()
-        viewer.scaleRenderTask = Task {
-            try? await Task.sleep(for: .milliseconds(70))
-            if Task.isCancelled { return }
-            refreshSelectedImage(resetScale: false)
+        scheduleCoalescedScaleRender()
+    }
+
+    private func scheduleCoalescedScaleRender() {
+        if viewer.inFlightCoalescedRequestID != nil {
+            viewer.hasPendingScaleRender = true
+            return
         }
+        dispatchCoalescedScaleRender()
+    }
+
+    private func dispatchCoalescedScaleRender() {
+        guard let file = selectedFile, !selectedChannel.isEmpty else {
+            viewer.cancelCoalescedScaleRender()
+            selectedRenderState = .idle
+            invalidateActiveRender(clearFrame: true)
+            return
+        }
+        viewer.hasPendingScaleRender = false
+        let request = renderCoordinator.render(
+            file: file,
+            configuration: currentRenderConfiguration
+        )
+        viewer.inFlightCoalescedRequestID = request.requestID
     }
 
     public func thumbnail(
@@ -625,6 +642,7 @@ extension AppModel {
             scaleMax = nil
         }
 
+        viewer.cancelCoalescedScaleRender()
         renderCoordinator.render(
             file: file,
             configuration: currentRenderConfiguration
@@ -762,16 +780,25 @@ extension AppModel {
                 return
             }
             clearRenderFailureNotice()
-            renderedFrame = nil
-            selectedRenderState = .loading(fileID: request.fileID)
-            let filename = files.first {
-                $0.id == request.fileID
-            }?.filename ?? "image"
-            status = "Rendering \(filename)..."
+            if renderedFrame?.request.processedKey == request.processedKey {
+                selectedRenderState = .ready(fileID: request.fileID)
+            } else {
+                renderedFrame = nil
+                selectedRenderState = .loading(fileID: request.fileID)
+                let filename = files.first {
+                    $0.id == request.fileID
+                }?.filename ?? "image"
+                status = "Rendering \(filename)..."
+            }
 
         case .imageReady(let frame):
             guard acceptsCoordinatorFrame(frame) else { return }
             clearRenderFailureNotice()
+            let finishedCoalescedRequest =
+                viewer.inFlightCoalescedRequestID == frame.request.requestID
+            if finishedCoalescedRequest {
+                viewer.inFlightCoalescedRequestID = nil
+            }
             renderedFrame = frame
             selectedRenderState = .ready(
                 fileID: frame.request.fileID
@@ -783,6 +810,9 @@ extension AppModel {
             status = files.first {
                 $0.id == frame.request.fileID
             }?.filename ?? "Image rendered."
+            if finishedCoalescedRequest && viewer.hasPendingScaleRender {
+                dispatchCoalescedScaleRender()
+            }
 
         case .histogramReady(let frame):
             guard acceptsCoordinatorFrame(frame) else { return }
@@ -792,13 +822,21 @@ extension AppModel {
             )
 
         case .failed(let failure):
-            guard mode == .single,
-                  selectedID == failure.request.fileID,
-                  failure.request.configuration
-                    == currentRenderConfiguration
-                        .imageConfiguration else {
+            let wasInFlightCoalesced =
+                viewer.inFlightCoalescedRequestID == failure.request.requestID
+            guard (mode == .single
+                && selectedID == failure.request.fileID
+                && failure.request.configuration
+                    == currentRenderConfiguration.imageConfiguration)
+                || wasInFlightCoalesced else {
                 return
             }
+            if wasInFlightCoalesced, viewer.hasPendingScaleRender {
+                viewer.inFlightCoalescedRequestID = nil
+                dispatchCoalescedScaleRender()
+                return
+            }
+            viewer.cancelCoalescedScaleRender()
             renderedFrame = nil
             selectedRenderState = .failed(
                 fileID: failure.request.fileID,
@@ -813,6 +851,7 @@ extension AppModel {
             )
 
         case .cleared:
+            viewer.cancelCoalescedScaleRender()
             clearRenderFailureNotice()
             renderedFrame = nil
             selectedRenderState = .idle

@@ -1,9 +1,11 @@
+import AppKit
 import SXMBrowserAppCore
 import SXMBrowserNativeUI
 import SwiftUI
 
 @main
 struct SXMBrowserNativeApp: App {
+    @NSApplicationDelegateAdaptor(AppTerminationDelegate.self) private var appDelegate
     @State private var model = AppModel()
 
     var body: some Scene {

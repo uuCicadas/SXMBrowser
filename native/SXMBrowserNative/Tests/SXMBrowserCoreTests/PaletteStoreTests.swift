@@ -136,6 +136,43 @@ func paletteLookupMatchesLinearReferenceAtStopsAndBetweenThem() {
     }
 }
 
+@Test
+func bundledPalettesUseUniformGridFastLookupAndNonUniformFallsBack() {
+    for palette in PaletteName.allCases {
+        let lookup = PaletteStore.shared.lookup(for: palette)
+        #expect(lookup.isUniformUnitGrid, "Expected uniform grid lookup for \(palette.rawValue)")
+    }
+
+    let nonUniformStops = [
+        PaletteStop(0.0, 0.0, 0.0, 0.0),
+        PaletteStop(0.3, 0.6, 0.3, 0.9),
+        PaletteStop(1.0, 1.0, 1.0, 0.2),
+    ]
+    let nonUniformLookup = PaletteLookup(stops: nonUniformStops)
+    #expect(!nonUniformLookup.isUniformUnitGrid)
+
+    let midLow = nonUniformLookup.color(at: 0.15)
+    #expect(abs(midLow.r - 0.3) < 1e-12)
+    #expect(abs(midLow.g - 0.15) < 1e-12)
+    #expect(abs(midLow.b - 0.45) < 1e-12)
+
+    let midHigh = nonUniformLookup.color(at: 0.65)
+    #expect(abs(midHigh.r - 0.8) < 1e-12)
+    #expect(abs(midHigh.g - 0.65) < 1e-12)
+    #expect(abs(midHigh.b - 0.55) < 1e-12)
+
+    let nonPowerOfTwoStops = [
+        PaletteStop(0.0, 0.0, 0.0, 0.0),
+        PaletteStop(1.0 / 3.0, 0.3, 0.3, 0.3),
+        PaletteStop(2.0 / 3.0, 0.6, 0.6, 0.6),
+        PaletteStop(1.0, 1.0, 1.0, 1.0),
+    ]
+    let nonPowerLookup = PaletteLookup(stops: nonPowerOfTwoStops)
+    #expect(!nonPowerLookup.isUniformUnitGrid)
+    let sample = nonPowerLookup.color(at: 0.5)
+    #expect(abs(sample.r - 0.45) < 1e-12)
+}
+
 // Retain an independent linear-search reference for the binary-search renderer.
 private func referenceLinearRGBA(stops: [PaletteStop], at value: Double) -> [UInt8] {
     func rgba(_ r: Double, _ g: Double, _ b: Double) -> [UInt8] {

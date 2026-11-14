@@ -364,24 +364,31 @@ public enum SXMRenderer {
         let hasSpan = lo.isFinite && hi.isFinite && hi > lo
 
         try cancellation.check()
-        let stops = PaletteStore.shared.stops(for: palette)
+        let lookup = PaletteStore.shared.lookup(for: palette)
         var rgba = [UInt8](repeating: 255, count: matrix.width * matrix.height * 4)
-        for idx in matrix.values.indices {
-            if idx.isMultiple(of: 4_096) {
-                try cancellation.check()
+        let span = hi - lo
+        try matrix.values.withUnsafeBufferPointer { valuesBuffer in
+            try rgba.withUnsafeMutableBufferPointer { rgbaBuffer in
+                guard let valuesBase = valuesBuffer.baseAddress,
+                      let rgbaBase = rgbaBuffer.baseAddress else { return }
+                let count = min(valuesBuffer.count, rgbaBuffer.count / 4)
+                for idx in 0..<count {
+                    if idx.isMultiple(of: 4_096) {
+                        try cancellation.check()
+                    }
+                    let value = valuesBase[idx]
+                    var scaled = value.isFinite
+                        ? (hasSpan ? (Double(value) - lo) / span : 0.5)
+                        : 0
+                    scaled = min(1, max(0, scaled))
+                    if invert { scaled = 1 - scaled }
+                    let color = lookup.color(at: scaled)
+                    let base = idx * 4
+                    rgbaBase[base] = UInt8(min(255, max(0, round(color.r * 255))))
+                    rgbaBase[base + 1] = UInt8(min(255, max(0, round(color.g * 255))))
+                    rgbaBase[base + 2] = UInt8(min(255, max(0, round(color.b * 255))))
+                }
             }
-            let value = matrix.values[idx]
-            var scaled = value.isFinite
-                ? (hasSpan ? (Double(value) - lo) / (hi - lo) : 0.5)
-                : 0
-            scaled = min(1, max(0, scaled))
-            if invert { scaled = 1 - scaled }
-            let color = interpolate(stops: stops, at: scaled)
-            let base = idx * 4
-            rgba[base] = UInt8(min(255, max(0, round(color.r * 255))))
-            rgba[base + 1] = UInt8(min(255, max(0, round(color.g * 255))))
-            rgba[base + 2] = UInt8(min(255, max(0, round(color.b * 255))))
-            rgba[base + 3] = 255
         }
         try cancellation.check()
         return rgba
@@ -636,35 +643,6 @@ private func percentile(_ sorted: [Float], _ p: Double) -> Double {
     if lo == hi { return Double(sorted[lo]) }
     let t = pos - Double(lo)
     return Double(sorted[lo]) * (1 - t) + Double(sorted[hi]) * t
-}
-
-private func interpolate(stops: [PaletteStop], at value: Double) -> (r: Double, g: Double, b: Double) {
-    guard let first = stops.first, let last = stops.last else { return (value, value, value) }
-    if value <= first.position { return (first.r, first.g, first.b) }
-    if value >= last.position { return (last.r, last.g, last.b) }
-    guard value.isFinite else { return (last.r, last.g, last.b) }
-
-    // Locate the first stop at or above the value. Exact stop matches use
-    // the preceding interval, preserving the original interpolation arithmetic.
-    var lower = 1
-    var upper = stops.count - 1
-    while lower < upper {
-        let middle = lower + (upper - lower) / 2
-        if value <= stops[middle].position {
-            upper = middle
-        } else {
-            lower = middle + 1
-        }
-    }
-    let a = stops[lower - 1]
-    let b = stops[lower]
-    let span = max(1e-12, b.position - a.position)
-    let t = (value - a.position) / span
-    return (
-        a.r * (1 - t) + b.r * t,
-        a.g * (1 - t) + b.g * t,
-        a.b * (1 - t) + b.b * t
-    )
 }
 
 private func makeCGImage(rgba: [UInt8], width: Int, height: Int) -> CGImage? {

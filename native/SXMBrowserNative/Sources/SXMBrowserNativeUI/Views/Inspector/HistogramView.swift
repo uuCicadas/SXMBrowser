@@ -109,15 +109,26 @@ struct HistogramView: View {
     private func drawPaletteRail(context: inout GraphicsContext, plot: CGRect) {
         let rail = CGRect(x: plot.minX - 18, y: plot.minY, width: 6, height: plot.height)
         let stops = PaletteStore.shared.stops(for: model.selectedPalette)
-        let steps = max(2, Int(plot.height))
-        for idx in 0..<steps {
-            let t = Double(idx) / Double(steps - 1)
-            let sample = model.invertPalette ? t : 1 - t
-            let color = paletteColor(stops: stops, at: sample)
-            let rect = CGRect(x: rail.minX, y: rail.minY + CGFloat(idx), width: rail.width, height: 1.4)
-            context.fill(Path(rect), with: .color(color))
-        }
-        context.stroke(Path(roundedRect: rail, cornerRadius: 2), with: .color(.white.opacity(0.30)), lineWidth: 0.7)
+        let gradient = Gradient(
+            stops: stops.map {
+                Gradient.Stop(
+                    color: Color(red: $0.r, green: $0.g, blue: $0.b),
+                    location: $0.position
+                )
+            }
+        )
+        let startPoint = model.invertPalette
+            ? CGPoint(x: rail.midX, y: rail.minY)
+            : CGPoint(x: rail.midX, y: rail.maxY)
+        let endPoint = model.invertPalette
+            ? CGPoint(x: rail.midX, y: rail.maxY)
+            : CGPoint(x: rail.midX, y: rail.minY)
+        let railPath = Path(roundedRect: rail, cornerRadius: 2)
+        context.fill(
+            railPath,
+            with: .linearGradient(gradient, startPoint: startPoint, endPoint: endPoint)
+        )
+        context.stroke(railPath, with: .color(.white.opacity(0.30)), lineWidth: 0.7)
     }
 
     private func drawScaleHandle(
@@ -160,6 +171,7 @@ struct HistogramView: View {
         let hi = model.scaleMax ?? stats.p99
 
         if dragMode == nil {
+            NSApplication.shared.keyWindow?.makeFirstResponder(nil)
             let minY = yForValue(lo, plot: plot, min: stats.min, max: stats.max)
             let maxY = yForValue(hi, plot: plot, min: stats.min, max: stats.max)
             if abs(y - minY) < 16 {
@@ -206,26 +218,6 @@ struct HistogramView: View {
     private func yForValue(_ value: Double, plot: CGRect, min: Double, max: Double) -> CGFloat {
         let span = Swift.max(1e-30, max - min)
         return plot.maxY - CGFloat((value - min) / span) * plot.height
-    }
-
-    private func paletteColor(stops: [PaletteStop], at value: Double) -> Color {
-        guard let first = stops.first, let last = stops.last else { return .gray }
-        if value <= first.position { return Color(red: first.r, green: first.g, blue: first.b) }
-        if value >= last.position { return Color(red: last.r, green: last.g, blue: last.b) }
-        for idx in 0..<(stops.count - 1) {
-            let a = stops[idx]
-            let b = stops[idx + 1]
-            if value >= a.position && value <= b.position {
-                let span = Swift.max(1e-12, b.position - a.position)
-                let t = (value - a.position) / span
-                return Color(
-                    red: a.r * (1 - t) + b.r * t,
-                    green: a.g * (1 - t) + b.g * t,
-                    blue: a.b * (1 - t) + b.b * t
-                )
-            }
-        }
-        return Color(red: last.r, green: last.g, blue: last.b)
     }
 }
 

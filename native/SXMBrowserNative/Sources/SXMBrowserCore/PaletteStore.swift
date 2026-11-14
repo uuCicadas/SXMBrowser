@@ -52,6 +52,71 @@ enum PaletteCatalogError: LocalizedError, Equatable, Sendable {
     }
 }
 
+public struct PaletteLookup: Sendable {
+    public let stops: [PaletteStop]
+    public let isUniformUnitGrid: Bool
+    private let segmentCount: Int
+    private let segmentScale: Double
+
+    public init(stops: [PaletteStop]) {
+        self.stops = stops
+        let count = stops.count - 1
+        self.segmentCount = max(0, count)
+        self.segmentScale = Double(max(1, count))
+        if count >= 1, (count & (count - 1)) == 0 {
+            let scale = Double(count)
+            self.isUniformUnitGrid = stops.enumerated().allSatisfy { index, stop in
+                stop.position == Double(index) / scale
+            }
+        } else {
+            self.isUniformUnitGrid = false
+        }
+    }
+
+    @inline(__always)
+    public func color(at value: Double) -> (r: Double, g: Double, b: Double) {
+        guard let first = stops.first, let last = stops.last else {
+            return (value, value, value)
+        }
+        if value <= first.position { return (first.r, first.g, first.b) }
+        if value >= last.position { return (last.r, last.g, last.b) }
+        guard value.isFinite else { return (last.r, last.g, last.b) }
+
+        if isUniformUnitGrid {
+            let index = min(segmentCount - 1, max(0, Int(value * segmentScale)))
+            let a = stops[index]
+            let b = stops[index + 1]
+            let t = (value - a.position) * segmentScale
+            return (
+                a.r * (1 - t) + b.r * t,
+                a.g * (1 - t) + b.g * t,
+                a.b * (1 - t) + b.b * t
+            )
+        }
+
+        // Binary search fallback for arbitrary non-uniform stop spacing.
+        var lower = 1
+        var upper = stops.count - 1
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if value <= stops[middle].position {
+                upper = middle
+            } else {
+                lower = middle + 1
+            }
+        }
+        let a = stops[lower - 1]
+        let b = stops[lower]
+        let span = max(1e-12, b.position - a.position)
+        let t = (value - a.position) / span
+        return (
+            a.r * (1 - t) + b.r * t,
+            a.g * (1 - t) + b.g * t,
+            a.b * (1 - t) + b.b * t
+        )
+    }
+}
+
 public struct PaletteStore: Sendable {
     public static let shared: PaletteStore = {
         do {
@@ -61,7 +126,7 @@ public struct PaletteStore: Sendable {
         }
     }()
 
-    private let stopsByPalette: [PaletteName: [PaletteStop]]
+    private let lookupsByPalette: [PaletteName: PaletteLookup]
 
     init(data: Data) throws {
         let resource: PaletteCatalogResource
@@ -75,7 +140,7 @@ public struct PaletteStore: Sendable {
             throw PaletteCatalogError.unsupportedSchemaVersion(resource.schemaVersion)
         }
 
-        var catalog: [PaletteName: [PaletteStop]] = [:]
+        var catalog: [PaletteName: PaletteLookup] = [:]
         catalog.reserveCapacity(PaletteName.allCases.count)
 
         for entry in resource.palettes {
@@ -86,7 +151,7 @@ public struct PaletteStore: Sendable {
                 throw PaletteCatalogError.duplicatePalette(palette)
             }
             try Self.validate(entry.stops, for: palette)
-            catalog[palette] = entry.stops
+            catalog[palette] = PaletteLookup(stops: entry.stops)
         }
 
         let missing = PaletteName.allCases.filter { catalog[$0] == nil }
@@ -94,14 +159,18 @@ public struct PaletteStore: Sendable {
             throw PaletteCatalogError.missingPalettes(missing)
         }
 
-        stopsByPalette = catalog
+        lookupsByPalette = catalog
+    }
+
+    public func lookup(for palette: PaletteName) -> PaletteLookup {
+        guard let lookup = lookupsByPalette[palette] else {
+            preconditionFailure("Validated palette catalog is missing \(palette.rawValue).")
+        }
+        return lookup
     }
 
     public func stops(for palette: PaletteName) -> [PaletteStop] {
-        guard let stops = stopsByPalette[palette] else {
-            preconditionFailure("Validated palette catalog is missing \(palette.rawValue).")
-        }
-        return stops
+        lookup(for: palette).stops
     }
 
     private static func validate(_ stops: [PaletteStop], for palette: PaletteName) throws {

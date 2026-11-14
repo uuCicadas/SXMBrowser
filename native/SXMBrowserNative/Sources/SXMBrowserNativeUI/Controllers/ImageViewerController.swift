@@ -70,7 +70,8 @@ public final class ImageViewerController {
     public internal(set) var viewerTransform = ViewerTransform()
 
     @ObservationIgnored public let renderCoordinator: RenderCoordinator
-    @ObservationIgnored internal var scaleRenderTask: Task<Void, Never>?
+    @ObservationIgnored internal var inFlightCoalescedRequestID: UUID?
+    @ObservationIgnored internal var hasPendingScaleRender = false
     @ObservationIgnored internal var pendingViewerGeometry: (
         imageSize: CGSize,
         viewportSize: CGSize
@@ -170,16 +171,33 @@ public final class ImageViewerController {
         _ frame: CoordinatorRenderedFrame,
         selectedID: SXMMetadata.ID?
     ) -> Bool {
-        acceptsCoordinatorRequest(
+        if acceptsCoordinatorRequest(
             frame.request,
             configuration: frame.configuration,
             selectedID: selectedID
-        )
+        ) {
+            return true
+        }
+        guard inFlightCoalescedRequestID == frame.request.requestID,
+              mode == .single,
+              selectedID == frame.request.fileID,
+              frame.request.configuration == frame.configuration.imageConfiguration else {
+            return false
+        }
+        let current = currentRenderConfiguration
+        return frame.configuration.processedConfiguration == current.processedConfiguration
+            && frame.configuration.palette == current.palette
+            && frame.configuration.invert == current.invert
+            && frame.configuration.histogramBins == current.histogramBins
+    }
+
+    internal func cancelCoalescedScaleRender() {
+        inFlightCoalescedRequestID = nil
+        hasPendingScaleRender = false
     }
 
     public func invalidateActiveRender(clearFrame: Bool) {
-        scaleRenderTask?.cancel()
-        scaleRenderTask = nil
+        cancelCoalescedScaleRender()
         renderCoordinator.invalidate(clearFrame: clearFrame)
     }
 }

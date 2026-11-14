@@ -1,7 +1,7 @@
 # SXM Browser 项目进展评估与演进规划报告
 
-当前基准：`main` / `codex/sxm-reliability-ui` 分支 `HEAD`（`v2.5.0`，Build 94）  
-实测验证：全量 **311 项自动化测试通过**（[`SXMBrowserCoreTests`](native/SXMBrowserNative/Tests/SXMBrowserCoreTests) 68 项 + [`SXMBrowserAppCoreTests`](native/SXMBrowserNative/Tests/SXMBrowserAppCoreTests) 235 项 + [`SXMBrowserNativeUITests`](native/SXMBrowserNative/Tests/SXMBrowserNativeUITests) 8 项，全量运行耗时 `< 1s`），标准样例（6 个 `.sxm` + 18 个 `.dat`）[`SXMBrowserSmoke`](native/SXMBrowserNative/Sources/SXMBrowserSmoke/main.swift#L1-L473) 契约校验与 500×512×512 性能门禁（中位数 `scan 27.83 ms / image 24.89 ms / thumbnail 25.59 ms`）全部通过。
+当前基准：`main` / `codex/sxm-reliability-ui` 分支 `HEAD`（`v2.5.1`，Build 95）  
+实测验证：全量 **315 项自动化测试通过**（[`SXMBrowserCoreTests`](native/SXMBrowserNative/Tests/SXMBrowserCoreTests) 69 项 + [`SXMBrowserAppCoreTests`](native/SXMBrowserNative/Tests/SXMBrowserAppCoreTests) 235 项 + [`SXMBrowserNativeUITests`](native/SXMBrowserNative/Tests/SXMBrowserNativeUITests) 11 项，全量运行耗时 `< 1s`），标准样例（6 个 `.sxm` + 18 个 `.dat`）[`SXMBrowserSmoke`](native/SXMBrowserNative/Sources/SXMBrowserSmoke/main.swift#L1-L473) 契约校验与 500×512×512 性能门禁（中位数 `scan 29.173 ms / image 21.460 ms / thumbnail 21.939 ms`）全部通过。
 
 ---
 
@@ -42,15 +42,15 @@ flowchart LR
 
 ### 2.1 当前总体架构基线
 
-项目已稳定运行于 **纯原生 macOS 14+ 架构（Swift 6.0 + SwiftUI/AppKit + CoreAnimation + `@Observable`）**，Swift 源码与自动化测试总计 **39,455 行**（涵盖 4 个核心模块与 54 个测试文件 / 311 项测试）：
+项目已稳定运行于 **纯原生 macOS 14+ 架构（Swift 6.0 + SwiftUI/AppKit + CoreAnimation + `@Observable`）**，Swift 源码与自动化测试总计 **39,844 行**（涵盖 4 个核心模块与 55 个测试文件 / 315 项测试）：
 
 ```mermaid
 flowchart TD
-    subgraph AppLayer["SXMBrowserNative (Executable Target, 1 文件, 175 LOC)"]
-        AppEntry["SXMBrowserNativeApp.swift (@main 入口 / 菜单 / 快捷键)"]
+    subgraph AppLayer["SXMBrowserNative (Executable Target, 1 文件, 177 LOC)"]
+        AppEntry["SXMBrowserNativeApp.swift (@main 入口 / 菜单 / 快捷键 / AppTerminationDelegate)"]
     end
 
-    subgraph UILayer["SXMBrowserNativeUI (Library Target, 30 文件, 12.0k LOC + 5 测试文件)"]
+    subgraph UILayer["SXMBrowserNativeUI (Library Target, 31 文件, 12.1k LOC + 6 测试文件)"]
         AppModel["AppModel + Extensions (组合编排与文件操作)"]
         Controllers["@Observable 域控制器
         DatasetSession / ImageViewer / Spectroscopy / ThumbnailPipeline"]
@@ -158,7 +158,7 @@ flowchart LR
 
 ---
 
-### 阶段一：`v2.5` 架构瘦身与极致性能打磨（已完成：`v2.5.0`, Build 94）
+### 阶段一：`v2.5` 架构瘦身与极致性能打磨（已完成：`v2.5.0` Build 94 → `v2.5.1` Build 95）
 
 让应用在承载 **1,000+ 文件实验目录** 时依然保持零掉帧、低内存占用与瞬时点选响应：
 
@@ -173,6 +173,9 @@ flowchart LR
   - **视口优先缩略图调度（LIFO / Viewport Priority）**：`AsyncLimiter` 支持 `.lifo` 且 `ThumbnailPipeline` 默认启用。
   - **零延迟单击选中**：通过 AppKit `InstantClickOverlay` (`GridCardClickAction`) 替代双层 `TapGesture`，实现单击立即选中与双击进入 Single 视图。
   - **异步废纸篓清理**：`performDeleteFiles` 将 `FileManager.default.trashItem` 下放至后台执行，并加入 `isDeletingFiles` 并发忙锁及跨会话清理防护。
+- [x] **无极直方图拖拽刷新与单窗退出生命周期优化（`v2.5.1`, Build 95）**
+  - **关窗即退出**：通过 `@MainActor AppTerminationDelegate`（`NSApplicationDelegate.applicationShouldTerminateAfterLastWindowClosed(_:)`）与 `@NSApplicationDelegateAdaptor` 挂载到 [`SXMBrowserNativeApp`](native/SXMBrowserNative/Sources/SXMBrowserNative/SXMBrowserNativeApp.swift)，关闭最后一个窗口时直接退出应用，不在 Dock 栏残留。
+  - **无极实时拖拽色阶**：移除 `updateScale(min:max:)` 的 70 ms 取消重睡防抖，改用同矩阵（`processedKey` 未变）原地保留 `renderedFrame` / `selectedStats`（消除 `"Rendering..."` 闪烁与拖拽手势中断）+ 零等待单飞合并调度（`inFlightCoalescedRequestID` / `hasPendingScaleRender`）+ [`PaletteLookup`](native/SXMBrowserNative/Sources/SXMBrowserCore/PaletteStore.swift) O(1) 均匀网格查表着色与 `Gradient` 色条重绘。
 
 ---
 

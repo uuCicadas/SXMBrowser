@@ -150,7 +150,7 @@ native/SXMBrowserNative
   - 可选配色包括 **Dusk Violet**、**Ink Violet**、**Ember** 与 **Basic gray**。
 - 解析 `.dat` 谱图文件的全部数据列，可在右栏按实验类型与列结构组切换并持久化 X/Y 轴、可见性与手动 SXM 关联；图上以彩色实心圆点标示测量位置并与当前聚焦谱图联动。
 - 支持基于安全域书签的数据集标签管理（重命名、删除、拖拽排序、原子元数据存储及导出/预览/安全导入）。
-- 右栏提供 Inspector 风格的 Color Scale 和 Histogram：`Full` / `1-99%` / `σ` 色阶、`Invert`、bins、直方图与纯 PNG 导出；色阶输入框支持科学计数法及 `p`、`n`、`u`、`µ`、`m`、`k`、`M`、`G` 等 SI 单位后缀，输入过程中不会被后台状态刷新覆盖。
+- 右栏提供 Inspector 风格的 Color Scale 和 Histogram：`Full` / `1-99%` / `σ` 色阶、`Invert`、bins、支持无极实时拖拽刷新的直方图手柄与纯 PNG 导出；色阶输入框支持科学计数法及 `p`、`n`、`u`、`µ`、`m`、`k`、`M`、`G` 等 SI 单位后缀，输入过程中不会被后台状态刷新覆盖。
 - 导出当前配色与处理后的纯 PNG 图，不带标题、坐标轴、scale bar 或色条。
 
 ## 性能策略
@@ -162,6 +162,7 @@ native/SXMBrowserNative
 - 缩略图调度采用视口优先的后进先出并发门控（`AsyncLimiter(limit: 4, order: .lifo)`）与多等待者引用计数取消；网格卡片通过 AppKit `InstantClickOverlay` 实现零延迟单击选中与双击进入 Single 视图；批量移入废纸篓操作在后台执行并带并发忙锁保护。
 - 最近使用的数据文件、缩略图与 PNG 渲染结果采用有界缓存，在文件删除或修改时间变化时准确失效。
 - 网格模式下 Color Scale 和 Histogram 不生效，避免拖动色阶时重绘大量缩略图。
+- 直方图色阶拖拽（`Min`/`Max`/`Range`）采用同矩阵原地保帧（不清空当前图像与直方图统计、不闪现加载遮罩）、零延迟单飞合并调度（仅在当前渲染完成时立即续跑最新目标色阶），并结合 `PaletteLookup` O(1) 均匀网格查表着色与 `Gradient` 色条实现无极实时刷新；关闭最后一个窗口即通过 `AppTerminationDelegate` 直接退出应用。
 - 性能基准使用确定性大端 SXM 数据和稀疏 payload，避免依赖用户样例、机器路径或占用约 500 MiB 的实际磁盘空间。
 
 ## 当前限制

@@ -4,6 +4,12 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+## 2.5.1 - 2026-11-14
+
+- Build 95 (2026-11-14): Quit on last window close and make Histogram scale dragging stepless:
+  - Add `@MainActor` `AppTerminationDelegate` (`NSApplicationDelegate.applicationShouldTerminateAfterLastWindowClosed(_:)`) in `SXMBrowserNativeUI` and attach it via `@NSApplicationDelegateAdaptor` in `SXMBrowserNativeApp` so closing the window terminates the app directly instead of lingering in the Dock.
+  - Eliminate Histogram drag lag and UI blinking: replace `updateScale(min:max:)`'s 70 ms cancellation-sleep debounce with zero-sleep single-flight scale coalescing (`ImageViewerController.inFlightCoalescedRequestID` / `hasPendingScaleRender`), retain `renderedFrame` and `selectedStats` in place during same-matrix (`processedKey`) re-renders so the drag gesture and image never flash `"Rendering..."`, and add `PaletteLookup` O(1) uniform-grid interpolation in `PaletteStore`/`SXMRenderer.colorize` plus a `Gradient`-filled `HistogramView.drawPaletteRail`.
+
 ## 2.5.0 - 2026-11-14
 
 - Build 94 (2026-11-14): Complete the v2.5 architecture streamlining, fine-grained `@Observable` state split, and UI/file-operation responsiveness upgrade:
