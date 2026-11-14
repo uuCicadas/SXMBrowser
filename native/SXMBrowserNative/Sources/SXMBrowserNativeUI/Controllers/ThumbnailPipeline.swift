@@ -52,7 +52,8 @@ public final class ThumbnailPipeline {
                         processing: processing,
                         palette: palette,
                         outputSize: 260,
-                        invert: invert
+                        invert: invert,
+                        transparentMissingValues: true
                     )
                     return try await runDetachedCancellable(priority: .utility) {
                         UncheckedSendableImage(

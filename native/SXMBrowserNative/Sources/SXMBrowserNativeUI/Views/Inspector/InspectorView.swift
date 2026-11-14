@@ -4,7 +4,10 @@ import SXMBrowserCore
 import SwiftUI
 
 struct InspectorView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @Bindable var model: AppModel
+    @State private var isRawHeaderExpanded = false
+    @State private var rawHeaderQuery = ""
 
     var isSingle: Bool { model.mode == .single && model.selectedFile != nil }
     var canEditScanDisplay: Bool { model.selectedFile != nil && !model.files.isEmpty }
@@ -22,61 +25,12 @@ struct InspectorView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                InspectorSection(title: "File Information") {
+                InspectorSection(title: "Acquisition & File") {
                     if let file = model.selectedFile,
                        let metadataPresentation {
-                        InspectorMetadataRow(
-                            "File",
-                            file.filename
-                        )
-                        InspectorMetadataRow(
-                            "Recorded",
-                            metadataPresentation.recordedTime.map {
-                                formattedMetadataDate($0)
-                            } ?? "Not recorded"
-                        )
-                        InspectorMetadataRow(
-                            "Modified",
-                            formattedMetadataDate(
-                                metadataPresentation.modifiedTime
-                            )
-                        )
-                        InspectorMetadataRow(
-                            "Dimensions",
-                            "\(metadataPresentation.pixelWidth)"
-                                + " × "
-                                + "\(metadataPresentation.pixelHeight)"
-                                + " px"
-                        )
-                        InspectorMetadataRow(
-                            "Scan range",
-                            formattedInspectorPair(
-                                metadataPresentation
-                                    .scanRangeMeters,
-                                separator: " × "
-                            )
-                        )
-                        InspectorMetadataRow(
-                            "Offset",
-                            formattedInspectorPair(
-                                metadataPresentation
-                                    .scanOffsetMeters,
-                                separator: " · ",
-                                includesAxisNames: true
-                            )
-                        )
-                        InspectorMetadataRow(
-                            "Angle",
-                            formattedInspectorAngle(
-                                metadataPresentation
-                                    .scanAngleDegrees
-                            )
-                        )
-                        InspectorMetadataRow(
-                            "Channel",
-                            formattedInspectorChannel(
-                                metadataPresentation
-                            )
+                        acquisitionSummaryBlock(
+                            file: file,
+                            presentation: metadataPresentation
                         )
                     } else {
                         Text("No file selected.")
@@ -135,116 +89,150 @@ struct InspectorView: View {
                 }
                 .disabled(!canEditScanDisplay)
 
-                InspectorSection(title: "Color Scale") {
-                    HStack(spacing: 8) {
-                        PaletteStrip(palette: model.selectedPalette, invert: model.invertPalette)
-                            .frame(height: 28)
-                            .overlay(RoundedRectangle(cornerRadius: 5).stroke(AppTheme.separator.opacity(0.9), lineWidth: 1))
-
-                        Toggle("Invert", isOn: Binding(
-                            get: { model.invertPalette },
-                            set: {
-                                model.invertPalette = $0
-                                model.controlsChanged()
-                            }
-                        ))
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .frame(width: 82, alignment: .trailing)
-                    }
-
-                    LabeledControl("Range") {
-                        Picker("Range", selection: Binding(
-                            get: { model.scalePreset },
-                            set: { model.applyScalePreset($0) }
-                        )) {
-                            ForEach(ScalePreset.allCases) { preset in
-                                Text(preset.label).tag(preset)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                    }
-                    .disabled(model.selectedStats == nil)
-
-                    HStack(spacing: 8) {
-                        ScaleField(title: "Min", value: Binding(
-                            get: { model.scaleMin },
-                            set: {
-                                model.scaleMin = $0
-                                if let lo = $0, let hi = model.scaleMax { model.updateScale(min: lo, max: hi) }
-                            }
-                        ))
-
-                        ScaleField(title: "Max", value: Binding(
-                            get: { model.scaleMax },
-                            set: {
-                                model.scaleMax = $0
-                                if let lo = model.scaleMin, let hi = $0 { model.updateScale(min: lo, max: hi) }
-                            }
-                        ))
-                    }
-
-                    LabeledControl("Palette") {
-                        Picker("Palette", selection: Binding(
-                            get: { model.selectedPalette },
-                            set: {
-                                model.selectedPalette = $0
-                                model.controlsChanged()
-                            }
-                        )) {
-                            ForEach(PaletteName.allCases, id: \.self) { palette in
-                                Text(palette.label).tag(palette)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                    }
-                }
-                .disabled(!isSingle)
-
-                InspectorSection(title: "Histogram") {
-                    HStack(spacing: 8) {
-                        LabeledControl("Bins") {
-                            Picker("Bins", selection: $model.histogramBins) {
-                                Text("64").tag(64)
-                                Text("128").tag(128)
-                                Text("256").tag(256)
-                                Text("512").tag(512)
-                                Text("1024").tag(1024)
+                InspectorSection(title: "Color Scale & Histogram") {
+                    if isSingle {
+                        LabeledControl("Palette") {
+                            Picker("Palette", selection: Binding(
+                                get: { model.selectedPalette },
+                                set: {
+                                    model.selectedPalette = $0
+                                    model.controlsChanged()
+                                }
+                            )) {
+                                ForEach(PaletteName.allCases, id: \.self) { palette in
+                                    Text(palette.label).tag(palette)
+                                }
                             }
                             .labelsHidden()
                             .pickerStyle(.menu)
-                            .frame(width: 96)
                         }
 
-                        Spacer()
+                        HStack(spacing: 8) {
+                            PaletteStrip(palette: model.selectedPalette, invert: model.invertPalette)
+                                .frame(height: 24)
+
+                            Toggle("Invert", isOn: Binding(
+                                get: { model.invertPalette },
+                                set: {
+                                    model.invertPalette = $0
+                                    model.controlsChanged()
+                                }
+                            ))
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+                            .frame(width: 82, alignment: .trailing)
+                        }
+
+                        LabeledControl("Range") {
+                            Picker("Range", selection: Binding(
+                                get: { model.scalePreset },
+                                set: { model.applyScalePreset($0) }
+                            )) {
+                                ForEach(ScalePreset.allCases) { preset in
+                                    Text(preset.label).tag(preset)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.segmented)
+                        }
+                        .disabled(model.selectedStats == nil)
+
+                        HStack(spacing: 8) {
+                            ScaleField(title: "Min", value: Binding(
+                                get: { model.scaleMin },
+                                set: {
+                                    model.scaleMin = $0
+                                    if let lo = $0, let hi = model.scaleMax { model.updateScale(min: lo, max: hi) }
+                                }
+                            ))
+
+                            ScaleField(title: "Max", value: Binding(
+                                get: { model.scaleMax },
+                                set: {
+                                    model.scaleMax = $0
+                                    if let lo = model.scaleMin, let hi = $0 { model.updateScale(min: lo, max: hi) }
+                                }
+                            ))
+                        }
+
+                        HStack(spacing: 8) {
+                            LabeledControl("Bins") {
+                                Picker("Bins", selection: $model.histogramBins) {
+                                    Text("64").tag(64)
+                                    Text("128").tag(128)
+                                    Text("256").tag(256)
+                                    Text("512").tag(512)
+                                    Text("1024").tag(1024)
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                                .frame(width: 96)
+                            }
+
+                            Spacer()
+
+                            if let stats = model.selectedStats {
+                                StatLabel("n", "\(stats.count)")
+                            }
+                        }
+
+                        HistogramView(model: model)
+                            .frame(height: 240)
 
                         if let stats = model.selectedStats {
-                            StatLabel("n", "\(stats.count)")
+                            StatsGrid(stats: stats)
                         }
-                    }
 
-                    HistogramView(model: model)
-                        .frame(height: 260)
+                        HStack(spacing: 8) {
+                            Button("Auto Scale") {
+                                model.applyScalePreset(.percentile)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(model.selectedStats == nil)
 
-                    if let stats = model.selectedStats {
-                        StatsGrid(stats: stats)
+                            Spacer()
+
+                            Button {
+                                model.exportPNG()
+                            } label: {
+                                Label("Export PNG…", systemImage: "square.and.arrow.down")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(model.selectedImage == nil)
+                            .help("Export pure sRGB PNG without overlays (Cmd+Shift+E)")
+                        }
+                        .padding(.top, 2)
+                    } else {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(
+                                "Switch to Single view to adjust color scale and inspect the channel histogram."
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                            if model.selectedFile != nil {
+                                Button("Open Single View") {
+                                    model.setMode(.single)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                        }
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(AppTheme.elevatedCard(for: colorScheme))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                        .stroke(AppTheme.hairlineBorder(for: colorScheme), lineWidth: 1)
+                                )
+                        )
                     }
                 }
-                .disabled(!isSingle)
-                .opacity(isSingle ? 1 : 0.35)
-
-                Button {
-                    model.exportPNG()
-                } label: {
-                    Label("Export PNG", systemImage: "square.and.arrow.down")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .keyboardShortcut("e", modifiers: [.command, .shift])
-                .disabled(!isSingle || model.selectedImage == nil)
 
                 InspectorSection(title: "Spectroscopy") {
                     if model.mode == .grid {
@@ -343,16 +331,258 @@ struct InspectorView: View {
                             }
                         }
 
-                        StatLabel("groups", "\(groups.count)")
-                        StatLabel(
-                            "visible spectra",
-                            "\(model.spectraForMarkers(on: file).count)"
-                        )
+                        HStack {
+                            StatLabel("groups", "\(groups.count)")
+                            Spacer()
+                            StatLabel(
+                                "visible spectra",
+                                "\(model.spectraForMarkers(on: file).count)"
+                            )
+                        }
                     }
+                }
+
+                if let metadataPresentation {
+                    rawHeaderSection(metadataPresentation)
                 }
             }
             .padding(12)
         }
+    }
+
+    @ViewBuilder
+    private func acquisitionSummaryBlock(
+        file: SXMMetadata,
+        presentation: InspectorMetadataPresentation
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(file.filename)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+
+                HStack(spacing: 6) {
+                    Text(formattedInspectorChannel(presentation))
+                        .font(.caption2.weight(.medium))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2.5)
+                        .background(
+                            Capsule()
+                                .fill(AppTheme.subtleFill)
+                        )
+                        .foregroundStyle(.secondary)
+
+                    if let isFeedbackActive = presentation.isFeedbackActive {
+                        Text(isFeedbackActive ? "Feedback ON" : "Const. Height")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2.5)
+                            .background(
+                                Capsule()
+                                    .fill(
+                                        (isFeedbackActive ? Color.green : Color.orange)
+                                            .opacity(colorScheme == .dark ? 0.22 : 0.14)
+                                    )
+                            )
+                            .foregroundStyle(isFeedbackActive ? Color.green : Color.orange)
+                    }
+                }
+            }
+
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(), spacing: 8),
+                    GridItem(.flexible(), spacing: 8)
+                ],
+                spacing: 8
+            ) {
+                AcquisitionMetricTile(
+                    label: "Sample Bias",
+                    value: presentation.sampleBiasVolts.map {
+                        AppTheme.formattedSI($0, unit: "V")
+                    } ?? "—"
+                )
+                AcquisitionMetricTile(
+                    label: "Setpoint",
+                    value: formattedSetpoint(presentation)
+                )
+                AcquisitionMetricTile(
+                    label: "Scan Size",
+                    value: AppTheme.formattedScanFootprint(
+                        presentation.scanRangeMeters
+                    ) ?? "—"
+                )
+                AcquisitionMetricTile(
+                    label: "Temperature",
+                    value: presentation.temperatureKelvin.map(
+                        AppTheme.formattedTemperature
+                    ) ?? "—"
+                )
+                AcquisitionMetricTile(
+                    label: "Scan Speed",
+                    value: presentation.scanSpeedMetersPerSecond.map {
+                        AppTheme.formattedSI($0, unit: "m/s")
+                    } ?? "—"
+                )
+                AcquisitionMetricTile(
+                    label: "Acq. Time",
+                    value: presentation.acquisitionSeconds.map(
+                        AppTheme.formattedDuration
+                    ) ?? "—"
+                )
+            }
+
+            if let comment = presentation.comment {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Comment")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(comment)
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(AppTheme.elevatedCard(for: colorScheme))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(AppTheme.hairlineBorder(for: colorScheme), lineWidth: 1)
+                        )
+                )
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                InspectorMetadataRow(
+                    "Dimensions",
+                    "\(presentation.pixelWidth) × \(presentation.pixelHeight) px"
+                )
+                InspectorMetadataRow(
+                    "Offset",
+                    formattedInspectorPair(
+                        presentation.scanOffsetMeters,
+                        separator: " · ",
+                        includesAxisNames: true
+                    )
+                )
+                InspectorMetadataRow(
+                    "Angle",
+                    formattedInspectorAngle(presentation.scanAngleDegrees)
+                )
+                if let controller = presentation.feedbackControllerName {
+                    InspectorMetadataRow("Controller", controller)
+                }
+                InspectorMetadataRow(
+                    "Recorded",
+                    presentation.recordedTime.map {
+                        formattedMetadataDate($0)
+                    } ?? "Not recorded"
+                )
+                InspectorMetadataRow(
+                    "Modified",
+                    formattedMetadataDate(presentation.modifiedTime)
+                )
+            }
+            .padding(.top, 2)
+        }
+    }
+
+    @ViewBuilder
+    private func rawHeaderSection(
+        _ presentation: InspectorMetadataPresentation
+    ) -> some View {
+        let filteredEntries = presentation.filteredHeaderEntries(
+            matching: rawHeaderQuery
+        )
+
+        DisclosureGroup(
+            "Raw Header (\(presentation.rawHeaderEntries.count))",
+            isExpanded: $isRawHeaderExpanded
+        ) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("Filter header keys or values…", text: $rawHeaderQuery)
+                        .textFieldStyle(.plain)
+                        .font(.caption)
+                    if !rawHeaderQuery.isEmpty {
+                        Button {
+                            rawHeaderQuery = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear raw header filter")
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(AppTheme.subtleFill)
+                )
+
+                if filteredEntries.isEmpty {
+                    Text("No matching header entries.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 4)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 6) {
+                            ForEach(filteredEntries) { entry in
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(entry.key)
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                    Text(entry.value)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundStyle(.primary)
+                                        .textSelection(.enabled)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        .padding(8)
+                    }
+                    .frame(maxHeight: 220)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(AppTheme.elevatedCard(for: colorScheme))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .stroke(AppTheme.hairlineBorder(for: colorScheme), lineWidth: 1)
+                            )
+                    )
+                }
+            }
+            .padding(.top, 6)
+        }
+        .font(.system(size: 13, weight: .semibold))
+    }
+
+    private func formattedSetpoint(
+        _ presentation: InspectorMetadataPresentation
+    ) -> String {
+        if let value = presentation.setpointValue,
+           let unit = presentation.setpointUnit,
+           !unit.isEmpty {
+            if ["A", "V", "Hz", "m"].contains(unit) {
+                return AppTheme.formattedSI(value, unit: unit)
+            }
+            return "\(AppTheme.formattedSI(value, unit: "")) \(unit)"
+        }
+        if let value = presentation.setpointValue {
+            return AppTheme.formattedSI(value, unit: "")
+        }
+        return presentation.setpointRawText ?? "—"
     }
 
     private func formattedMetadataDate(
@@ -381,10 +611,7 @@ struct InspectorView: View {
     private func formattedInspectorLength(
         _ meters: Double
     ) -> String {
-        if meters == 0 {
-            return "0 m"
-        }
-        return "\(compact(meters))m"
+        AppTheme.formattedSI(meters, unit: "m")
     }
 
     private func formattedInspectorAngle(
@@ -410,6 +637,39 @@ struct InspectorView: View {
         return presentation.channelName
             + " · "
             + presentation.channelUnit
+    }
+}
+
+private struct AcquisitionMetricTile: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let label: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Text(value)
+                .font(.system(size: 12.5, weight: .medium).monospacedDigit())
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .textSelection(.enabled)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(AppTheme.elevatedCard(for: colorScheme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(AppTheme.hairlineBorder(for: colorScheme), lineWidth: 1)
+                )
+        )
+        .accessibilityElement(children: .combine)
     }
 }
 

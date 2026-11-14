@@ -1,7 +1,7 @@
 # SXM Browser 项目进展评估与演进规划报告
 
-当前基准：`main` / `codex/sxm-reliability-ui` 分支 `HEAD`（`v2.5.1`，Build 95）  
-实测验证：全量 **315 项自动化测试通过**（[`SXMBrowserCoreTests`](native/SXMBrowserNative/Tests/SXMBrowserCoreTests) 69 项 + [`SXMBrowserAppCoreTests`](native/SXMBrowserNative/Tests/SXMBrowserAppCoreTests) 235 项 + [`SXMBrowserNativeUITests`](native/SXMBrowserNative/Tests/SXMBrowserNativeUITests) 11 项，全量运行耗时 `< 1s`），标准样例（6 个 `.sxm` + 18 个 `.dat`）[`SXMBrowserSmoke`](native/SXMBrowserNative/Sources/SXMBrowserSmoke/main.swift#L1-L473) 契约校验与 500×512×512 性能门禁（中位数 `scan 29.173 ms / image 21.460 ms / thumbnail 21.939 ms`）全部通过。
+当前基准：`codex/sxm-ui-2.6` 分支（`v2.6.0`，Build 96，基于 `v2.5.1` Build 95 完成原生 UI 全面美化与 Dark/Light 科研绘图适配升级）。  
+实测验证：全量 **322 项自动化测试通过**（[`SXMBrowserCoreTests`](native/SXMBrowserNative/Tests/SXMBrowserCoreTests) 70 项 + [`SXMBrowserAppCoreTests`](native/SXMBrowserNative/Tests/SXMBrowserAppCoreTests) 239 项 + [`SXMBrowserNativeUITests`](native/SXMBrowserNative/Tests/SXMBrowserNativeUITests) 13 项），标准样例（6 个 `.sxm` + 18 个 `.dat`，0 问题）[`SXMBrowserSmoke`](native/SXMBrowserNative/Sources/SXMBrowserSmoke/main.swift#L1-L473) 契约校验与 500×512×512 性能门禁（中位数 `scan 27.743 ms / image 21.742 ms / thumbnail 21.892 ms`）全部通过。
 
 ---
 
@@ -138,8 +138,10 @@ flowchart TD
 
 | 归属支柱 | 原编号 | 模块 | 现存问题描述 | 处理策略 |
 | :--- | :--- | :--- | :--- | :--- |
-| **数据可靠性** | **D10 / D12** | `SpectroscopyController` / `SXMBrowserNativeApp` | 缺少 UI 入口解除/重置 `.dat` 手动关联（`.missingManualTarget` 状态无处恢复）；`WindowGroup` 共享会话缺乏多窗口隔离 | 在 `v2.6` 补齐“重置手动关联”入口并实施每窗口独立会话隔离 |
-| **UI 美观** | **D10** | `GridBrowserView` / `SingleSpectroscopyDrawer` | 网格开启谱图卡片混排时，上下方向键仅按纯 `.sxm` 数量加减列步长导致跨行错位；[`SingleSpectroscopyDrawer.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/SingleViewer/SingleSpectroscopyDrawer.swift) 中 `SpectroscopyLegend.==` 仅对比谱线数量，同数量替换时图例漏刷 | 在 `v2.7` 统一基于实际网格项索引计算二维键盘导航，并改为对比可见/全部谱线标识数组 |
+| **数据可靠性** | **D10 / D12** | `SpectroscopyController` / `SXMBrowserNativeApp` | 缺少 UI 入口解除/重置 `.dat` 手动关联（`.missingManualTarget` 状态无处恢复）；`WindowGroup` 共享会话缺乏多窗口隔离 | 在 `v2.7` 实时监听与多窗口迭代中补齐 |
+
+> [!NOTE]
+> 以下 `v2.5` UI 交互遗留问题已在 **`v2.6.0` (Build 96)** 中完成交付：自适应深浅色科学绘图与 `1-2-5` 刻度（`ScientificPlotTicks`）、单图与缩略图 `NaN` 未采集区域透明棋盘底板、Inspector 结构化物理采集参数卡片与可检索 `Raw Header`、混排网格真实二维方向键导航（`AdaptiveGridNavigation.targetFileID`），以及 `SpectroscopyLegend.==` 基于 ID 列表与焦点状态的精确刷新同步。
 
 ---
 
@@ -149,11 +151,11 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    Done["已完成: v2.4.1 - v2.5.0
-    P0 校准 + 架构瘦身 + @Observable + 视口优先"] --> Next2["阶段二: v2.6 (数据可靠性)
-    机台实时看片 + 参数锁定 + 异常/编码兜底"]
-    Next2 --> Next3["阶段三: v2.7 (UI 全面美观)
-    原生视觉精修 + 采集参数微排版 + 系统级预览"]
+    Done["已完成: v2.4.1 - v2.5.1
+    P0 校准 + 架构瘦身 + @Observable + 无极拖拽"] --> Done2["已完成: v2.6.0 (Build 96)
+    UI 全面美化 · 深浅色绘图 · 采集参数卡片 · 2D 网格导航"]
+    Done2 --> Next3["后续方向: v2.7+
+    实时文件夹监听 + 多窗口隔离 + 扩展兼容性"]
 ```
 
 ---
@@ -179,35 +181,14 @@ flowchart LR
 
 ---
 
-### 阶段二：`v2.6` 机台实时监看与全边界数据可靠（核心目标：数据可靠性）
+### 阶段二：`v2.6.0` UI 全面美化、科学绘图适配与交互细节完成情况（`v2.6.0` Build 96，已完成）
 
-针对机台旁持续采图、半途停扫与跨日序列比对的真实科研现场，做到“数据不漏、状态不乱、异常不崩”：
+- [x] **Dark/Light 自适应设计令牌与 `NaN` 停扫底板**：[`AppTheme.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/Root/AppTheme.swift) 引入统一的深浅色绘图与卡片表面色板、`MissingDataBackdrop` 细格棋盘及 SI/扫描范围/耗时格式化；`RenderOptions.transparentMissingValues` 在交互缩略图与单图画布中将非有限像素渲染为透明，纯净 PNG 导出保持不透明。
+- [x] **谱图画布、直方图与比例尺升级**：新增 [`ScientificPlotTicks.swift`](native/SXMBrowserNative/Sources/SXMBrowserAppCore/ScientificPlotTicks.swift) 计算 `1-2-5` 刻度与紧凑科学标签，[`SpectroscopyPlotView.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/Spectroscopy/SpectroscopyPlotView.swift) 与 [`HistogramView.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/Inspector/HistogramView.swift) 全面适配深浅色模式及调色板 7 号槽高对比替代色；[`ScreenScaleBar.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/SingleViewer/ScreenScaleBar.swift) 与 [`PaletteStrip.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/Inspector/PaletteStrip.swift) 完成精修。
+- [x] **Inspector 采集参数卡片与可检索 `Raw Header`**：[`InspectorMetadata.swift`](native/SXMBrowserNative/Sources/SXMBrowserAppCore/InspectorMetadata.swift) 结构化解析偏压、反馈状态、Setpoint、温度、扫速、耗时与备注，[`InspectorView.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/Inspector/InspectorView.swift) 采用 2×3 物理指标卡片、可搜索 `Raw Header` 折叠区及网格模式紧凑提示条。
+- [x] **混排网格二维键盘导航与图例判等修复**：[`AdaptiveGridLayout.swift`](native/SXMBrowserNative/Sources/SXMBrowserAppCore/AdaptiveGridLayout.swift) 新增 `AdaptiveGridNavigation.targetFileID`，[`SingleSpectroscopyDrawer.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/SingleViewer/SingleSpectroscopyDrawer.swift) 修复 `SpectroscopyLegend.==` 对比可见/全部 ID 与焦点状态。
 
-1. **实验文件夹实时安全监听（Live Folder Watch）**
-   - 基于 `FSEventStream` / `DispatchSource` 监听当前目录增删改，结合 [`DatasetInventorySignature`](native/SXMBrowserNative/Sources/SXMBrowserAppCore/DatasetInventorySignature.swift) 执行防抖增量扫描，完整保留已有缩略图缓存、筛选词与标签上下文。
-   - **落盘完整性保护（Write-in-progress Guard）**：对 Nanonis 正在写入、字节数尚未达到预期矩阵载荷大小的 `.sxm` / `.dat` 文件自动延后重试，绝不将半写状态误报为损坏或渲染花屏。
-   - 提供 **`Cmd+R` 手动刷新** 与工具栏轻量的 **“Follow Latest（自动跟进最新扫描图）”** 开关。
-2. **序列监看一致性与元数据闭环**
-   - **跨文件监看参数锁定（Lock Channel / Processing / Scale）**：在连续翻看变偏压（Bias series）或变高度（Z-dependent Δf）序列图时，可选锁定当前通道、处理方式与色阶范围，防止每翻一页自动重置导致视觉基准跳变。
-   - **元数据自愈与多窗口隔离**：补齐解除/重置 `.dat` 手动关联的菜单入口；将窗口状态改为每窗口独立会话（或明确单窗口模式约束），彻底消除多标签页抢占书签与缩放状态。
-3. **更广的只读兼容性与停扫数据真实表达**
-   - 在 `SXMParser` 中补齐 `FLOAT LSBFIRST` 与整型 `SCANIT_TYPE` 只读解码校验，覆盖更多控制器配置与第三方转存 `.sxm` 文件。
-   - 完善实验中途停扫（Aborted scan）产生的含 `NaN` 矩阵监看策略：明确区分“未采集 `NaN` 区域”与“有效极小值区域”，并增强自动色阶在极端针尖跳变（Tip spike）下的稳健性（新增一键 `2–98%` / 抗离群值色阶预设）。
+### 阶段三（后续方向）：实时监听与多窗口/系统集成（规划中）
 
----
-
-### 阶段三：`v2.7` 原生审美升华与精致视觉体验（核心目标：UI 全面美观）
-
-对标 Apple 原生专业工具（如预览、数码测色计、快捷指令）的视觉水准，打磨每一处像素与动效：
-
-1. **全局视觉语言与画布质感统一**
-   - **统一材质与排版韵律**：梳理侧栏、网格卡片、Single 纯净画布、底部谱图抽屉与右侧 Inspector 的背景材质（Vibrancy）、1px 分割线对比度、圆角规范与留白栅格，确保 Dark Mode 与 Light Mode 下均具备通透克制的仪器美感。
-   - **`NaN` 未扫描像素优雅底板**：在 Single 画布与网格缩略图中，将停扫文件的 `NaN` 区域渲染为柔和的中性细微棋盘/暗灰底色，替代生硬黑块。
-   - **空状态、加载态与诊断反馈重设计**：优化首次启动引导页、空筛选结果占位图、骨架加载过渡与非侵入式状态提示。
-2. **核心采集参数高可读性微排版（Inspector 焕新）**
-   - 从 `SXMMetadata.header` 结构化提炼实验员看片最核心的物理参数——**偏压（Sample Bias）**、**设定点（Setpoint）**、**扫描范围（Scan Range）**、**反馈模式（恒流/恒高）**、**采集耗时** 与 **`:COMMENT:` 备注**——采用紧凑清晰的键值卡片与等宽数字（`.monospacedDigit()`）排版，并提供干净的可折叠 **Raw Header 快速检索区**。
-3. **谱图抽屉与网格微交互精修**
-   - 优化谱图抽屉的坐标轴网格线呼吸感、科学计数法刻度对齐、高对比度谱线描边及聚焦点位联动动效；修复 `SpectroscopyLegend.==` 判等逻辑确保图例实时准确刷新。
-   - 修正网格混排 `.sxm` 与 `.dat` 谱图卡片时的二维方向键导航，保证键盘上下左右移动严格对齐视觉列。
-4. **系统级原生融通体验**
-   - 在 [Info.plist](native/SXMBrowserNative/Bundle/Info.plist) 完整注册 `.sxm` / `.dat` 文档类型（UTI）与精致文档图标，支持在 Finder 中双击文件或拖入 Dock 图标直接启动并聚焦对应图像；评估提供轻量级 **macOS Quick Look 预览扩展**，让用户在 Finder 按空格键即可秒看 `.sxm` 预览图。
+1. **实验文件夹实时安全监听（Live Folder Watch）与只读兼容性拓展**
+   - 监听工作目录增量变化、半写保护（Write-in-progress Guard）、`Cmd+R` 刷新、通道/色阶锁定，以及按需扩展 `FLOAT LSBFIRST` 与系统 UTI / Quick Look（不在本次 `v2.6.0` 范围内）。

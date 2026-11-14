@@ -4,6 +4,14 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+## 2.6.0 - 2026-11-14
+
+- Build 96 (2026-11-14): Deliver the v2.6.0 native UI overhaul: adaptive Dark/Light plots, NaN missing-data backdrop, structured Inspector acquisition cards with searchable Raw Header, and 2D mixed-grid navigation:
+  - Add cohesive Dark/Light semantic tokens (`AppTheme` plot/card/checkerboard surfaces, `MissingDataBackdrop`, and SI/scan-footprint/duration formatters) plus `RenderOptions.transparentMissingValues` so incomplete/aborted scans with `NaN` values reveal a subtle neutral checkerboard in thumbnails and the single canvas while keeping `exportPNG()` opaque sRGB.
+  - Upgrade `SpectroscopyPlotView`, `HistogramView`, `PaletteStrip`, and `ScreenScaleBar` with adaptive Dark/Light surfaces, `ScientificPlotTicks` (`1-2-5` nice steps and compact scientific labels), dark-mode contrast substitution for spectrum palette index `6`, contrast-ring `MeasurementMarker`, `LinearGradient` `PaletteStrip`, and crisp calibrated `ScreenScaleBar` end-ticks; fix `SpectroscopyLegend.==` to compare visible/all spectrum IDs and `focusedSpectrumID`.
+  - Overhaul `InspectorView` with `InspectorMetadataPresentation` physical acquisition summary cards (sample bias, Z-controller feedback badge & setpoint, scan size, temperature, scan speed, acquisition time, comment), collapsible searchable `Raw Header` inspector (`filteredHeaderEntries(matching:)`), compact disabled-grid Color Scale & Histogram callout, and compact secondary `Export PNG…`; show physical scan range and `.dat` counts in sidebar & grid cards and align grid gutters with `metrics.spacing`.
+  - Add `AdaptiveGridNavigation.targetFileID` and wire `AppModel.moveSelectionForArrow` in grid mode to navigate accurately by 2D visual grid slots across mixed SXM and spectroscopy cards.
+
 ## 2.5.1 - 2026-11-14
 
 - Build 95 (2026-11-14): Quit on last window close and make Histogram scale dragging stepless:

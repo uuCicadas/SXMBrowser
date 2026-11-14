@@ -287,6 +287,7 @@ public enum SXMRenderer {
             vmin: resolvedMin,
             vmax: resolvedMax,
             invert: options.invert,
+            transparentMissingValues: options.transparentMissingValues,
             cancellation: cancellation
         )
         try cancellation.check()
@@ -336,7 +337,8 @@ public enum SXMRenderer {
         palette: PaletteName,
         vmin: Double?,
         vmax: Double?,
-        invert: Bool
+        invert: Bool,
+        transparentMissingValues: Bool = false
     ) -> [UInt8] {
         try! colorize(
             matrix: matrix,
@@ -344,6 +346,7 @@ public enum SXMRenderer {
             vmin: vmin,
             vmax: vmax,
             invert: invert,
+            transparentMissingValues: transparentMissingValues,
             cancellation: .none
         )
     }
@@ -354,6 +357,7 @@ public enum SXMRenderer {
         vmin: Double?,
         vmax: Double?,
         invert: Bool,
+        transparentMissingValues: Bool = false,
         cancellation: CancellationCheckpoint
     ) throws -> [UInt8] {
         let auto = try (vmin == nil || vmax == nil)
@@ -377,13 +381,20 @@ public enum SXMRenderer {
                         try cancellation.check()
                     }
                     let value = valuesBase[idx]
+                    let base = idx * 4
+                    if !value.isFinite && transparentMissingValues {
+                        rgbaBase[base] = 0
+                        rgbaBase[base + 1] = 0
+                        rgbaBase[base + 2] = 0
+                        rgbaBase[base + 3] = 0
+                        continue
+                    }
                     var scaled = value.isFinite
                         ? (hasSpan ? (Double(value) - lo) / span : 0.5)
                         : 0
                     scaled = min(1, max(0, scaled))
                     if invert { scaled = 1 - scaled }
                     let color = lookup.color(at: scaled)
-                    let base = idx * 4
                     rgbaBase[base] = UInt8(min(255, max(0, round(color.r * 255))))
                     rgbaBase[base + 1] = UInt8(min(255, max(0, round(color.g * 255))))
                     rgbaBase[base + 2] = UInt8(min(255, max(0, round(color.b * 255))))

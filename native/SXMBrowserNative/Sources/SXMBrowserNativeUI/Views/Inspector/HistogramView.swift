@@ -4,6 +4,7 @@ import SXMBrowserCore
 import SwiftUI
 
 struct HistogramView: View {
+    @Environment(\.colorScheme) private var colorScheme
     let model: AppModel
     @State private var dragMode: DragMode?
 
@@ -13,7 +14,7 @@ struct HistogramView: View {
         case range(offsetMin: Double, offsetMax: Double)
     }
 
-    private let inset = EdgeInsets(top: 12, leading: 62, bottom: 26, trailing: 12)
+    private let inset = EdgeInsets(top: 12, leading: 78, bottom: 26, trailing: 12)
 
     var body: some View {
         GeometryReader { proxy in
@@ -21,12 +22,12 @@ struct HistogramView: View {
                 drawHistogram(context: &context, size: size)
             }
             .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(red: 0.035, green: 0.036, blue: 0.040))
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(AppTheme.plotCanvasBackground(for: colorScheme))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(AppTheme.hairlineBorder(for: colorScheme), lineWidth: 1)
             )
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -39,9 +40,10 @@ struct HistogramView: View {
     }
 
     private func drawHistogram(context: inout GraphicsContext, size: CGSize) {
+        let axisTextColor = AppTheme.plotAxisText(for: colorScheme)
         guard let stats = model.selectedStats else {
             context.draw(
-                Text("No histogram").font(.caption).foregroundColor(.white.opacity(0.65)),
+                Text("No histogram").font(.caption).foregroundColor(axisTextColor.opacity(0.8)),
                 at: CGPoint(x: size.width / 2, y: size.height / 2)
             )
             return
@@ -55,13 +57,27 @@ struct HistogramView: View {
         let lower = min(scaleMin, scaleMax)
         let upper = max(scaleMin, scaleMax)
 
-        drawGrid(context: &context, plot: plot, stats: stats)
+        let yTicks = ScientificPlotTicks.ticks(min: fullMin, max: fullMax, targetCount: 4)
+        drawGrid(context: &context, plot: plot, yTicks: yTicks)
         drawPaletteRail(context: &context, plot: plot)
 
         let yUpper = yForValue(upper, plot: plot, min: fullMin, max: fullMax)
         let yLower = yForValue(lower, plot: plot, min: fullMin, max: fullMax)
+        let clipColor = AppTheme.histogramClipOverlay(for: colorScheme)
+        if yUpper > plot.minY {
+            let topClip = CGRect(x: plot.minX, y: plot.minY, width: plot.width, height: yUpper - plot.minY)
+            context.fill(Path(topClip), with: .color(clipColor))
+        }
+        if yLower < plot.maxY {
+            let bottomClip = CGRect(x: plot.minX, y: yLower, width: plot.width, height: plot.maxY - yLower)
+            context.fill(Path(bottomClip), with: .color(clipColor))
+        }
+
         let selectedRect = CGRect(x: plot.minX, y: min(yUpper, yLower), width: plot.width, height: abs(yLower - yUpper))
-        context.fill(Path(roundedRect: selectedRect, cornerRadius: 3), with: .color(AppTheme.histogramHandle.opacity(0.10)))
+        context.fill(
+            Path(roundedRect: selectedRect, cornerRadius: 2),
+            with: .color(AppTheme.histogramHandleStroke(for: colorScheme).opacity(0.08))
+        )
 
         let maxCount = max(1, stats.hist.max() ?? 1)
         var outline = Path()
@@ -75,44 +91,72 @@ struct HistogramView: View {
             outline.addLine(to: CGPoint(x: x, y: y))
         }
         outline.addLine(to: CGPoint(x: plot.minX, y: plot.minY))
-        context.fill(outline, with: .color(AppTheme.histogramFill.opacity(0.28)))
-        context.stroke(outline, with: .color(AppTheme.histogramStroke), lineWidth: 1.25)
+        context.fill(outline, with: .color(AppTheme.histogramBarFill(for: colorScheme).opacity(0.36)))
+        context.stroke(outline, with: .color(AppTheme.histogramBarStroke(for: colorScheme)), lineWidth: 1.35)
 
         drawScaleHandle(context: &context, plot: plot, value: upper, min: fullMin, max: fullMax, label: compact(upper), isUpper: true)
         drawScaleHandle(context: &context, plot: plot, value: lower, min: fullMin, max: fullMax, label: compact(lower), isUpper: false)
 
-        context.draw(Text(compact(fullMax)).font(.caption2).foregroundColor(.white.opacity(0.72)), at: CGPoint(x: 8, y: plot.minY + 1), anchor: .leading)
-        context.draw(Text(compact((fullMax + fullMin) / 2)).font(.caption2).foregroundColor(.white.opacity(0.54)), at: CGPoint(x: 8, y: plot.midY), anchor: .leading)
-        context.draw(Text(compact(fullMin)).font(.caption2).foregroundColor(.white.opacity(0.72)), at: CGPoint(x: 8, y: plot.maxY - 1), anchor: .leading)
-        context.draw(Text("0%").font(.caption2).foregroundColor(.white.opacity(0.72)), at: CGPoint(x: plot.minX, y: plot.maxY + 17), anchor: .topLeading)
-        context.draw(Text("max").font(.caption2).foregroundColor(.white.opacity(0.72)), at: CGPoint(x: plot.maxX, y: plot.maxY + 17), anchor: .topTrailing)
+        if yTicks.count >= 2 {
+            var lastDrawnY: CGFloat?
+            for tick in yTicks.reversed() {
+                let y = plot.maxY - CGFloat(tick.fraction) * plot.height
+                if let prev = lastDrawnY, abs(y - prev) < 15 { continue }
+                lastDrawnY = y
+                context.draw(
+                    Text(tick.label)
+                        .font(.system(size: 9.5).monospacedDigit())
+                        .foregroundColor(axisTextColor),
+                    at: CGPoint(x: plot.minX - 24, y: y),
+                    anchor: .trailing
+                )
+            }
+        } else {
+            context.draw(
+                Text(compact(fullMax)).font(.caption2.monospacedDigit()).foregroundColor(axisTextColor),
+                at: CGPoint(x: plot.minX - 24, y: plot.minY + 1),
+                anchor: .trailing
+            )
+            context.draw(
+                Text(compact(fullMin)).font(.caption2.monospacedDigit()).foregroundColor(axisTextColor),
+                at: CGPoint(x: plot.minX - 24, y: plot.maxY - 1),
+                anchor: .trailing
+            )
+        }
+        context.draw(Text("0").font(.caption2.monospacedDigit()).foregroundColor(axisTextColor), at: CGPoint(x: plot.minX, y: plot.maxY + 16), anchor: .topLeading)
+        context.draw(Text("peak").font(.caption2).foregroundColor(axisTextColor), at: CGPoint(x: plot.maxX, y: plot.maxY + 16), anchor: .topTrailing)
     }
 
-    private func drawGrid(context: inout GraphicsContext, plot: CGRect, stats: HistogramStats) {
-        for i in 0...6 {
-            let y = plot.minY + plot.height * CGFloat(i) / 6
+    private func drawGrid(context: inout GraphicsContext, plot: CGRect, yTicks: [ScientificAxisTick]) {
+        let gridColor = AppTheme.plotMajorGrid(for: colorScheme)
+        let borderColor = AppTheme.plotBorder(for: colorScheme)
+
+        context.stroke(Path(plot), with: .color(borderColor.opacity(0.7)), lineWidth: 1)
+
+        for tick in yTicks {
+            let y = plot.maxY - CGFloat(tick.fraction) * plot.height
             var path = Path()
             path.move(to: CGPoint(x: plot.minX, y: y))
             path.addLine(to: CGPoint(x: plot.maxX, y: y))
-            context.stroke(path, with: .color(.white.opacity(i == 0 || i == 6 ? 0.18 : 0.075)), lineWidth: 1)
+            context.stroke(path, with: .color(gridColor), lineWidth: 1)
         }
 
-        for i in 0...4 {
+        for i in 1...3 {
             let x = plot.minX + plot.width * CGFloat(i) / 4
             var path = Path()
             path.move(to: CGPoint(x: x, y: plot.minY))
             path.addLine(to: CGPoint(x: x, y: plot.maxY))
-            context.stroke(path, with: .color(.white.opacity(i == 0 ? 0.18 : 0.065)), lineWidth: 1)
+            context.stroke(path, with: .color(gridColor.opacity(0.8)), lineWidth: 1)
         }
     }
 
     private func drawPaletteRail(context: inout GraphicsContext, plot: CGRect) {
-        let rail = CGRect(x: plot.minX - 18, y: plot.minY, width: 6, height: plot.height)
+        let rail = CGRect(x: plot.minX - 18, y: plot.minY, width: 7, height: plot.height)
         let stops = PaletteStore.shared.stops(for: model.selectedPalette)
         let gradient = Gradient(
             stops: stops.map {
                 Gradient.Stop(
-                    color: Color(red: $0.r, green: $0.g, blue: $0.b),
+                    color: Color(.sRGB, red: $0.r, green: $0.g, blue: $0.b, opacity: 1),
                     location: $0.position
                 )
             }
@@ -123,12 +167,12 @@ struct HistogramView: View {
         let endPoint = model.invertPalette
             ? CGPoint(x: rail.midX, y: rail.maxY)
             : CGPoint(x: rail.midX, y: rail.minY)
-        let railPath = Path(roundedRect: rail, cornerRadius: 2)
+        let railPath = Path(roundedRect: rail, cornerRadius: 2.5)
         context.fill(
             railPath,
             with: .linearGradient(gradient, startPoint: startPoint, endPoint: endPoint)
         )
-        context.stroke(railPath, with: .color(.white.opacity(0.30)), lineWidth: 0.7)
+        context.stroke(railPath, with: .color(AppTheme.plotBorder(for: colorScheme)), lineWidth: 0.8)
     }
 
     private func drawScaleHandle(
@@ -140,26 +184,30 @@ struct HistogramView: View {
         label: String,
         isUpper: Bool
     ) {
+        let handleColor = AppTheme.histogramHandleStroke(for: colorScheme)
         let y = yForValue(value, plot: plot, min: min, max: max)
         var line = Path()
         line.move(to: CGPoint(x: plot.minX - 8, y: y))
         line.addLine(to: CGPoint(x: plot.maxX, y: y))
-        context.stroke(line, with: .color(AppTheme.histogramHandle), lineWidth: 1.8)
+        context.stroke(line, with: .color(handleColor), lineWidth: 1.8)
 
-        let knob = CGRect(x: plot.minX - 12, y: y - 6, width: 12, height: 12)
-        context.fill(Path(ellipseIn: knob), with: .color(AppTheme.histogramHandle))
-        context.stroke(Path(ellipseIn: knob), with: .color(.white.opacity(0.9)), lineWidth: 0.8)
+        let knob = CGRect(x: plot.minX - 12, y: y - 5.5, width: 11, height: 11)
+        context.fill(Path(ellipseIn: knob), with: .color(handleColor))
+        context.stroke(Path(ellipseIn: knob), with: .color(AppTheme.plotCanvasBackground(for: colorScheme)), lineWidth: 1.2)
 
         let labelWidth: CGFloat = Swift.min(96, Swift.max(54, CGFloat(label.count) * 7 + 12))
         let labelRect = CGRect(
             x: plot.maxX - labelWidth - 6,
-            y: Swift.min(plot.maxY - 23, Swift.max(plot.minY + 2, y + (isUpper ? 4 : -22))),
+            y: Swift.min(plot.maxY - 22, Swift.max(plot.minY + 3, y + (isUpper ? 4 : -22))),
             width: labelWidth,
-            height: 19
+            height: 18
         )
-        context.fill(Path(roundedRect: labelRect, cornerRadius: 4), with: .color(Color.black.opacity(0.68)))
-        context.stroke(Path(roundedRect: labelRect, cornerRadius: 4), with: .color(AppTheme.histogramHandle.opacity(0.72)), lineWidth: 0.8)
-        context.draw(Text(label).font(.caption2).foregroundColor(.white), at: CGPoint(x: labelRect.midX, y: labelRect.midY))
+        context.fill(Path(roundedRect: labelRect, cornerRadius: 4), with: .color(AppTheme.plotBadgeBackground(for: colorScheme)))
+        context.stroke(Path(roundedRect: labelRect, cornerRadius: 4), with: .color(handleColor.opacity(0.75)), lineWidth: 0.9)
+        context.draw(
+            Text(label).font(.caption2.monospacedDigit()).foregroundColor(AppTheme.plotAxisText(for: colorScheme)),
+            at: CGPoint(x: labelRect.midX, y: labelRect.midY)
+        )
     }
 
     private func handleDrag(_ value: DragGesture.Value, size: CGSize) {

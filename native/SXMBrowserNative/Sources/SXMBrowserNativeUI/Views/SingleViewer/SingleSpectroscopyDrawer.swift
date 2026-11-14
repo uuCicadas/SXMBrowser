@@ -414,9 +414,22 @@ struct SingleSpectroscopyDrawer: View {
     }
 }
 
-private struct SpectroscopyLegend: View, Equatable {
+struct SpectroscopyLegend: View, Equatable {
+    @Environment(\.colorScheme) private var colorScheme
     let model: AppModel
     let presentation: PresentedSpectroscopyGroup
+    let focusedSpectrumID: SpectroscopyFile.ID?
+    let canModifyVisibility: Bool
+
+    init(
+        model: AppModel,
+        presentation: PresentedSpectroscopyGroup
+    ) {
+        self.model = model
+        self.presentation = presentation
+        focusedSpectrumID = model.singleSpectroscopyState.focusedSpectrumID
+        canModifyVisibility = model.canModifySpectrumVisibility
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -447,12 +460,12 @@ private struct SpectroscopyLegend: View, Equatable {
         .padding(9)
         .background(
             RoundedRectangle(cornerRadius: 7)
-                .fill(AppTheme.subtleFill)
+                .fill(AppTheme.elevatedCard(for: colorScheme))
         )
         .overlay {
             RoundedRectangle(cornerRadius: 7)
                 .stroke(
-                    Color.secondary.opacity(0.18),
+                    AppTheme.hairlineBorder(for: colorScheme),
                     lineWidth: 1
                 )
         }
@@ -463,10 +476,12 @@ private struct SpectroscopyLegend: View, Equatable {
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.model === rhs.model
             && lhs.presentation.id == rhs.presentation.id
-            && lhs.presentation.allSpectra.count
-                == rhs.presentation.allSpectra.count
-            && lhs.presentation.visibleSpectra.count
-                == rhs.presentation.visibleSpectra.count
+            && lhs.presentation.allSpectra.map(\.id)
+                == rhs.presentation.allSpectra.map(\.id)
+            && lhs.presentation.visibleSpectra.map(\.id)
+                == rhs.presentation.visibleSpectra.map(\.id)
+            && lhs.focusedSpectrumID == rhs.focusedSpectrumID
+            && lhs.canModifyVisibility == rhs.canModifyVisibility
     }
 }
 

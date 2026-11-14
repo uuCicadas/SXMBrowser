@@ -104,4 +104,79 @@ public enum AdaptiveGridNavigation {
             return columns
         }
     }
+
+    public static func targetFileID<ID: Hashable>(
+        from currentID: ID?,
+        direction: GridNavigationDirection,
+        columnCount: Int,
+        itemFileIDs: [ID?]
+    ) -> ID? {
+        guard !itemFileIDs.isEmpty else { return nil }
+        let columns = max(1, columnCount)
+
+        guard let currentID,
+              let currentIndex = itemFileIDs.firstIndex(where: { $0 == currentID }) else {
+            switch direction {
+            case .left, .up:
+                return itemFileIDs.last { $0 != nil } ?? nil
+            case .right, .down:
+                return itemFileIDs.first { $0 != nil } ?? nil
+            }
+        }
+
+        switch direction {
+        case .left:
+            guard currentIndex > 0 else { return nil }
+            for index in stride(from: currentIndex - 1, through: 0, by: -1) {
+                if let candidate = itemFileIDs[index] {
+                    return candidate
+                }
+            }
+            return nil
+
+        case .right:
+            guard currentIndex + 1 < itemFileIDs.count else { return nil }
+            for index in (currentIndex + 1)..<itemFileIDs.count {
+                if let candidate = itemFileIDs[index] {
+                    return candidate
+                }
+            }
+            return nil
+
+        case .up, .down:
+            let totalRows = (itemFileIDs.count + columns - 1) / columns
+            let currentRow = currentIndex / columns
+            let currentCol = currentIndex % columns
+            let rowStep = direction == .up ? -1 : 1
+            var row = currentRow + rowStep
+
+            while row >= 0 && row < totalRows {
+                let rowStart = row * columns
+                let rowEnd = min(itemFileIDs.count, rowStart + columns)
+                let preferredIndex = rowStart + currentCol
+                if preferredIndex < rowEnd, let candidate = itemFileIDs[preferredIndex] {
+                    return candidate
+                }
+
+                // If that grid slot holds a non-SXM card (e.g. a spectroscopy card),
+                // snap to the closest selectable SXM card on the same visual row.
+                var bestIndex: Int?
+                var bestDistance = Int.max
+                for index in rowStart..<rowEnd {
+                    guard itemFileIDs[index] != nil else { continue }
+                    let distance = abs((index - rowStart) - currentCol)
+                    if distance < bestDistance {
+                        bestDistance = distance
+                        bestIndex = index
+                    }
+                }
+                if let bestIndex, let candidate = itemFileIDs[bestIndex] {
+                    return candidate
+                }
+
+                row += rowStep
+            }
+            return nil
+        }
+    }
 }

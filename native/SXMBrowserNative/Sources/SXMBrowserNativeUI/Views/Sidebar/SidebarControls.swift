@@ -95,35 +95,69 @@ struct FilledMenuButton<Content: View>: View {
 }
 
 struct FileRow: View {
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast)
     private var colorSchemeContrast
 
     let file: SXMMetadata
     let isSelected: Bool
     let isCurrent: Bool
+    var spectrumCount: Int = 0
     var isDropTargeted = false
+
+    private var footprintText: String? {
+        AppTheme.formattedScanFootprint(file.scanRange)
+    }
 
     var body: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(file.filename)
-                    .font(.system(size: 13, weight: .medium))
-                    .lineLimit(1)
-
                 HStack(spacing: 6) {
-                    Text(
-                        "\(file.pixels.width)x"
-                            + "\(file.pixels.height)"
-                    )
-                    if let channel = file.defaultChannel {
-                        Text(channel)
+                    Text(file.filename)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+
+                    if spectrumCount > 0 {
+                        HStack(spacing: 3) {
+                            Image(systemName: "waveform.path.ecg")
+                                .font(.system(size: 9, weight: .semibold))
+                            Text("\(spectrumCount)")
+                                .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                        }
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1.5)
+                        .background(
+                            Capsule()
+                                .fill(
+                                    isSelected
+                                        ? Color.white.opacity(0.22)
+                                        : AppTheme.subtleFill
+                                )
+                        )
+                        .foregroundStyle(
+                            isSelected ? Color.white : Color.secondary
+                        )
+                    }
+                }
+
+                HStack(spacing: 5) {
+                    if let footprintText {
+                        Text(footprintText)
                             .lineLimit(1)
+                        Text("·")
+                    }
+                    Text("\(file.pixels.width)×\(file.pixels.height)")
+                        .monospacedDigit()
+                    if !file.channels.isEmpty {
+                        Text("·")
+                        Text("\(file.channels.count) ch")
+                            .monospacedDigit()
                     }
                 }
                 .font(.caption)
                 .foregroundStyle(
                     isSelected
-                        ? Color.white.opacity(0.90)
+                        ? Color.white.opacity(0.88)
                         : Color.secondary
                 )
             }
@@ -156,7 +190,7 @@ struct FileRow: View {
                         ? Color.accentColor
                         : (
                             isCurrent && isSelected
-                                ? Color.white
+                                ? Color.white.opacity(0.92)
                                 : Color.clear
                         ),
                     lineWidth:

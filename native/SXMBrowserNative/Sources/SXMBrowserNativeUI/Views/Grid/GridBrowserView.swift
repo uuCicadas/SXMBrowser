@@ -25,7 +25,7 @@ struct GridBrowserView: View {
                     ScrollView {
                         LazyVGrid(
                             columns: columns(for: metrics),
-                            spacing: 16
+                            spacing: CGFloat(metrics.spacing)
                         ) {
                             ForEach(displayItems) { item in
                                 switch item {

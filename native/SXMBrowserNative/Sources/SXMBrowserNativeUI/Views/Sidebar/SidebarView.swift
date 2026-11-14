@@ -4,11 +4,12 @@ import SXMBrowserCore
 import SwiftUI
 
 struct SidebarView: View {
+    @Environment(\.colorScheme) private var colorScheme
     let model: AppModel
     let filenameSearchFocus: FocusState<Bool>.Binding
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Button {
@@ -23,11 +24,18 @@ struct SidebarView: View {
                     .keyboardShortcut("o")
 
                     Text(model.searchResultCountText)
-                        .font(.caption.monospacedDigit())
+                        .font(.caption.monospacedDigit().weight(.medium))
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, 9)
                         .padding(.vertical, 4)
-                        .background(Capsule().fill(AppTheme.subtleFill))
+                        .background(
+                            Capsule()
+                                .fill(AppTheme.subtleFill)
+                                .overlay(
+                                    Capsule()
+                                        .stroke(AppTheme.hairlineBorder(for: colorScheme), lineWidth: 1)
+                                )
+                        )
                         .accessibilityLabel("Search results")
                         .accessibilityValue(
                             model.searchResultCountText
@@ -130,7 +138,7 @@ struct SidebarView: View {
             }
 
             ZStack {
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(AppTheme.subtleFill.opacity(0.65))
 
                 if model.isLoading {
@@ -146,7 +154,11 @@ struct SidebarView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(AppTheme.hairlineBorder(for: colorScheme), lineWidth: 1)
+            )
 
             SidebarStatusFooter(dataset: model.dataset)
         }

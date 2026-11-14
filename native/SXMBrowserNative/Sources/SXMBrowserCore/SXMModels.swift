@@ -240,6 +240,7 @@ public struct RenderOptions: Hashable, Sendable {
     public let vmax: Double?
     public let outputSize: Int?
     public let invert: Bool
+    public let transparentMissingValues: Bool
 
     public init(
         channel: String,
@@ -249,7 +250,8 @@ public struct RenderOptions: Hashable, Sendable {
         vmin: Double? = nil,
         vmax: Double? = nil,
         outputSize: Int? = nil,
-        invert: Bool = false
+        invert: Bool = false,
+        transparentMissingValues: Bool = false
     ) {
         self.channel = channel
         self.direction = direction
@@ -259,6 +261,7 @@ public struct RenderOptions: Hashable, Sendable {
         self.vmax = vmax
         self.outputSize = outputSize
         self.invert = invert
+        self.transparentMissingValues = transparentMissingValues
     }
 }
 

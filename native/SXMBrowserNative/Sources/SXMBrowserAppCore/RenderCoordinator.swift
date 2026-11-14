@@ -648,7 +648,8 @@ public final class RenderCoordinator {
             palette: request.configuration.palette,
             vmin: bounds.min,
             vmax: bounds.max,
-            invert: request.configuration.invert
+            invert: request.configuration.invert,
+            transparentMissingValues: true
         )
         let matrix = cache.payload.processed
         let backend = backend

@@ -62,6 +62,7 @@ struct SingleImageView: View {
 }
 
 private struct SingleImageCanvas: View {
+    @Environment(\.colorScheme) private var colorScheme
     let model: AppModel
     @State private var dragStartTransform:
         ViewerTransform?
@@ -73,7 +74,7 @@ private struct SingleImageCanvas: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack {
-                AppTheme.stage
+                AppTheme.gridStage(for: colorScheme)
                 switch model.browserContentState {
                 case .renderReady:
                     if let frame = model.renderedFrame,
@@ -182,6 +183,17 @@ private struct SingleImageCanvas: View {
         )
 
         ZStack(alignment: .topLeading) {
+            MissingDataBackdrop(tileSize: 10)
+                .frame(
+                    width: max(1, scaledImageSize.width),
+                    height: max(1, scaledImageSize.height)
+                )
+                .overlay(
+                    Rectangle()
+                        .stroke(AppTheme.hairlineBorder(for: colorScheme), lineWidth: 1)
+                )
+                .position(x: imageRect.midX, y: imageRect.midY)
+
             LayerImageView(
                 image: frame.image,
                 scaling: .transform(

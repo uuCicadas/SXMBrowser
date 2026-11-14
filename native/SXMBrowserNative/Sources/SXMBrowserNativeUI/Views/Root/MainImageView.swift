@@ -663,31 +663,52 @@ struct BrowserStateView<Actions: View>: View {
         self.actions = actions()
     }
 
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
             if showsProgress {
                 ProgressView()
                     .controlSize(.large)
             } else {
-                Image(systemName: icon)
-                    .font(.system(size: 34, weight: .medium))
-                    .foregroundStyle(.secondary)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.accentColor.opacity(colorScheme == .dark ? 0.16 : 0.10))
+                        .frame(width: 56, height: 56)
+                    Image(systemName: icon)
+                        .font(.system(size: 24, weight: .medium))
+                        .foregroundStyle(Color.accentColor)
+                }
+                .accessibilityHidden(true)
             }
 
-            Text(title)
-                .font(.title3.weight(.semibold))
-            Text(message)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .textSelection(.enabled)
-                .frame(maxWidth: 460)
+            VStack(spacing: 6) {
+                Text(title)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(message)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .textSelection(.enabled)
+            }
 
             HStack(spacing: 8) {
                 actions
             }
             .controlSize(.large)
         }
+        .padding(.horizontal, 32)
+        .padding(.vertical, 28)
+        .frame(maxWidth: 420)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(AppTheme.elevatedCard(for: colorScheme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(AppTheme.hairlineBorder(for: colorScheme), lineWidth: 1)
+                )
+        )
         .padding(28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AppTheme.stage)

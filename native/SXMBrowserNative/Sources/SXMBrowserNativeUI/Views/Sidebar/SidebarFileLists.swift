@@ -289,6 +289,7 @@ struct SXMFileSidebarItem: View {
                     file: file,
                     isSelected: model.selectedIDs.contains(file.id),
                     isCurrent: model.selectedID == file.id,
+                    spectrumCount: model.spectra(for: file).count,
                     isDropTargeted: isDropTargeted
                 )
             }
@@ -503,6 +504,7 @@ struct SpectroscopySidebarRow: View {
 }
 
 struct SpectrumStyleGlyph: View {
+    @Environment(\.colorScheme) private var colorScheme
     let style: SpectrumVisualStyle
     let width: CGFloat
     let lineWidth: CGFloat
@@ -541,7 +543,7 @@ struct SpectrumStyleGlyph: View {
             )
             context.stroke(
                 path,
-                with: .color(Color.primary.opacity(0.78)),
+                with: .color(Color.primary.opacity(colorScheme == .dark ? 0.35 : 0.22)),
                 style: spectrumStrokeStyle(
                     style.pattern,
                     lineWidth: lineWidth + 1.8,
@@ -551,7 +553,7 @@ struct SpectrumStyleGlyph: View {
             )
             context.stroke(
                 path,
-                with: .color(spectrumColor(style)),
+                with: .color(spectrumColor(style, for: colorScheme)),
                 style: spectrumStrokeStyle(
                     style.pattern,
                     lineWidth: lineWidth,

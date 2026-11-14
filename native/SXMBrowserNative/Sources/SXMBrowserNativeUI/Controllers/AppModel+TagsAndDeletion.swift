@@ -107,24 +107,33 @@ extension AppModel {
                 )
             }
         case .grid:
-            let gridDirection: GridNavigationDirection
-            switch direction {
-            case .left:
-                gridDirection = .left
-            case .right:
-                gridDirection = .right
-            case .up:
-                gridDirection = .up
-            case .down:
-                gridDirection = .down
+            let itemFileIDs: [SXMMetadata.ID?] = visibleDisplayItems.map { item in
+                switch item {
+                case .sxm(let file):
+                    return file.id
+                case .spectroscopy:
+                    return nil
+                }
             }
-            stepSelection(
-                AdaptiveGridNavigation.selectionDelta(
-                    for: gridDirection,
-                    columnCount: gridNavigationColumnCount
-                ),
-                extendingSelection: extendingSelection
-            )
+            guard let targetID = AdaptiveGridNavigation.targetFileID(
+                from: selectedID,
+                direction: direction,
+                columnCount: gridNavigationColumnCount,
+                itemFileIDs: itemFileIDs
+            ) else {
+                return
+            }
+            updateSelection { state, visibleIDs in
+                if extendingSelection {
+                    state.selectRange(to: targetID, in: visibleIDs)
+                } else {
+                    state.selectOnly(targetID, in: visibleIDs)
+                }
+            }
+            if let selectedID,
+               let selected = visibleFiles.first(where: { $0.id == selectedID }) {
+                status = selected.filename
+            }
         }
     }
 

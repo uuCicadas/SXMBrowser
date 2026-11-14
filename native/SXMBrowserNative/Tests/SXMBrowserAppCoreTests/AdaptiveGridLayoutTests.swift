@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import SXMBrowserAppCore
 
@@ -102,5 +103,78 @@ func adaptiveGridNavigationUsesTheResolvedVisualColumnCount() {
             for: .down,
             columnCount: 0
         ) == 1
+    )
+}
+
+@Test
+func adaptiveGridNavigationTargetsVisualSlotsAcrossMixedCards() {
+    let a = UUID()
+    let b = UUID()
+    let c = UUID()
+    let d = UUID()
+    // 3 columns:
+    // Row 0: [a, nil, b]
+    // Row 1: [c, nil, d]
+    let slots: [UUID?] = [a, nil, b, c, nil, d]
+
+    #expect(
+        AdaptiveGridNavigation.targetFileID(
+            from: a,
+            direction: .right,
+            columnCount: 3,
+            itemFileIDs: slots
+        ) == b
+    )
+    #expect(
+        AdaptiveGridNavigation.targetFileID(
+            from: b,
+            direction: .left,
+            columnCount: 3,
+            itemFileIDs: slots
+        ) == a
+    )
+    #expect(
+        AdaptiveGridNavigation.targetFileID(
+            from: a,
+            direction: .down,
+            columnCount: 3,
+            itemFileIDs: slots
+        ) == c
+    )
+    #expect(
+        AdaptiveGridNavigation.targetFileID(
+            from: b,
+            direction: .down,
+            columnCount: 3,
+            itemFileIDs: slots
+        ) == d
+    )
+    #expect(
+        AdaptiveGridNavigation.targetFileID(
+            from: c,
+            direction: .up,
+            columnCount: 3,
+            itemFileIDs: slots
+        ) == a
+    )
+    #expect(
+        AdaptiveGridNavigation.targetFileID(
+            from: c,
+            direction: .down,
+            columnCount: 3,
+            itemFileIDs: slots
+        ) == nil
+    )
+
+    // When the target slot on the next row is a non-selectable item (nil),
+    // vertical navigation snaps to the nearest selectable card on that row.
+    let ragged: [UUID?] = [a, b, nil, nil, c, d]
+    #expect(
+        AdaptiveGridNavigation.targetFileID(
+            from: a,
+            direction: .down,
+            columnCount: 3,
+            itemFileIDs: ragged
+        ) == c
     )
 }

@@ -96,19 +96,33 @@ struct SpectroscopyMarkerLayer: View {
 }
 
 struct MeasurementMarker: View {
+    @Environment(\.colorScheme) private var colorScheme
     let style: SpectrumVisualStyle
     var isFocused = false
 
     var body: some View {
-        Circle()
-            .fill(spectrumColor(style))
-            .frame(
-                width: isFocused ? 12 : 10,
-                height: isFocused ? 12 : 10
-            )
-            // Keep the click target comfortable without covering more image data.
-            .frame(width: 30, height: 30)
-            .contentShape(Circle())
+        let color = spectrumColor(style, for: colorScheme)
+        ZStack {
+            if isFocused {
+                Circle()
+                    .stroke(color.opacity(0.55), lineWidth: 2)
+                    .frame(width: 19, height: 19)
+            }
+            Circle()
+                .fill(color)
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(0.95), lineWidth: isFocused ? 1.8 : 1.3)
+                )
+                .frame(
+                    width: isFocused ? 12 : 9.5,
+                    height: isFocused ? 12 : 9.5
+                )
+                .shadow(color: .black.opacity(0.65), radius: 1.5)
+        }
+        // Keep the click target comfortable without covering more image data.
+        .frame(width: 30, height: 30)
+        .contentShape(Circle())
     }
 }
 
@@ -122,7 +136,7 @@ struct SpectroscopyPlotCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 7) {
             SpectroscopyPlotView(
                 group: group,
                 spectra: presentation.visibleSpectra,
@@ -135,10 +149,14 @@ struct SpectroscopyPlotCard: View {
                         + "\(model.spectrumYAxis(for: group))"
                 )
                 .aspectRatio(1, contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(AppTheme.hairlineBorder(for: colorScheme), lineWidth: 1)
+                )
 
             Text(group.title)
-                .font(.caption)
+                .font(.caption.weight(.medium))
                 .lineLimit(1)
 
             HStack {
@@ -146,6 +164,7 @@ struct SpectroscopyPlotCard: View {
                     .lineLimit(1)
                 Spacer()
                 Text(presentation.visibleCurveCountText)
+                    .monospacedDigit()
             }
             .font(.caption2)
             .foregroundStyle(.secondary)
@@ -165,6 +184,7 @@ struct SpectroscopyPlotCard: View {
 }
 
 struct SpectroscopyPlotView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast)
     private var colorSchemeContrast
 
@@ -177,8 +197,8 @@ struct SpectroscopyPlotView: View {
 
     private let inset = EdgeInsets(
         top: 20,
-        leading: 60,
-        bottom: 43,
+        leading: 68,
+        bottom: 42,
         trailing: 14
     )
 
@@ -186,7 +206,7 @@ struct SpectroscopyPlotView: View {
         Canvas { context, size in
             drawPlot(context: &context, size: size)
         }
-        .background(Color.white)
+        .background(AppTheme.plotCanvasBackground(for: colorScheme))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
             "\(group.title) spectroscopy plot"
@@ -202,85 +222,149 @@ struct SpectroscopyPlotView: View {
             height: max(1, size.height - inset.top - inset.bottom)
         )
 
-        context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.white))
-        drawFrame(context: &context, plot: plot)
+        context.fill(
+            Path(CGRect(origin: .zero, size: size)),
+            with: .color(AppTheme.plotCanvasBackground(for: colorScheme))
+        )
 
         let ranges = dataRanges()
-        drawTicks(context: &context, plot: plot, ranges: ranges)
+        drawGridAndTicks(context: &context, plot: plot, ranges: ranges)
+        drawFrame(context: &context, plot: plot)
         drawCurves(context: &context, plot: plot, ranges: ranges)
 
-        context.draw(
-            Text(group.kind.label)
-                .font(
-                    .system(
-                        size: 12,
-                        weight: .semibold
-                    )
-                )
-                .foregroundColor(.black),
-            at: CGPoint(x: plot.minX + 7, y: plot.minY + 7),
-            anchor: .topLeading
-        )
+        drawKindBadge(context: &context, plot: plot)
+
+        let axisColor = AppTheme.plotAxisText(for: colorScheme)
         context.draw(
             Text(xColumn)
-                .font(.system(size: 11))
-                .foregroundColor(.black.opacity(0.86)),
-            at: CGPoint(x: plot.midX, y: size.height - 13),
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(axisColor),
+            at: CGPoint(x: plot.midX, y: size.height - 12),
             anchor: .center
         )
         var yLabelContext = context
-        yLabelContext.translateBy(x: 12, y: plot.midY)
+        yLabelContext.translateBy(x: 11, y: plot.midY)
         yLabelContext.rotate(by: .degrees(-90))
         yLabelContext.draw(
             Text(yColumn)
-                .font(.system(size: 11))
-                .foregroundColor(.black.opacity(0.86)),
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(axisColor),
             at: .zero,
             anchor: .center
         )
     }
 
     private func drawFrame(context: inout GraphicsContext, plot: CGRect) {
-        context.stroke(Path(plot), with: .color(.black), lineWidth: 1)
+        context.stroke(
+            Path(plot),
+            with: .color(AppTheme.plotBorder(for: colorScheme)),
+            lineWidth: 1
+        )
     }
 
-    private func drawTicks(context: inout GraphicsContext, plot: CGRect, ranges: (xMin: Double, xMax: Double, yMin: Double, yMax: Double)) {
-        let tickLength: CGFloat = 5
-        for i in 0...4 {
-            let fraction = CGFloat(i) / 4
-            let x = plot.minX + plot.width * fraction
-            var tick = Path()
-            tick.move(to: CGPoint(x: x, y: plot.maxY))
-            tick.addLine(to: CGPoint(x: x, y: plot.maxY - tickLength))
-            context.stroke(tick, with: .color(.black), lineWidth: 0.8)
+    private func drawGridAndTicks(
+        context: inout GraphicsContext,
+        plot: CGRect,
+        ranges: (xMin: Double, xMax: Double, yMin: Double, yMax: Double)
+    ) {
+        let tickLength: CGFloat = 4
+        let gridColor = AppTheme.plotMajorGrid(for: colorScheme)
+        let zeroColor = AppTheme.plotZeroLine(for: colorScheme)
+        let axisTextColor = AppTheme.plotAxisText(for: colorScheme)
+        let borderColor = AppTheme.plotBorder(for: colorScheme)
 
-            let value = ranges.xMin + Double(fraction) * (ranges.xMax - ranges.xMin)
+        let xTicks = ScientificPlotTicks.ticks(
+            min: ranges.xMin,
+            max: ranges.xMax,
+            targetCount: plot.width >= 220 ? 5 : 4
+        )
+        var lastDrawnX: CGFloat?
+        for tick in xTicks {
+            let x = plot.minX + CGFloat(tick.fraction) * plot.width
+            let isZero = tick.value == 0
+            var gridLine = Path()
+            gridLine.move(to: CGPoint(x: x, y: plot.minY))
+            gridLine.addLine(to: CGPoint(x: x, y: plot.maxY))
+            context.stroke(
+                gridLine,
+                with: .color(isZero ? zeroColor : gridColor),
+                lineWidth: isZero ? 1.0 : 0.8
+            )
+
+            var tickPath = Path()
+            tickPath.move(to: CGPoint(x: x, y: plot.maxY))
+            tickPath.addLine(to: CGPoint(x: x, y: plot.maxY - tickLength))
+            context.stroke(tickPath, with: .color(borderColor), lineWidth: 0.9)
+
+            if let prev = lastDrawnX, abs(x - prev) < 40 {
+                continue
+            }
+            lastDrawnX = x
             context.draw(
-                Text(compact(value))
-                    .font(.system(size: 10))
-                    .foregroundColor(.black),
-                at: CGPoint(x: x, y: plot.maxY + 9),
+                Text(tick.label)
+                    .font(.system(size: 9.5).monospacedDigit())
+                    .foregroundColor(axisTextColor),
+                at: CGPoint(x: x, y: plot.maxY + 7),
                 anchor: .top
             )
         }
 
-        for i in 0...4 {
-            let fraction = CGFloat(i) / 4
-            let y = plot.maxY - plot.height * fraction
-            var tick = Path()
-            tick.move(to: CGPoint(x: plot.minX, y: y))
-            tick.addLine(to: CGPoint(x: plot.minX + tickLength, y: y))
-            context.stroke(tick, with: .color(.black), lineWidth: 0.8)
+        let yTicks = ScientificPlotTicks.ticks(
+            min: ranges.yMin,
+            max: ranges.yMax,
+            targetCount: plot.height >= 170 ? 5 : 4
+        )
+        var lastDrawnY: CGFloat?
+        for tick in yTicks {
+            let y = plot.maxY - CGFloat(tick.fraction) * plot.height
+            let isZero = tick.value == 0
+            var gridLine = Path()
+            gridLine.move(to: CGPoint(x: plot.minX, y: y))
+            gridLine.addLine(to: CGPoint(x: plot.maxX, y: y))
+            context.stroke(
+                gridLine,
+                with: .color(isZero ? zeroColor : gridColor),
+                lineWidth: isZero ? 1.0 : 0.8
+            )
 
-            let value = ranges.yMin + Double(fraction) * (ranges.yMax - ranges.yMin)
+            var tickPath = Path()
+            tickPath.move(to: CGPoint(x: plot.minX, y: y))
+            tickPath.addLine(to: CGPoint(x: plot.minX + tickLength, y: y))
+            context.stroke(tickPath, with: .color(borderColor), lineWidth: 0.9)
+
+            if let prev = lastDrawnY, abs(y - prev) < 15 {
+                continue
+            }
+            lastDrawnY = y
             context.draw(
-                Text(compact(value))
-                    .font(.system(size: 10))
-                    .foregroundColor(.black),
-                at: CGPoint(x: plot.minX - 7, y: y),
+                Text(tick.label)
+                    .font(.system(size: 9.5).monospacedDigit())
+                    .foregroundColor(axisTextColor),
+                at: CGPoint(x: plot.minX - 6, y: y),
                 anchor: .trailing
             )
         }
+    }
+
+    private func drawKindBadge(context: inout GraphicsContext, plot: CGRect) {
+        let title = group.kind.label
+        let badgeWidth = min(plot.width - 14, CGFloat(title.count) * 6.8 + 14)
+        let badgeRect = CGRect(
+            x: plot.minX + 6,
+            y: plot.minY + 6,
+            width: max(36, badgeWidth),
+            height: 18
+        )
+        let path = Path(roundedRect: badgeRect, cornerRadius: 4)
+        context.fill(path, with: .color(AppTheme.plotBadgeBackground(for: colorScheme)))
+        context.stroke(path, with: .color(AppTheme.hairlineBorder(for: colorScheme)), lineWidth: 0.8)
+        context.draw(
+            Text(title)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundColor(AppTheme.plotAxisText(for: colorScheme)),
+            at: CGPoint(x: badgeRect.minX + 7, y: badgeRect.midY),
+            anchor: .leading
+        )
     }
 
     private func drawCurves(
@@ -329,13 +413,14 @@ struct SpectroscopyPlotView: View {
         let visualStyle = spectrumVisualStyle(
             for: spectrum
         )
+        let strokeColor = spectrumColor(visualStyle, for: colorScheme)
         let isFocused = spectrum.id == focusedSpectrumID
         // While the drawer is being dragged the plot is redrawn every frame;
         // one decimated stroke per curve keeps the drag at full frame rate.
         if liveResizing {
             context.stroke(
                 path,
-                with: .color(spectrumColor(visualStyle)),
+                with: .color(strokeColor),
                 style: spectrumStrokeStyle(
                     visualStyle.pattern,
                     lineWidth: 1.7
@@ -343,50 +428,38 @@ struct SpectroscopyPlotView: View {
             )
             return
         }
-        let underlayWidth: CGFloat
+        let haloWidth: CGFloat
         let colorWidth: CGFloat
         if isFocused {
-            underlayWidth =
-                colorSchemeContrast == .increased
-                ? 5.2
-                : 4.6
-            colorWidth =
-                colorSchemeContrast == .increased
-                ? 3.2
-                : 2.8
+            haloWidth = colorSchemeContrast == .increased ? 5.6 : 4.8
+            colorWidth = colorSchemeContrast == .increased ? 3.2 : 2.7
         } else {
-            underlayWidth =
-                colorSchemeContrast == .increased
-                ? 3.4
-                : 2.8
-            colorWidth =
-                colorSchemeContrast == .increased
-                ? 2
-                : 1.7
+            haloWidth = colorSchemeContrast == .increased ? 3.2 : 2.6
+            colorWidth = colorSchemeContrast == .increased ? 2.1 : 1.75
         }
         if isFocused {
             context.stroke(
                 path,
-                with: .color(.white.opacity(0.92)),
+                with: .color(strokeColor.opacity(colorScheme == .dark ? 0.34 : 0.24)),
                 style: spectrumStrokeStyle(
                     visualStyle.pattern,
-                    lineWidth: underlayWidth + 2,
+                    lineWidth: haloWidth + 2.5,
                     lineCap: .butt
                 )
             )
         }
         context.stroke(
             path,
-            with: .color(.black.opacity(0.72)),
+            with: .color(AppTheme.plotCanvasBackground(for: colorScheme).opacity(0.88)),
             style: spectrumStrokeStyle(
                 visualStyle.pattern,
-                lineWidth: underlayWidth,
+                lineWidth: haloWidth,
                 lineCap: .butt
             )
         )
         context.stroke(
             path,
-            with: .color(spectrumColor(visualStyle)),
+            with: .color(strokeColor),
             style: spectrumStrokeStyle(
                 visualStyle.pattern,
                 lineWidth: colorWidth
@@ -543,9 +616,19 @@ func spectrumVisualStyle(
 }
 
 func spectrumColor(
-    _ style: SpectrumVisualStyle
+    _ style: SpectrumVisualStyle,
+    for colorScheme: ColorScheme = .light
 ) -> Color {
-    Color(
+    if colorScheme == .dark && style.paletteIndex == 6 {
+        return Color(
+            .sRGB,
+            red: 0.88,
+            green: 0.90,
+            blue: 0.94,
+            opacity: 1
+        )
+    }
+    return Color(
         .sRGB,
         red: style.color.normalizedRed,
         green: style.color.normalizedGreen,

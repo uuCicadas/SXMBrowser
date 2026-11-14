@@ -118,10 +118,33 @@ public struct ContentView: View {
     @ViewBuilder
     private var dropTargetOverlay: some View {
         if isDropTargeted {
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.accentColor.opacity(0.75), lineWidth: 3)
-                .padding(8)
-                .transition(.opacity)
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.accentColor.opacity(0.80), lineWidth: 2.5)
+                    )
+                    .padding(8)
+
+                VStack(spacing: 8) {
+                    Image(systemName: "folder.badge.plus")
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                    Text("Drop Folder or SXM File to Open")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.accentColor.opacity(0.35), lineWidth: 1)
+                )
+            }
+            .allowsHitTesting(false)
+            .transition(.opacity)
         }
     }
 

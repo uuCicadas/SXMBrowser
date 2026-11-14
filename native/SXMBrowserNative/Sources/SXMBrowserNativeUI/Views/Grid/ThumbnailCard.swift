@@ -37,19 +37,45 @@ struct ThumbnailCard: View {
         return "\(file.id.uuidString)|\(modifiedBits)|default|\(model.stmPreviewPalette.rawValue)"
     }
 
+    private var associatedSpectrumCount: Int {
+        model.spectra(for: file).count
+    }
+
+    private var footprintText: String? {
+        AppTheme.formattedScanFootprint(file.scanRange)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 7) {
             ZStack {
-                RoundedRectangle(cornerRadius: 5)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(AppTheme.imageWell(for: colorScheme))
-                if let image {
-                    LayerImageView(
-                        image: image,
-                        scaling: .aspectFit,
-                        filter: .linear
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(AppTheme.hairlineBorder(for: colorScheme), lineWidth: 1)
                     )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if let image {
+                    ZStack {
+                        MissingDataBackdrop(tileSize: 6)
+                        LayerImageView(
+                            image: image,
+                            scaling: .aspectFit,
+                            filter: .linear
+                        )
+                    }
+                    .aspectRatio(
+                        image.size.width > 0 && image.size.height > 0
+                            ? image.size
+                            : CGSize(width: 1, height: 1),
+                        contentMode: .fit
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .stroke(AppTheme.hairlineBorder(for: colorScheme), lineWidth: 1)
+                    )
                     .padding(6)
+
                     SpectroscopyMarkerLayer(model: model, file: file)
                         .padding(6)
                 } else {
@@ -58,18 +84,48 @@ struct ThumbnailCard: View {
                 }
             }
             .aspectRatio(1, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             .browserMotion(.feedback, value: image != nil)
 
-            Text(file.filename)
-                .font(.caption)
-                .lineLimit(1)
-
-            HStack {
-                Text(file.defaultChannel ?? "-")
+            HStack(spacing: 6) {
+                Text(file.filename)
+                    .font(.caption.weight(.medium))
                     .lineLimit(1)
-                Spacer()
-                Text("\(file.pixels.width)x\(file.pixels.height)")
+
+                Spacer(minLength: 2)
+
+                if associatedSpectrumCount > 0 {
+                    HStack(spacing: 3) {
+                        Image(systemName: "waveform.path.ecg")
+                            .font(.system(size: 8.5, weight: .semibold))
+                        Text("\(associatedSpectrumCount)")
+                            .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                    }
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1.5)
+                    .background(
+                        Capsule()
+                            .fill(
+                                isSelected
+                                    ? Color.accentColor.opacity(colorScheme == .dark ? 0.30 : 0.16)
+                                    : AppTheme.subtleFill
+                            )
+                    )
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                }
+            }
+
+            HStack(spacing: 4) {
+                if let footprintText {
+                    Text(footprintText)
+                        .lineLimit(1)
+                } else {
+                    Text(file.defaultChannel ?? "—")
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                Text("\(file.pixels.width)×\(file.pixels.height)")
+                    .monospacedDigit()
             }
             .font(.caption2)
             .foregroundStyle(.secondary)

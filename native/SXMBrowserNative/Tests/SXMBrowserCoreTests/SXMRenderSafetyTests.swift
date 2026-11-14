@@ -159,3 +159,32 @@ func renderedImagesAndPNGExportUseExplicitSRGBAndBackgroundSafeDownsampling() as
     let decodedCG = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
     #expect(decodedCG.colorSpace?.name == CGColorSpace.sRGB)
 }
+
+@Test
+func colorizeMissingValuesTransparencyRespectsFlag() {
+    let matrix = Matrix(width: 2, height: 1, values: [Float.nan, 1.0])
+
+    let opaqueRGBA = SXMRenderer.colorize(
+        matrix: matrix,
+        palette: .duskViolet,
+        vmin: 0,
+        vmax: 1,
+        invert: false
+    )
+    #expect(opaqueRGBA[3] == 255)
+    #expect(opaqueRGBA[7] == 255)
+
+    let transparentRGBA = SXMRenderer.colorize(
+        matrix: matrix,
+        palette: .duskViolet,
+        vmin: 0,
+        vmax: 1,
+        invert: false,
+        transparentMissingValues: true
+    )
+    #expect(transparentRGBA[0] == 0)
+    #expect(transparentRGBA[1] == 0)
+    #expect(transparentRGBA[2] == 0)
+    #expect(transparentRGBA[3] == 0)
+    #expect(transparentRGBA[7] == 255)
+}
