@@ -2,6 +2,8 @@
 
 本地 macOS 原生工具，用来快速浏览与检查 Nanonis `.sxm` 扫描图像及 `.dat` 点谱文件。
 
+当前发行版本：**v2.6.0**（Build 97，Apple Silicon · macOS 14+）。
+
 ## macOS 原生版
 
 本地构建产物与系统安装位置：
@@ -100,7 +102,7 @@ Apple Silicon、macOS 14+ 的 Release 构建中执行。
 
 ```bash
 ./scripts/milestone_checkpoint.command \
-  v2.5.0 \
+  v2.6.0 \
   --sample-dir "/path/to/example-graph"
 ```
 
@@ -115,9 +117,9 @@ Apple Silicon、macOS 14+ 的 Release 构建中执行。
 native/SXMBrowserNative
 ```
 
-包含 4 个核心代码目标：`SXMBrowserCore`（解析 / 数值拟合 / sRGB 渲染 / 调色板）、`SXMBrowserAppCore`（缓存 / 并发门控 / 元数据持久化）、`SXMBrowserNativeUI`（`@Observable` 域控制器与模块化视图）与 `SXMBrowserNative`（轻量 `@main` 入口），以及 `SXMBrowserSmoke`、`SXMBrowserBenchmark` 验收工具。架构基线与后续演进路线见 [ROADMAP.md](ROADMAP.md)。
+包含 4 个核心代码目标：`SXMBrowserCore`（解析 / 数值拟合 / sRGB 与透明 `NaN` 渲染 / `PaletteLookup` 调色板）、`SXMBrowserAppCore`（缓存 / 并发门控 / 元数据持久化 / `1-2-5` 科学刻度 / 结构化采集参数 / 二维网格导航）、`SXMBrowserNativeUI`（`@Observable` 域控制器、深浅色自适应主题令牌与模块化视图）与 `SXMBrowserNative`（轻量 `@main` 入口），以及 `SXMBrowserSmoke`、`SXMBrowserBenchmark` 验收工具。架构基线与后续演进路线见 [ROADMAP.md](ROADMAP.md)。
 
-当前原生版已包含：文件夹与 `.sxm` 文件拖放导入、按文件名/记录时间/修改时间排序、侧栏右键应用内 `Open`、缩略图网格、单图自适应缩放、`:SCAN_DIR: up` 纵向方向归一化、按通道类型区分的默认配色与处理规则、channel/正反扫/processing/全局 STM 调色板切换、全链路 sRGB 色彩管理、谱图 `.dat` 全通道解析与 X/Y 通道切换、标签与数据集元数据持久化及导入导出、Inspector 风格 Color Scale（支持 SI 单位与科学计数法）、可拖动 Histogram、纯 PNG 导出。
+当前原生版已包含：文件夹与 `.sxm` 文件拖放导入、按文件名/记录时间/修改时间排序、侧栏右键应用内 `Open`、缩略图网格与混排网格二维方向键导航、单图自适应缩放、`:SCAN_DIR: up` 纵向方向归一化、按通道类型区分的默认配色与处理规则、channel/正反扫/processing/全局 STM 调色板切换、全链路 sRGB 色彩管理、`NaN` 停扫区域透明棋盘底板、深浅色自适应科学绘图、谱图 `.dat` 全通道解析与 X/Y 通道切换、标签与数据集元数据持久化及导入导出、Inspector 结构化物理采集参数卡片与可检索 `Raw Header`、Color Scale（支持 SI 单位与科学计数法）、无极实时拖拽 Histogram、纯 PNG 导出。
 
 也可以直接把包含 `.sxm` 的文件夹拖到窗口中打开；拖入单个 `.sxm` 文件时，会打开它所在的文件夹并选中该文件。在侧栏右键条目选择 `Open`，可直接在应用内切换至 Single 大图视图。
 

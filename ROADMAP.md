@@ -1,7 +1,7 @@
 # SXM Browser 项目进展评估与演进规划报告
 
-当前基准：`codex/sxm-ui-2.6` 分支（`v2.6.0`，Build 96，基于 `v2.5.1` Build 95 完成原生 UI 全面美化与 Dark/Light 科研绘图适配升级）。  
-实测验证：全量 **322 项自动化测试通过**（[`SXMBrowserCoreTests`](native/SXMBrowserNative/Tests/SXMBrowserCoreTests) 70 项 + [`SXMBrowserAppCoreTests`](native/SXMBrowserNative/Tests/SXMBrowserAppCoreTests) 239 项 + [`SXMBrowserNativeUITests`](native/SXMBrowserNative/Tests/SXMBrowserNativeUITests) 13 项），标准样例（6 个 `.sxm` + 18 个 `.dat`，0 问题）[`SXMBrowserSmoke`](native/SXMBrowserNative/Sources/SXMBrowserSmoke/main.swift#L1-L473) 契约校验与 500×512×512 性能门禁（中位数 `scan 27.743 ms / image 21.742 ms / thumbnail 21.892 ms`）全部通过。
+当前基准：`main` 分支（`v2.6.0`，Build 97，已完成原生 UI 全面美化、Dark/Light 科研绘图适配、主分支合入与系统应用同步）。  
+实测验证：全量 **322 项自动化测试通过**（[`SXMBrowserCoreTests`](native/SXMBrowserNative/Tests/SXMBrowserCoreTests) 70 项 + [`SXMBrowserAppCoreTests`](native/SXMBrowserNative/Tests/SXMBrowserAppCoreTests) 239 项 + [`SXMBrowserNativeUITests`](native/SXMBrowserNative/Tests/SXMBrowserNativeUITests) 13 项），标准样例（6 个 `.sxm` + 18 个 `.dat`，0 问题）[`SXMBrowserSmoke`](native/SXMBrowserNative/Sources/SXMBrowserSmoke/main.swift#L1-L473) 契约校验与 500×512×512 性能门禁（中位数 `scan 28.049 ms / image 20.741 ms / thumbnail 21.570 ms`）全部通过。
 
 ---
 
@@ -42,7 +42,7 @@ flowchart LR
 
 ### 2.1 当前总体架构基线
 
-项目已稳定运行于 **纯原生 macOS 14+ 架构（Swift 6.0 + SwiftUI/AppKit + CoreAnimation + `@Observable`）**，Swift 源码与自动化测试总计 **39,844 行**（涵盖 4 个核心模块与 55 个测试文件 / 315 项测试）：
+项目已稳定运行于 **纯原生 macOS 14+ 架构（Swift 6.0 + SwiftUI/AppKit + CoreAnimation + `@Observable`）**，Swift 源码与自动化测试总计 **41,517 行**（涵盖 4 个核心模块、2 个验收工具与 57 个测试文件 / 322 项测试）：
 
 ```mermaid
 flowchart TD
@@ -50,26 +50,26 @@ flowchart TD
         AppEntry["SXMBrowserNativeApp.swift (@main 入口 / 菜单 / 快捷键 / AppTerminationDelegate)"]
     end
 
-    subgraph UILayer["SXMBrowserNativeUI (Library Target, 31 文件, 12.1k LOC + 6 测试文件)"]
+    subgraph UILayer["SXMBrowserNativeUI (Library Target, 31 文件, 12.9k LOC + 7 测试文件)"]
         AppModel["AppModel + Extensions (组合编排与文件操作)"]
         Controllers["@Observable 域控制器
         DatasetSession / ImageViewer / Spectroscopy / ThumbnailPipeline"]
         Views["Views/ 按域模块化视图
-        Root / Sidebar / Grid / Inspector / SingleViewer / Spectroscopy"]
+        Root (AppTheme / MissingDataBackdrop) / Sidebar / Grid / Inspector / SingleViewer / Spectroscopy"]
         Bridges["NativeBrowserSplitView / InstantClickOverlay / LayerImageView / ScreenScaleBar"]
     end
 
-    subgraph AppCoreLayer["SXMBrowserAppCore (Library Target, 40 模块 + 38 测试文件)"]
+    subgraph AppCoreLayer["SXMBrowserAppCore (Library Target, 41 模块, 10.4k LOC + 39 测试文件)"]
         RenderCoord["RenderCoordinator + RenderRequestGate (单飞渲染与防串图)"]
         Cache["MatrixLoadCache + ByteLRUCache + AsyncLimiter (LIFO 门控与缓存)"]
         MetaStore["DatasetMetadataStore + Transfer + ImportPlanner (原子持久化与导入)"]
-        DomainState["SelectionState / ScanCoordinateTransform / ViewerTransform / SpectroscopyPresentation"]
+        DomainState["SelectionState / ScanCoordinateTransform / ViewerTransform / SpectroscopyPresentation / ScientificPlotTicks / InspectorMetadata / AdaptiveGridNavigation"]
     end
 
-    subgraph CoreLayer["SXMBrowserCore (Core Target, 9 模块 + 11 测试文件)"]
+    subgraph CoreLayer["SXMBrowserCore (Core Target, 9 模块, 3.0k LOC + 11 测试文件)"]
         Parsers["SXMParser (.sxm) + SpectroscopyParser (.dat) + POSIXDateParser"]
-        Renderer["SXMRenderer (平面/逐行拟合 / Welford 统计 / 箱式下采样 / sRGB 着色)"]
-        Palettes["PaletteStore + palettes.json (4 套 257-stop OKLCh 监看调色板)"]
+        Renderer["SXMRenderer (平面/逐行拟合 / Welford 统计 / 箱式下采样 / sRGB 与透明 NaN 着色)"]
+        Palettes["PaletteStore + PaletteLookup + palettes.json (4 套 257-stop OKLCh 监看调色板)"]
     end
 
     subgraph Tooling["质量门禁与发布脚本 (scripts/)"]
@@ -101,6 +101,7 @@ flowchart TD
 - **异步防串图与原子存储**：[`RenderCoordinator`](native/SXMBrowserNative/Sources/SXMBrowserAppCore/RenderCoordinator.swift) + [`RenderRequestGate`](native/SXMBrowserNative/Sources/SXMBrowserAppCore/RenderRequestGate.swift) 严格拦截跨数据集/跨文件迟到帧；[`DatasetMetadataStore`](native/SXMBrowserNative/Sources/SXMBrowserAppCore/DatasetMetadataStore.swift) 具备原子写、逐字节读回校验与损坏文件保护。
 - **高辨识度科学监看色标**：在 OKLab/OKLCh 感知均匀空间构建并用 SHA-256 指纹锁死 4 套 257-stop 监看调色板（`Dusk Violet`、`Ink Violet`、`Ember`、`Basic gray`）。
 - **细粒度 `@Observable` 响应式编排**：[`SXMBrowserNativeUI`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Controllers/AppModel.swift) 通过域控制器隔离状态更新、版本化缓存派生列表、`InstantClickOverlay` 零延迟派发与 LIFO 视口优先缩略图限流，支撑千级文件目录流畅交互。
+- **深浅色科研绘图与结构化参数视窗（`v2.6.0`）**：[`ScientificPlotTicks`](native/SXMBrowserNative/Sources/SXMBrowserAppCore/ScientificPlotTicks.swift) 计算 `1-2-5` 刻度与紧凑科学标签，配合 [`AppTheme`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/Root/AppTheme.swift) 与 `MissingDataBackdrop` 在单图/缩略图清晰呈现 `NaN` 停扫底板；[`InspectorMetadataPresentation`](native/SXMBrowserNative/Sources/SXMBrowserAppCore/InspectorMetadata.swift) 结构化解析偏压、反馈状态、Setpoint、扫描速度与可检索 `Raw Header`，并由 [`AdaptiveGridNavigation`](native/SXMBrowserNative/Sources/SXMBrowserAppCore/AdaptiveGridLayout.swift) 保障 `.sxm`/`.dat` 混排网格的真实二维方向键导航。
 
 ### 2.2 阶段零（`v2.4.1`–`v2.4.2`）已完成项目清单
 
@@ -130,6 +131,19 @@ flowchart TD
 | **D6 & D12** | 架构 / 性能 | **模块拆分、`@Observable` 域控制器与派生列表缓存**：通过 [`Package.swift`](native/SXMBrowserNative/Package.swift) 将 UI 编排拆入 `SXMBrowserNativeUI`（保留极薄 `@main` 入口 [`SXMBrowserNativeApp.swift`](native/SXMBrowserNative/Sources/SXMBrowserNative/SXMBrowserNativeApp.swift)）并新增 `@MainActor` 测试目标 [`SXMBrowserNativeUITests`](native/SXMBrowserNative/Tests/SXMBrowserNativeUITests)；将 `AppModel` 迁移为 macOS 14 `@Observable` 组合 [`DatasetSessionController`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Controllers/DatasetSessionController.swift)、[`ImageViewerController`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Controllers/ImageViewerController.swift)、[`SpectroscopyController`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Controllers/SpectroscopyController.swift) 与 [`ThumbnailPipeline`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Controllers/ThumbnailPipeline.swift)；为 `sortedFiles` / `visibleFiles` / `visibleDisplayItems` / `files(forTagID:)` 建立版本号驱动 O(1) 缓存；将原 `Views.swift` 拆分为 `Views/{Root,Sidebar,Grid,Inspector,SingleViewer,Spectroscopy}/` 并抽出 `SidebarStatusFooter` | `v2.5.0` (Build 94) |
 | **D7 & D10** | 并发 / 交互 | **视口优先缩略图调度、零延迟单击与后台废纸篓清理**：[`AsyncLimiter.swift`](native/SXMBrowserNative/Sources/SXMBrowserAppCore/AsyncLimiter.swift) 新增 `.lifo` 排队模式并在 [`ThumbnailPipeline.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Controllers/ThumbnailPipeline.swift) 启用（`limit: 4, order: .lifo`）；[`ThumbnailCard.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/Grid/ThumbnailCard.swift) 采用 AppKit [`InstantClickOverlay.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/Grid/InstantClickOverlay.swift) (`GridCardClickAction.resolve`) 消除双击判定导致的 `~250ms` 单击迟滞；[`AppModel+TagsAndDeletion.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Controllers/AppModel+TagsAndDeletion.swift) 将 `FileManager.default.trashItem` 移至后台执行并引入 `isDeletingFiles` 并发忙锁与跨会话防护 | `v2.5.0` (Build 94) |
 
+### 2.4 阶段一收官与阶段二（`v2.5.1`–`v2.6.0`）已完成项目清单
+
+截至 Build 97，**无极直方图拖拽、关窗退出、Dark/Light 科学绘图、`NaN` 停扫底板、Inspector 参数卡片、2D 网格导航、主分支合入与系统应用同步均已交付验收**：
+
+| 类别 | 已完成内容与代码落点 | 完成版本 |
+| :--- | :--- | :--- |
+| **生命周期与无极色阶** | 新增 `@MainActor AppTerminationDelegate` 实现关窗即退；[`ImageViewerController.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Controllers/ImageViewerController.swift) `updateScale(min:max:)` 采用同矩阵原地保帧与单飞合并调度，[`PaletteStore.swift`](native/SXMBrowserNative/Sources/SXMBrowserCore/PaletteStore.swift) 提供 `PaletteLookup` O(1) 均匀查表着色与 `Gradient` 色条重绘 | `v2.5.1` (Build 95) |
+| **深浅色主题与 `NaN` 棋盘底板** | [`AppTheme.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/Root/AppTheme.swift) 定义深浅色面板/网格/直方图颜色令牌与 `MissingDataBackdrop`；[`SXMModels.swift`](native/SXMBrowserNative/Sources/SXMBrowserCore/SXMModels.swift) 与 [`SXMRender.swift`](native/SXMBrowserNative/Sources/SXMBrowserCore/SXMRender.swift) 新增 `transparentMissingValues`（单图与缩略图呈现透明棋盘格，PNG 导出保持不透明 sRGB） | `v2.6.0` (Build 96) |
+| **科学绘图、直方图与比例尺** | 新增 [`ScientificPlotTicks.swift`](native/SXMBrowserNative/Sources/SXMBrowserAppCore/ScientificPlotTicks.swift) 计算 `1-2-5` 刻度，[`SpectroscopyPlotView.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/Spectroscopy/SpectroscopyPlotView.swift) 与 [`HistogramView.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/Inspector/HistogramView.swift) 适配深浅色模式及 7 号槽对比度替代色；[`PaletteStrip.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/Inspector/PaletteStrip.swift) 改为 `LinearGradient`，[`ScreenScaleBar.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/SingleViewer/ScreenScaleBar.swift) 增加端线与对比描边 | `v2.6.0` (Build 96) |
+| **Inspector 参数卡片与可检索 Header** | [`InspectorMetadata.swift`](native/SXMBrowserNative/Sources/SXMBrowserAppCore/InspectorMetadata.swift) 结构化解析偏压、反馈状态、Setpoint、扫描速度、温度、耗时与备注；[`InspectorView.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/Inspector/InspectorView.swift) 展示 `Acquisition & File` 2×3 卡片、可搜索 `Raw Header` 折叠区及网格模式紧凑提示条 | `v2.6.0` (Build 96) |
+| **2D 混排网格导航与图例同步** | [`AdaptiveGridLayout.swift`](native/SXMBrowserNative/Sources/SXMBrowserAppCore/AdaptiveGridLayout.swift) 新增 `AdaptiveGridNavigation.targetFileID` 并接入 `AppModel.moveSelectionForArrow` 保障 `.sxm`/`.dat` 混排网格二维方向键导航；[`SingleSpectroscopyDrawer.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/SingleViewer/SingleSpectroscopyDrawer.swift) 修复 `SpectroscopyLegend.==` | `v2.6.0` (Build 96) |
+| **分支合入与系统应用同步** | 将 `codex/sxm-ui-2.6` 快进合入 `main` 分支，同步 `README.md` / `ROADMAP.md` 架构行数基线，将签名后的 `2.6.0`（Build 97）安装至 `/Applications/SXM Browser.app` 并保留 `v2.5.1`（Build 95）备份链路 | `v2.6.0` (Build 97) |
+
 ---
 
 ## 三、现存待优化项盘点（Remaining Debt）
@@ -152,7 +166,7 @@ flowchart TD
 ```mermaid
 flowchart LR
     Done["已完成: v2.4.1 - v2.5.1
-    P0 校准 + 架构瘦身 + @Observable + 无极拖拽"] --> Done2["已完成: v2.6.0 (Build 96)
+    P0 校准 + 架构瘦身 + @Observable + 无极拖拽"] --> Done2["已完成: v2.6.0 (Build 96–97)
     UI 全面美化 · 深浅色绘图 · 采集参数卡片 · 2D 网格导航"]
     Done2 --> Next3["后续方向: v2.7+
     实时文件夹监听 + 多窗口隔离 + 扩展兼容性"]
@@ -181,7 +195,7 @@ flowchart LR
 
 ---
 
-### 阶段二：`v2.6.0` UI 全面美化、科学绘图适配与交互细节完成情况（`v2.6.0` Build 96，已完成）
+### 阶段二：`v2.6.0` UI 全面美化、科学绘图适配与交互细节完成情况（`v2.6.0` Build 96–97，已完成）
 
 - [x] **Dark/Light 自适应设计令牌与 `NaN` 停扫底板**：[`AppTheme.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/Root/AppTheme.swift) 引入统一的深浅色绘图与卡片表面色板、`MissingDataBackdrop` 细格棋盘及 SI/扫描范围/耗时格式化；`RenderOptions.transparentMissingValues` 在交互缩略图与单图画布中将非有限像素渲染为透明，纯净 PNG 导出保持不透明。
 - [x] **谱图画布、直方图与比例尺升级**：新增 [`ScientificPlotTicks.swift`](native/SXMBrowserNative/Sources/SXMBrowserAppCore/ScientificPlotTicks.swift) 计算 `1-2-5` 刻度与紧凑科学标签，[`SpectroscopyPlotView.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/Spectroscopy/SpectroscopyPlotView.swift) 与 [`HistogramView.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/Inspector/HistogramView.swift) 全面适配深浅色模式及调色板 7 号槽高对比替代色；[`ScreenScaleBar.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/SingleViewer/ScreenScaleBar.swift) 与 [`PaletteStrip.swift`](native/SXMBrowserNative/Sources/SXMBrowserNativeUI/Views/Inspector/PaletteStrip.swift) 完成精修。

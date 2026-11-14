@@ -6,6 +6,7 @@ All notable local builds of SXM Browser are recorded here.
 
 ## 2.6.0 - 2026-11-14
 
+- Build 97 (2026-11-14): Finalize v2.6.0 release docs, promote main branch, and sync installed app.
 - Build 96 (2026-11-14): Deliver the v2.6.0 native UI overhaul: adaptive Dark/Light plots, NaN missing-data backdrop, structured Inspector acquisition cards with searchable Raw Header, and 2D mixed-grid navigation:
   - Add cohesive Dark/Light semantic tokens (`AppTheme` plot/card/checkerboard surfaces, `MissingDataBackdrop`, and SI/scan-footprint/duration formatters) plus `RenderOptions.transparentMissingValues` so incomplete/aborted scans with `NaN` values reveal a subtle neutral checkerboard in thumbnails and the single canvas while keeping `exportPNG()` opaque sRGB.
   - Upgrade `SpectroscopyPlotView`, `HistogramView`, `PaletteStrip`, and `ScreenScaleBar` with adaptive Dark/Light surfaces, `ScientificPlotTicks` (`1-2-5` nice steps and compact scientific labels), dark-mode contrast substitution for spectrum palette index `6`, contrast-ring `MeasurementMarker`, `LinearGradient` `PaletteStrip`, and crisp calibrated `ScreenScaleBar` end-ticks; fix `SpectroscopyLegend.==` to compare visible/all spectrum IDs and `focusedSpectrumID`.
