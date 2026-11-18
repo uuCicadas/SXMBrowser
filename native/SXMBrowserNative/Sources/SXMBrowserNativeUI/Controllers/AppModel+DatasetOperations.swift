@@ -740,25 +740,23 @@ extension AppModel {
             fileURLWithPath: FileManager.default.currentDirectoryPath,
             isDirectory: true
         )
-        let candidates = [
-            workspaceParent.appendingPathComponent("example-graph"),
-            workspaceParent.appendingPathComponent("example"),
-            appParent.appendingPathComponent("example-graph"),
-            appParent.appendingPathComponent("example"),
-            cwd.appendingPathComponent("example-graph"),
-            cwd.appendingPathComponent("example"),
-            cwd.appendingPathComponent("../example-graph")
-                .standardizedFileURL,
-            cwd.appendingPathComponent("../example").standardizedFileURL,
-            cwd.appendingPathComponent("../../example-graph")
-                .standardizedFileURL,
-            cwd.appendingPathComponent("../../example")
-                .standardizedFileURL,
-            cwd.appendingPathComponent("../../../example-graph")
-                .standardizedFileURL,
-            cwd.appendingPathComponent("../../../example")
-                .standardizedFileURL,
+        let baseDirectories = [
+            workspaceParent,
+            appParent,
+            cwd,
+            cwd.appendingPathComponent("..").standardizedFileURL,
+            cwd.appendingPathComponent("../..").standardizedFileURL,
+            cwd.appendingPathComponent("../../..").standardizedFileURL,
         ]
+        let relativeCandidates = [
+            "examples/example-graph",
+            "examples",
+            "example-graph",
+            "example",
+        ]
+        let candidates = baseDirectories.flatMap { base in
+            relativeCandidates.map { base.appendingPathComponent($0).standardizedFileURL }
+        }
         return candidates.lazy.compactMap(existingDirectory(at:)).first
     }
 

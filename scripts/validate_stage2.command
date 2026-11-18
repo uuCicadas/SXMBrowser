@@ -17,7 +17,11 @@ usage() {
 }
 
 if [[ $# -eq 0 ]]; then
-    SAMPLE_DIR="${ROOT:h}/example-graph"
+    if [[ -d "${ROOT:h}/examples/example-graph" ]]; then
+        SAMPLE_DIR="${ROOT:h}/examples/example-graph"
+    else
+        SAMPLE_DIR="${ROOT:h}/example-graph"
+    fi
 elif [[ $# -eq 2 && "$1" == "--sample-dir" && -n "$2" ]]; then
     SAMPLE_DIR="${2:A}"
 else
