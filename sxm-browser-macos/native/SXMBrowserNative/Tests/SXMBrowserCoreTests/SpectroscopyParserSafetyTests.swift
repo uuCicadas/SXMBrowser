@@ -104,6 +104,23 @@ func duplicateDatColumnNamesAreMadeUnambiguous() throws {
 }
 
 @Test
+func duplicateDatColumnsPreserveNumberedChannelValues() throws {
+    let url = try makeDATFixture(
+        columns: ["Bias", "Current", "Current", "Current (2)", "Current"],
+        rows: ["0\t1\t2\t3\t4", "1\t5\t6\t7\t8"]
+    )
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    let curve = try SpectroscopyParser().loadFile(url).curve
+
+    #expect(curve.columns == ["Bias", "Current", "Current (3)", "Current (2)", "Current (4)"])
+    #expect(curve.valuesByColumn["Current"] == [1, 5])
+    #expect(curve.valuesByColumn["Current (3)"] == [2, 6])
+    #expect(curve.valuesByColumn["Current (2)"] == [3, 7])
+    #expect(curve.valuesByColumn["Current (4)"] == [4, 8])
+}
+
+@Test
 func datRejectsOversizedAndBinaryFilesWithoutFullRead() throws {
     let oversizedURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("spectroscopy-oversized-\(UUID().uuidString).dat")
