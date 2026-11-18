@@ -270,12 +270,23 @@ private func splitSpectroscopyLine(_ line: String) -> [String] {
 }
 
 private func makeUniqueColumnNames(_ columns: [String]) -> [String] {
-    var counts: [String: Int] = [:]
+    // Reserve literal labels, including numbered labels appearing later in the header.
+    let reserved = Set(columns)
+    var nextSuffix: [String: Int] = [:]
     return columns.map { column in
         let name = column.isEmpty ? "Column" : column
-        let count = counts[name, default: 0]
-        counts[name] = count + 1
-        return count == 0 ? name : "\(name) (\(count + 1))"
+        guard var suffix = nextSuffix[name] else {
+            nextSuffix[name] = 2
+            return name
+        }
+
+        var candidate: String
+        repeat {
+            candidate = "\(name) (\(suffix))"
+            suffix += 1
+        } while reserved.contains(candidate)
+        nextSuffix[name] = suffix
+        return candidate
     }
 }
 
