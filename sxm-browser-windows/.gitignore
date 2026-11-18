@@ -1,0 +1,16 @@
+# Build outputs
+bin/
+obj/
+.avalonia-build-tasks/
+.vs/
+.idea/
+
+# Local NuGet package cache (used for reproducible offline builds)
+.nuget/
+
+# Published distribution artifacts
+dist/
+
+# OS metadata
+.DS_Store
+Thumbs.db

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>SXMBrowserSmoke</AssemblyName>
+    <RootNamespace>SXMBrowser.Smoke</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SXMBrowser.Core\SXMBrowser.Core.csproj" />
+    <ProjectReference Include="..\..\src\SXMBrowser.AppCore\SXMBrowser.AppCore.csproj" />
+  </ItemGroup>
+</Project>

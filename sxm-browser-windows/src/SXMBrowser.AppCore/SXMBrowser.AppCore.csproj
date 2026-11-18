@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>SXMBrowser.AppCore</AssemblyName>
+    <RootNamespace>SXMBrowser.AppCore</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SXMBrowser.Core\SXMBrowser.Core.csproj" />
+  </ItemGroup>
+</Project>

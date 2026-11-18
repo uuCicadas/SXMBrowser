@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>SXMBrowser.Core</AssemblyName>
+    <RootNamespace>SXMBrowser.Core</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\palettes.json" LogicalName="SXMBrowser.Core.Resources.palettes.json" />
+  </ItemGroup>
+</Project>
