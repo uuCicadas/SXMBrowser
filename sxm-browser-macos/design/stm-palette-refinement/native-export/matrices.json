@@ -1,0 +1,28 @@
+[
+  {
+    "channel" : "Z",
+    "finite_count" : 262144,
+    "height" : 512,
+    "key" : "Au1110164",
+    "path" : "\/Users\/wuziyou\/Documents\/Project\/SXM Browser\/example\/Au1110164.sxm",
+    "processing" : "planeLinear",
+    "range_x_nm" : 50,
+    "range_y_nm" : 50,
+    "vmax" : 2.1012339090908938e-10,
+    "vmin" : -1.3797957221228785e-10,
+    "width" : 512
+  },
+  {
+    "channel" : "Z",
+    "finite_count" : 111664,
+    "height" : 512,
+    "key" : "Au1110365",
+    "path" : "\/Users\/wuziyou\/Documents\/Project\/SXM Browser\/example-graph\/Au1110365.sxm",
+    "processing" : "planeLinear",
+    "range_x_nm" : 4,
+    "range_y_nm" : 4,
+    "vmax" : 5.0519800148807192e-11,
+    "vmin" : -6.118846401781397e-11,
+    "width" : 512
+  }
+]

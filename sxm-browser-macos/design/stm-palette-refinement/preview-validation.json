@@ -1,0 +1,56 @@
+[
+  {
+    "channel": "Z",
+    "finite_count": 262144,
+    "height": 512,
+    "key": "Au1110164",
+    "path": "/Users/wuziyou/Documents/Project/SXM Browser/example/Au1110164.sxm",
+    "processing": "planeLinear",
+    "range_x_nm": 50,
+    "range_y_nm": 50,
+    "vmax": 2.1012339090908938e-10,
+    "vmin": -1.3797957221228785e-10,
+    "width": 512,
+    "original_sha256": "78e5fd77b546d91c5253fed4fd82456ef815ed981061e3fd7d298e2ee0b0a65e",
+    "exact_native_RGB_parity": true,
+    "numpy_SVD_max_residual_error_m": 6.938683593236487e-18,
+    "numpy_SVD_tolerance_m": 3.4810296081780163e-16,
+    "preview_crop": [
+      0,
+      0,
+      512,
+      512
+    ],
+    "fitted_pixel_slopes_m": [
+      8.520143837935564e-13,
+      -6.749158416215244e-13
+    ]
+  },
+  {
+    "channel": "Z",
+    "finite_count": 111664,
+    "height": 512,
+    "key": "Au1110365",
+    "path": "/Users/wuziyou/Documents/Project/SXM Browser/example-graph/Au1110365.sxm",
+    "processing": "planeLinear",
+    "range_x_nm": 4,
+    "range_y_nm": 4,
+    "vmax": 5.051980014880719e-11,
+    "vmin": -6.118846401781397e-11,
+    "width": 512,
+    "original_sha256": "c988722fe1a110222739beb1db75752dc4a301bd9c5c979f0ac68975d05a0838",
+    "exact_native_RGB_parity": true,
+    "numpy_SVD_max_residual_error_m": 3.3882805781298843e-18,
+    "numpy_SVD_tolerance_m": 1.117082651004321e-16,
+    "preview_crop": [
+      0,
+      0,
+      512,
+      218
+    ],
+    "fitted_pixel_slopes_m": [
+      -3.0949926653714376e-14,
+      6.395494829887597e-14
+    ]
+  }
+]

@@ -1,0 +1,30 @@
+{
+  "description": "Blue Violet: slightly brighter shadows and stronger low-tone separation",
+  "lightness_positions": [
+    0,
+    0.18,
+    0.45,
+    0.7,
+    0.9,
+    1
+  ],
+  "lightness_values": [
+    4,
+    14.5,
+    40.5,
+    71.5,
+    90.3,
+    98
+  ],
+  "perceptual_chroma_multiplier": 0.97,
+  "chroma_reduction_percent_range": [
+    2.9460916107131307,
+    3.021624855756233
+  ],
+  "max_lightness_lift": 2.5061873335181843,
+  "lightness_endpoints_preserved": true,
+  "luminance_strictly_increasing": true,
+  "in_srgb_without_clipping": true,
+  "blue_violet_fingerprint": "854ac7ad4c33d9a5e5c918ec703a3d0a254853e303eb9d25723ccbbb580311c4",
+  "other_palettes_unchanged": true
+}

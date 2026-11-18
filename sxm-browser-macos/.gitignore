@@ -1,0 +1,21 @@
+.DS_Store
+
+# Swift build artifacts
+.build/
+.build-cache/
+.build-*/
+.build-cache-*/
+.swiftpm/
+DerivedData/
+
+# Generated app packages and release archives
+dist/
+*.app/
+*.zip
+
+# Local backups
+backups/
+
+# Python bytecode
+__pycache__/
+*.pyc

@@ -1,0 +1,29 @@
+{
+ "E_deep_violet": {
+  "L_min": 0.1,
+  "L_max": 0.97,
+  "C_peak": 0.126,
+  "C_peak_at": 0.5,
+  "C_mid": 0.126,
+  "h_mid": 285.0,
+  "hue_span": 1.6
+ },
+ "H_late_violet": {
+  "L_min": 0.09,
+  "L_max": 0.96,
+  "C_peak": 0.108,
+  "C_peak_at": 0.828,
+  "C_mid": 0.048,
+  "h_mid": 285.5,
+  "hue_span": 2.4
+ },
+ "I_glacier": {
+  "L_min": 0.09,
+  "L_max": 0.97,
+  "C_peak": 0.089,
+  "C_peak_at": 0.855,
+  "C_mid": 0.052,
+  "h_mid": 252.0,
+  "hue_span": 6.4
+ }
+}

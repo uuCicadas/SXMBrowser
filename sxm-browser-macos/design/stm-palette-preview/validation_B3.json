@@ -1,0 +1,18 @@
+{
+  "status": "preview_only_no_app_defaults_changed",
+  "gamut": "All stops in sRGB; radial chroma reduction at fixed hue and lightness",
+  "floating_point_luminance_strictly_increasing": true,
+  "lightness_error_max": 0.0018763597951503286,
+  "endpoint_lightness": [
+    3.0,
+    99.00000000000001
+  ],
+  "middle_lightness_slope": 129.6,
+  "old_middle_lightness_slope": 90,
+  "endpoint_lightness_slope": 62.4,
+  "same_raw_data_direction_crop_and_numerical_range": true,
+  "original_B2_pixel_equality": true,
+  "input_sha256_verified": true,
+  "production_palette_catalog_unchanged": true,
+  "scientific_limit": "A nonuniform display mapping changes perceptual weighting. It does not add spatial resolution or remove noise, scan lines, or background slope."
+}

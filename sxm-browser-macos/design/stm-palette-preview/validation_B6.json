@@ -1,0 +1,12 @@
+{
+  "status": "preview_only_no_app_defaults_changed",
+  "lab_hue_rotation_degrees": 12,
+  "lightness_difference_max": 0.0005753495420748322,
+  "chroma_difference_max": 0.0011724635951799733,
+  "floating_point_luminance_strictly_increasing": true,
+  "in_srgb_without_clipping_or_desaturation": true,
+  "B4_snapshot_hashes_verified": true,
+  "prior_B5_pixel_equality": true,
+  "input_sha256_verified": true,
+  "production_palette_catalog_unchanged": true
+}
