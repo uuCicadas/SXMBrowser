@@ -474,9 +474,8 @@ public sealed class MainWindow : Window
         {
             _gridView.SyncFromModel();
         }
-        _inspector.SyncFromModel();
-
         UpdatePaneLayout();
+        _inspector.SyncFromModel();
         SyncNoticesAndWarnings();
         _footerStatusText.Text = _model.Status;
         ApplyWindowThemeColors();
@@ -525,6 +524,7 @@ public sealed class MainWindow : Window
             priority: NativePanePriority.Sidebar,
             dividerThickness: 4.0);
 
+        bool wasInspectorVisible = _inspector.IsVisible;
         _isUpdatingSplitLayout = true;
         try
         {
@@ -541,6 +541,10 @@ public sealed class MainWindow : Window
         finally
         {
             _isUpdatingSplitLayout = false;
+        }
+        if (!wasInspectorVisible && _inspector.IsVisible)
+        {
+            _inspector.SyncFromModel();
         }
     }
 

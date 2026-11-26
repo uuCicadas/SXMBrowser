@@ -332,7 +332,7 @@ public sealed class SXMParser
         bool? zControllerOn)
     {
         if (channels.Count == 0) return null;
-        string? freq = FindChannel(channels, ["frequency shift", "freq", "df", "delta f", "Δf"]);
+        string? freq = channels.FirstOrDefault(c => SXMChannelRules.IsFrequencyShiftChannel(c.Name))?.Name;
         if (zControllerOn == false && freq is not null)
         {
             return freq;

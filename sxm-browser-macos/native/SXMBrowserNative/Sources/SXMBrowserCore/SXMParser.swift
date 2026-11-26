@@ -666,7 +666,7 @@ private func parseDataInfo(
 
 func chooseDefaultChannel(_ channels: [SXMChannel], zControllerOn: Bool?) -> String? {
     guard !channels.isEmpty else { return nil }
-    let freq = findChannel(channels, keywords: ["frequency shift", "freq", "df", "delta f", "Δf"])
+    let freq = channels.first(where: { isFrequencyShiftChannel($0.name) })?.name
     if zControllerOn == false, let freq {
         return freq
     }

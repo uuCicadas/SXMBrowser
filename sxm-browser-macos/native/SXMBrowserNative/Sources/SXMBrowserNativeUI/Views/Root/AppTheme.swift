@@ -210,6 +210,24 @@ enum AppTheme {
         return String(format: "%.1f K", kelvin)
     }
 
+    static func formattedFrequencyShift(
+        _ value: Double,
+        unit: String = "Hz"
+    ) -> String {
+        guard value.isFinite else { return "—" }
+        var number = String(
+            format: "%.1f",
+            locale: Locale(identifier: "en_US_POSIX"),
+            value
+        )
+        if number == "-0.0" {
+            number = "0.0"
+        }
+        let trimmedUnit = unit.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayUnit = trimmedUnit.isEmpty ? "Hz" : trimmedUnit
+        return "\(number) \(displayUnit)"
+    }
+
     private static func formatScalar(_ value: Double, maxFractionDigits: Int) -> String {
         let magnitude = abs(value)
         let digits: Int

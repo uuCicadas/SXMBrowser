@@ -8,6 +8,11 @@ import SXMBrowserCore
 @Observable
 @MainActor
 public final class ImageViewerController {
+    internal enum CachedFrequencyShiftBounds: Equatable, Sendable {
+        case available(FrequencyShiftBounds)
+        case unavailable
+    }
+
     private static let viewerZoomPresets: [Double] = [
         0.25,
         0.5,
@@ -78,6 +83,7 @@ public final class ImageViewerController {
     )?
     @ObservationIgnored internal var onSTMPreviewPaletteChanged: (() -> Void)?
     @ObservationIgnored internal var onHistogramBinsChanged: (() -> Void)?
+    @ObservationIgnored internal var frequencyShiftBoundsCache: [FrequencyShiftBoundsKey: CachedFrequencyShiftBounds] = [:]
 
     public init(renderCoordinator: RenderCoordinator = RenderCoordinator()) {
         self.renderCoordinator = renderCoordinator
@@ -199,5 +205,15 @@ public final class ImageViewerController {
     public func invalidateActiveRender(clearFrame: Bool) {
         cancelCoalescedScaleRender()
         renderCoordinator.invalidate(clearFrame: clearFrame)
+    }
+
+    internal func clearFrequencyShiftBoundsCache() {
+        frequencyShiftBoundsCache.removeAll()
+    }
+
+    internal func removeFrequencyShiftBoundsEntries(forStandardizedPath path: String) {
+        frequencyShiftBoundsCache = frequencyShiftBoundsCache.filter {
+            $0.key.standardizedPath != path
+        }
     }
 }

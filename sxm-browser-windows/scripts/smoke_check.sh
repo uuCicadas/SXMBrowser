@@ -4,7 +4,13 @@ set -euo pipefail
 SCRIPT_DIR="${0:A:h}"
 ROOT_DIR="${SCRIPT_DIR:h}"
 WORKSPACE_DIR="${ROOT_DIR:h}"
-SAMPLE_DIR="${1:-$WORKSPACE_DIR/example-graph}"
+if [[ $# -ge 1 ]]; then
+  SAMPLE_DIR="$1"
+elif [[ -d "$WORKSPACE_DIR/examples/example-graph" ]]; then
+  SAMPLE_DIR="$WORKSPACE_DIR/examples/example-graph"
+else
+  SAMPLE_DIR="$WORKSPACE_DIR/example-graph"
+fi
 
 export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-/tmp/dotnet-home}"
 export DOTNET_CLI_TELEMETRY_OPTOUT=1

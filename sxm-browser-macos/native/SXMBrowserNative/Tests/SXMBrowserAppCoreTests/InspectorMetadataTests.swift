@@ -145,3 +145,86 @@ func inspectorPresentationExtractsAcquisitionParametersAndFiltersRawHeader() {
             .contains("Z-Controller>Setpoint")
     )
 }
+
+@Test
+func inspectorPresentationIdentifiesFrequencyShiftChannels() {
+    let metadata = SXMMetadata(
+        path: URL(fileURLWithPath: "/tmp/afm.sxm"),
+        filename: "afm.sxm",
+        header: [:],
+        recordedTime: nil,
+        modifiedTime: Date(timeIntervalSince1970: 200),
+        pixels: (width: 112, height: 112),
+        scanRange: (x: 4e-9, y: 4e-9),
+        scanOffset: nil,
+        scanAngle: nil,
+        scanDir: "down",
+        zControllerOn: false,
+        channels: [
+            SXMChannel(name: "Z", unit: "m", directions: [.fwd], kind: .topography),
+            SXMChannel(name: "Current", unit: "A", directions: [.fwd], kind: .conductanceOrCurrent),
+            SXMChannel(name: "OC_D1_Amplitude", unit: "m", directions: [.fwd], kind: .afm),
+            SXMChannel(name: "OC_M1_Freq._Shift", unit: "Hz", directions: [.fwd, .bwd], kind: .afm),
+        ],
+        defaultChannel: "OC_M1_Freq._Shift"
+    )
+
+    let freqPresentation = InspectorMetadataPresentation(
+        metadata: metadata,
+        selectedChannelName: "OC_M1_Freq._Shift"
+    )
+    #expect(freqPresentation.isFrequencyShiftChannel)
+    #expect(freqPresentation.channelUnit == "Hz")
+
+    let zPresentation = InspectorMetadataPresentation(
+        metadata: metadata,
+        selectedChannelName: "Z"
+    )
+    #expect(!zPresentation.isFrequencyShiftChannel)
+
+    let currentPresentation = InspectorMetadataPresentation(
+        metadata: metadata,
+        selectedChannelName: "Current"
+    )
+    #expect(!currentPresentation.isFrequencyShiftChannel)
+
+    let amplitudePresentation = InspectorMetadataPresentation(
+        metadata: metadata,
+        selectedChannelName: "OC_D1_Amplitude"
+    )
+    #expect(!amplitudePresentation.isFrequencyShiftChannel)
+}
+
+@Test
+func frequencyShiftBoundsIgnoresNonFiniteHandlesConstantsEmptyAndCancellation() throws {
+    let mixed = Matrix(
+        width: 3,
+        height: 2,
+        values: [-12.34, .nan, 4.56, .infinity, -.infinity, 0.0]
+    )
+    let mixedBounds = try #require(FrequencyShiftBounds.from(matrix: mixed))
+    #expect(abs(mixedBounds.min - Double(Float(-12.34))) < 1e-6)
+    #expect(abs(mixedBounds.max - Double(Float(4.56))) < 1e-6)
+
+    let constant = Matrix(width: 2, height: 2, values: [-8.5, -8.5, -8.5, -8.5])
+    let constantBounds = try #require(FrequencyShiftBounds.from(matrix: constant))
+    #expect(constantBounds.min == -8.5)
+    #expect(constantBounds.max == -8.5)
+
+    let empty = Matrix(width: 0, height: 0, values: [])
+    #expect(FrequencyShiftBounds.from(matrix: empty) == nil)
+
+    let allNonFinite = Matrix(width: 2, height: 1, values: [.nan, .infinity])
+    #expect(FrequencyShiftBounds.from(matrix: allNonFinite) == nil)
+
+    let cancelledCheckpoint = CancellationCheckpoint {
+        throw CancellationError()
+    }
+    var didThrowCancellation = false
+    do {
+        _ = try FrequencyShiftBounds.from(matrix: mixed, cancellation: cancelledCheckpoint)
+    } catch is CancellationError {
+        didThrowCancellation = true
+    }
+    #expect(didThrowCancellation)
+}

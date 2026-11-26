@@ -628,6 +628,82 @@ extension AppModel {
         )
     }
 
+    public func frequencyShiftBoundsKey(
+        for file: SXMMetadata,
+        channel: String,
+        direction: ScanDirection
+    ) -> FrequencyShiftBoundsKey? {
+        guard isFrequencyShiftChannel(channel),
+              let channelInfo = file.channels.first(where: { $0.name == channel }),
+              !channelInfo.directions.isEmpty else {
+            return nil
+        }
+        let resolvedDirection = channelInfo.directions.contains(direction)
+            ? direction
+            : channelInfo.directions[0]
+        return FrequencyShiftBoundsKey(
+            datasetRevision: renderCoordinator.datasetRevision,
+            fileID: file.id,
+            path: file.path,
+            modifiedTime: file.modifiedTime,
+            channel: channelInfo.name,
+            direction: resolvedDirection
+        )
+    }
+
+    public func cachedFrequencyShiftBounds(
+        for key: FrequencyShiftBoundsKey
+    ) -> FrequencyShiftBounds? {
+        guard case .available(let bounds) = viewer.frequencyShiftBoundsCache[key] else {
+            return nil
+        }
+        return bounds
+    }
+
+    public func loadFrequencyShiftBounds(
+        for file: SXMMetadata,
+        key: FrequencyShiftBoundsKey
+    ) async -> FrequencyShiftBounds? {
+        guard !Task.isCancelled,
+              key.datasetRevision == renderCoordinator.datasetRevision,
+              key.fileID == file.id,
+              isFrequencyShiftChannel(key.channel) else {
+            return nil
+        }
+        if let cached = viewer.frequencyShiftBoundsCache[key] {
+            switch cached {
+            case .available(let bounds):
+                return bounds
+            case .unavailable:
+                return nil
+            }
+        }
+        do {
+            let matrix = try await renderCoordinator.matrix(
+                for: file,
+                key: MatrixKey(channel: key.channel, direction: key.direction),
+                priority: .userInitiated
+            )
+            try Task.checkCancellation()
+            let bounds = try await runDetachedCancellable(priority: .userInitiated) {
+                try FrequencyShiftBounds.from(
+                    matrix: matrix,
+                    cancellation: .task
+                )
+            }
+            guard !Task.isCancelled,
+                  key.datasetRevision == renderCoordinator.datasetRevision else {
+                return nil
+            }
+            viewer.frequencyShiftBoundsCache[key] = bounds.map(
+                ImageViewerController.CachedFrequencyShiftBounds.available
+            ) ?? .unavailable
+            return bounds
+        } catch {
+            return nil
+        }
+    }
+
 
     public func refreshSelectedImage(resetScale: Bool) {
         guard let file = selectedFile, !selectedChannel.isEmpty else {
@@ -912,6 +988,7 @@ extension AppModel {
         renderCoordinator.removeMatrixEntries(
             forStandardizedPath: path
         )
+        viewer.removeFrequencyShiftBoundsEntries(forStandardizedPath: path)
         if selectedFile?.path.standardizedFileURL.path == path {
             renderCoordinator.discardProcessedData()
         }

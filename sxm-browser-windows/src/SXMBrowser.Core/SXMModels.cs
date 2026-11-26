@@ -409,6 +409,24 @@ public static class SXMChannelRules
         "amplitude", "excitation", "pll", "oc_"
     ];
 
+    private static readonly string[] FrequencyShiftKeywords =
+    [
+        "frequency shift", "freq", "df", "delta f", "\u03B4f"
+    ];
+
+    public static bool IsFrequencyShiftChannel(string name)
+    {
+        string folded = name.ToLowerInvariant();
+        foreach (string kw in FrequencyShiftKeywords)
+        {
+            if (folded.Contains(kw, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return name.Contains("\u0394f", StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// Returns true when :SCAN_DIR: explicitly specifies an upward scan.
     /// </summary>

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using SXMBrowser.Core;
 
@@ -25,6 +26,77 @@ public sealed record InspectorHeaderEntry(string Key, string Value)
     public string Id => Key;
 }
 
+public readonly record struct FrequencyShiftBounds
+{
+    public double Min { get; }
+    public double Max { get; }
+
+    private FrequencyShiftBounds(double min, double max)
+    {
+        Min = min;
+        Max = max;
+    }
+
+    public static FrequencyShiftBounds? TryCreate(double min, double max)
+        => double.IsFinite(min) && double.IsFinite(max) && min <= max
+            ? new FrequencyShiftBounds(min, max)
+            : null;
+
+    public static FrequencyShiftBounds? From(Matrix matrix)
+        => From(matrix, CancellationCheckpoint.None);
+
+    public static FrequencyShiftBounds? From(Matrix matrix, CancellationCheckpoint cancellation)
+    {
+        cancellation.Check();
+        double minValue = double.PositiveInfinity;
+        double maxValue = double.NegativeInfinity;
+        float[] values = matrix.Values;
+        for (int index = 0; index < values.Length; index++)
+        {
+            if (index % 4_096 == 0)
+            {
+                cancellation.Check();
+            }
+            float sample = values[index];
+            if (!float.IsFinite(sample)) continue;
+            double value = sample;
+            if (value < minValue) minValue = value;
+            if (value > maxValue) maxValue = value;
+        }
+        if (!double.IsFinite(minValue) || !double.IsFinite(maxValue))
+        {
+            return null;
+        }
+        return TryCreate(minValue, maxValue);
+    }
+}
+
+public readonly record struct FrequencyShiftBoundsKey
+{
+    public Guid DatasetRevision { get; }
+    public Guid FileId { get; }
+    public string StandardizedPath { get; }
+    public DateTimeOffset ModifiedTime { get; }
+    public string Channel { get; }
+    public ScanDirection Direction { get; }
+
+    public FrequencyShiftBoundsKey(
+        Guid datasetRevision,
+        Guid fileId,
+        string path,
+        DateTimeOffset modifiedTime,
+        string channel,
+        ScanDirection direction)
+    {
+        DatasetRevision = datasetRevision;
+        FileId = fileId;
+        StandardizedPath = Path.GetFullPath(path);
+        ModifiedTime = modifiedTime;
+        Channel = channel;
+        Direction = direction;
+    }
+}
+
 public sealed class InspectorMetadataPresentation
 {
     private readonly record struct ZControllerRow(
@@ -43,6 +115,7 @@ public sealed class InspectorMetadataPresentation
     public double? ScanAngleDegrees { get; }
     public string ChannelName { get; }
     public string ChannelUnit { get; }
+    public bool IsFrequencyShiftChannel { get; }
     public double? SampleBiasVolts { get; }
     public string? FeedbackControllerName { get; }
     public bool? IsFeedbackActive { get; }
@@ -76,6 +149,7 @@ public sealed class InspectorMetadataPresentation
             c => string.Equals(c.Name, selectedChannelName, StringComparison.Ordinal));
         ChannelName = selectedChannel?.Name ?? selectedChannelName;
         ChannelUnit = selectedChannel?.Unit ?? string.Empty;
+        IsFrequencyShiftChannel = SXMChannelRules.IsFrequencyShiftChannel(ChannelName);
 
         IReadOnlyDictionary<string, string> header = metadata.Header;
         if (HeaderValue(header, ["BIAS", "Bias>Bias (V)", "Bias>Bias"]) is { } rawBias

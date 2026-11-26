@@ -235,6 +235,7 @@ extension AppModel {
         activeDeleteOperationID = nil
         dataset.isDeletingFiles = false
         renderCoordinator.beginDataset(revision: sessionID)
+        viewer.clearFrequencyShiftBoundsCache()
         let openedURL = url.standardizedFileURL
         if openedURL.startAccessingSecurityScopedResource() {
             securityScopedFolderURL = openedURL

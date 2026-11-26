@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
@@ -9,6 +11,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Avalonia.Threading;
 using SXMBrowser.AppCore;
 using SXMBrowser.Core;
 using SXMBrowser.Desktop.Controllers;
@@ -58,6 +61,10 @@ public sealed class InspectorView : Border
     private InspectorMetadataPresentation? _cachedMetaPresentation;
     private Guid? _cachedMetaFileId;
     private string? _cachedMetaChannel;
+    private ScanDirection? _cachedMetaDirection;
+    private FrequencyShiftBoundsKey? _activeFrequencyShiftKey;
+    private FrequencyShiftBounds? _loadedFrequencyShiftBounds;
+    private CancellationTokenSource? _frequencyShiftCts;
     private bool _guard;
     private bool _editingScaleMin;
     private bool _editingScaleMax;
@@ -191,7 +198,7 @@ public sealed class InspectorView : Border
         _acqGrid = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,*"),
-            RowDefinitions = new RowDefinitions("Auto,Auto,Auto")
+            RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto")
         };
         _timestampsText = new TextBlock { FontSize = 11, Opacity = 0.8, TextWrapping = TextWrapping.Wrap };
         _commentText = new TextBlock { FontSize = 11.5, TextWrapping = TextWrapping.Wrap };
@@ -375,6 +382,12 @@ public sealed class InspectorView : Border
         _commentCard.BorderBrush = theme.HairlineBorderBrush;
     }
 
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        CancelFrequencyShiftLoad();
+    }
+
     public void SyncFromModel()
     {
         _guard = true;
@@ -385,7 +398,17 @@ public sealed class InspectorView : Border
             bool hasFile = file is not null;
             _emptySelectionText.IsVisible = !hasFile;
             _contentStack.IsVisible = hasFile;
-            if (file is null) return;
+            if (file is null)
+            {
+                CancelFrequencyShiftLoad();
+                _cachedMetaFileId = null;
+                _cachedMetaChannel = null;
+                _cachedMetaDirection = null;
+                _cachedMetaPresentation = null;
+                _activeFrequencyShiftKey = null;
+                _loadedFrequencyShiftBounds = null;
+                return;
+            }
 
             _channelBox.ItemsSource = file.Channels.Select(c => c.Name).ToArray();
             _channelBox.SelectedItem = _model.SelectedChannel;
@@ -404,16 +427,8 @@ public sealed class InspectorView : Border
             RebuildScalePresetButtons(theme);
             RebuildFileTags(file);
 
-            if (_cachedMetaFileId != file.Id || _cachedMetaChannel != _model.SelectedChannel || _cachedMetaPresentation is null)
-            {
-                _cachedMetaFileId = file.Id;
-                _cachedMetaChannel = _model.SelectedChannel;
-                _cachedMetaPresentation = new InspectorMetadataPresentation(file, _model.SelectedChannel);
-                RebuildAcquisitionSection(_cachedMetaPresentation, theme);
-                RefreshRawHeaderEntries();
-            }
-
-            SyncScaleControlsOnly();
+            SyncMetadataAndFrequencyShiftBounds(file, theme);
+            SyncScaleControlsCore(theme);
         }
         finally
         {
@@ -428,41 +443,156 @@ public sealed class InspectorView : Border
         try
         {
             AppThemePalette theme = AppTheme.Resolve(ActualThemeVariant);
-            _paletteStrip.Palette = _model.SelectedPalette;
-            _paletteStrip.Invert = _model.InvertPalette;
-            _histogramControl.UpdateData(_model.SelectedHistogramStats, _model.ScaleMin, _model.ScaleMax);
-
-            RebuildScalePresetButtons(theme);
-
-            string unit = _cachedMetaPresentation?.ChannelUnit ?? string.Empty;
-            if (!_editingScaleMin)
+            if (_model.SelectedFile is { } file)
             {
-                _scaleMinBox.Text = _model.ScaleMin is { } min ? ScientificFormatters.FormatSi(min, unit, 4) : "";
+                SyncMetadataAndFrequencyShiftBounds(file, theme);
             }
-            if (!_editingScaleMax)
-            {
-                _scaleMaxBox.Text = _model.ScaleMax is { } max ? ScientificFormatters.FormatSi(max, unit, 4) : "";
-            }
-
-            if (_model.SelectedStats is { } stats)
-            {
-                _statsSummaryText.Text =
-                    $"Min {ScientificFormatters.FormatSi(stats.Min, unit, 3)} \u00B7 " +
-                    $"Max {ScientificFormatters.FormatSi(stats.Max, unit, 3)}\n" +
-                    $"Mean {ScientificFormatters.FormatSi(stats.Mean, unit, 3)} \u00B7 " +
-                    $"RMS {ScientificFormatters.FormatSi(stats.Std, unit, 3)}";
-            }
-            else
-            {
-                _statsSummaryText.Text = _model.Mode == BrowserMode.Single
-                    ? "Open in Single View for live histogram statistics."
-                    : "Switch to Single View to adjust contrast bounds.";
-            }
+            SyncScaleControlsCore(theme);
         }
         finally
         {
             _guard = prevGuard;
         }
+    }
+
+    private void SyncScaleControlsCore(AppThemePalette theme)
+    {
+        _paletteStrip.Palette = _model.SelectedPalette;
+        _paletteStrip.Invert = _model.InvertPalette;
+        _histogramControl.UpdateData(_model.SelectedHistogramStats, _model.ScaleMin, _model.ScaleMax);
+
+        RebuildScalePresetButtons(theme);
+
+        string unit = _cachedMetaPresentation?.ChannelUnit ?? string.Empty;
+        if (!_editingScaleMin)
+        {
+            _scaleMinBox.Text = _model.ScaleMin is { } min ? ScientificFormatters.FormatSi(min, unit, 4) : "";
+        }
+        if (!_editingScaleMax)
+        {
+            _scaleMaxBox.Text = _model.ScaleMax is { } max ? ScientificFormatters.FormatSi(max, unit, 4) : "";
+        }
+
+        if (_model.SelectedStats is { } stats)
+        {
+            _statsSummaryText.Text =
+                $"Min {ScientificFormatters.FormatSi(stats.Min, unit, 3)} \u00B7 " +
+                $"Max {ScientificFormatters.FormatSi(stats.Max, unit, 3)}\n" +
+                $"Mean {ScientificFormatters.FormatSi(stats.Mean, unit, 3)} \u00B7 " +
+                $"RMS {ScientificFormatters.FormatSi(stats.Std, unit, 3)}";
+        }
+        else
+        {
+            _statsSummaryText.Text = _model.Mode == BrowserMode.Single
+                ? "Open in Single View for live histogram statistics."
+                : "Switch to Single View to adjust contrast bounds.";
+        }
+    }
+
+    private void SyncMetadataAndFrequencyShiftBounds(SXMMetadata file, AppThemePalette theme)
+    {
+        bool metaChanged = _cachedMetaFileId != file.Id
+            || !string.Equals(_cachedMetaChannel, _model.SelectedChannel, StringComparison.Ordinal)
+            || _cachedMetaPresentation is null;
+        bool dirChanged = _cachedMetaDirection != _model.SelectedDirection;
+
+        InspectorMetadataPresentation presentation;
+        if (metaChanged)
+        {
+            _cachedMetaFileId = file.Id;
+            _cachedMetaChannel = _model.SelectedChannel;
+            presentation = new InspectorMetadataPresentation(file, _model.SelectedChannel);
+            _cachedMetaPresentation = presentation;
+            _channelBox.ItemsSource = file.Channels.Select(c => c.Name).ToArray();
+            _channelBox.SelectedItem = _model.SelectedChannel;
+            _processingBox.SelectedItem = _model.SelectedProcessing;
+            _paletteBox.SelectedItem = _model.SelectedPalette;
+            _invertCheck.IsChecked = _model.InvertPalette;
+            SXMChannel? chInfo = file.Channels.FirstOrDefault(
+                c => string.Equals(c.Name, _model.SelectedChannel, StringComparison.Ordinal));
+            RebuildDirectionButtons(chInfo, theme);
+            RefreshRawHeaderEntries();
+        }
+        else
+        {
+            presentation = _cachedMetaPresentation!;
+            if (dirChanged)
+            {
+                SXMChannel? chInfo = file.Channels.FirstOrDefault(
+                    c => string.Equals(c.Name, _model.SelectedChannel, StringComparison.Ordinal));
+                RebuildDirectionButtons(chInfo, theme);
+            }
+        }
+        _cachedMetaDirection = _model.SelectedDirection;
+
+        FrequencyShiftBoundsKey? key = IsVisible && presentation.IsFrequencyShiftChannel
+            ? _model.GetFrequencyShiftBoundsKey(file, presentation.ChannelName, _model.SelectedDirection)
+            : null;
+
+        FrequencyShiftBounds? currentBounds = null;
+        if (key is { } k)
+        {
+            currentBounds = _model.GetCachedFrequencyShiftBounds(k)
+                ?? (_activeFrequencyShiftKey == k ? _loadedFrequencyShiftBounds : null);
+        }
+
+        if (metaChanged || dirChanged || key != _activeFrequencyShiftKey)
+        {
+            RebuildAcquisitionSection(presentation, theme, currentBounds);
+        }
+
+        if (key is null)
+        {
+            CancelFrequencyShiftLoad();
+            _activeFrequencyShiftKey = null;
+            _loadedFrequencyShiftBounds = null;
+        }
+        else if (_model.GetCachedFrequencyShiftBounds(key.Value) is { } cached)
+        {
+            CancelFrequencyShiftLoad();
+            _activeFrequencyShiftKey = key;
+            _loadedFrequencyShiftBounds = cached;
+        }
+        else if (_activeFrequencyShiftKey != key)
+        {
+            CancelFrequencyShiftLoad();
+            _activeFrequencyShiftKey = key;
+            _loadedFrequencyShiftBounds = null;
+            var cts = new CancellationTokenSource();
+            _frequencyShiftCts = cts;
+            _ = LoadFrequencyShiftBoundsForUiAsync(file, key.Value, cts);
+        }
+    }
+
+    private void CancelFrequencyShiftLoad()
+    {
+        if (_frequencyShiftCts is not null)
+        {
+            try { _frequencyShiftCts.Cancel(); } catch (ObjectDisposedException) { }
+            _frequencyShiftCts.Dispose();
+            _frequencyShiftCts = null;
+        }
+    }
+
+    private async Task LoadFrequencyShiftBoundsForUiAsync(
+        SXMMetadata file,
+        FrequencyShiftBoundsKey key,
+        CancellationTokenSource cts)
+    {
+        FrequencyShiftBounds? bounds = await _model.LoadFrequencyShiftBoundsAsync(file, key, cts.Token)
+            .ConfigureAwait(false);
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (cts.IsCancellationRequested
+                || !ReferenceEquals(_frequencyShiftCts, cts)
+                || _activeFrequencyShiftKey != key
+                || _cachedMetaPresentation is null)
+            {
+                return;
+            }
+            _loadedFrequencyShiftBounds = bounds;
+            RebuildAcquisitionSection(_cachedMetaPresentation, AppTheme.Resolve(ActualThemeVariant), bounds);
+        });
     }
 
     private void RebuildDirectionButtons(SXMChannel? channel, AppThemePalette theme)
@@ -533,7 +663,10 @@ public sealed class InspectorView : Border
         }
     }
 
-    private void RebuildAcquisitionSection(InspectorMetadataPresentation meta, AppThemePalette theme)
+    private void RebuildAcquisitionSection(
+        InspectorMetadataPresentation meta,
+        AppThemePalette theme,
+        FrequencyShiftBounds? frequencyShiftBounds = null)
     {
         _acqGrid.Children.Clear();
 
@@ -583,6 +716,23 @@ public sealed class InspectorView : Border
         AddCard(1, 1, meta.FeedbackControllerName ?? "Setpoint", setpoint);
         AddCard(0, 2, "Temperature", temp);
         AddCard(1, 2, "Acq. Time", acq);
+        if (meta.IsFrequencyShiftChannel)
+        {
+            AddCard(
+                0,
+                3,
+                "\u0394f Min",
+                frequencyShiftBounds is { } dfMinBounds
+                    ? ScientificFormatters.FormatFrequencyShift(dfMinBounds.Min, meta.ChannelUnit)
+                    : "\u2014");
+            AddCard(
+                1,
+                3,
+                "\u0394f Max",
+                frequencyShiftBounds is { } dfMaxBounds
+                    ? ScientificFormatters.FormatFrequencyShift(dfMaxBounds.Max, meta.ChannelUnit)
+                    : "\u2014");
+        }
 
         string recorded = meta.RecordedTime is { } rt
             ? rt.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)

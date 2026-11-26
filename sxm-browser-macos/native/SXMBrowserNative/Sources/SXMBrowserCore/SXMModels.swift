@@ -286,6 +286,12 @@ public func classifyChannel(_ name: String) -> ChannelKind {
     return .conductanceOrCurrent
 }
 
+public func isFrequencyShiftChannel(_ name: String) -> Bool {
+    let folded = name.lowercased()
+    let keywords = ["frequency shift", "freq", "df", "delta f", "δf"]
+    return keywords.contains(where: { folded.contains($0) }) || name.contains("Δf")
+}
+
 public func defaultPalette(for channelName: String) -> PaletteName {
     classifyChannel(channelName).usesSTMPalette ? .duskViolet : .gray
 }

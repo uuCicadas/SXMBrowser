@@ -156,6 +156,135 @@ public sealed partial class AppModel
     private static bool UsesStmPalette(string channelName) =>
         SXMChannelRules.ClassifyChannel(channelName).UsesSTMPalette();
 
+    public FrequencyShiftBoundsKey? GetFrequencyShiftBoundsKey(
+        SXMMetadata file,
+        string channel,
+        ScanDirection direction)
+    {
+        if (!SXMChannelRules.IsFrequencyShiftChannel(channel))
+        {
+            return null;
+        }
+        SXMChannel? channelInfo = file.Channels.FirstOrDefault(
+            c => string.Equals(c.Name, channel, StringComparison.Ordinal));
+        if (channelInfo is null || channelInfo.Directions.Count == 0)
+        {
+            return null;
+        }
+        ScanDirection resolvedDirection = channelInfo.Directions.Contains(direction)
+            ? direction
+            : channelInfo.Directions[0];
+        return new FrequencyShiftBoundsKey(
+            _renderCoordinator.DatasetRevision,
+            file.Id,
+            file.Path,
+            file.ModifiedTime,
+            channelInfo.Name,
+            resolvedDirection);
+    }
+
+    public FrequencyShiftBounds? GetCachedFrequencyShiftBounds(FrequencyShiftBoundsKey key)
+    {
+        lock (_frequencyShiftBoundsLock)
+        {
+            return _frequencyShiftBoundsCache.TryGetValue(key, out FrequencyShiftBounds? cached)
+                ? cached
+                : null;
+        }
+    }
+
+    public async Task<FrequencyShiftBounds?> LoadFrequencyShiftBoundsAsync(
+        SXMMetadata file,
+        FrequencyShiftBoundsKey key,
+        CancellationToken cancellationToken = default)
+    {
+        if (cancellationToken.IsCancellationRequested
+            || key.DatasetRevision != _renderCoordinator.DatasetRevision
+            || key.FileId != file.Id
+            || !SXMChannelRules.IsFrequencyShiftChannel(key.Channel))
+        {
+            return null;
+        }
+
+        lock (_frequencyShiftBoundsLock)
+        {
+            if (_frequencyShiftBoundsCache.TryGetValue(key, out FrequencyShiftBounds? cached))
+            {
+                return cached;
+            }
+        }
+
+        try
+        {
+            Matrix matrix = await _renderCoordinator.GetMatrixAsync(
+                file,
+                new MatrixKey(key.Channel, key.Direction),
+                cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            FrequencyShiftBounds? bounds = await CancellableDetachedWork.RunAsync(
+                ct => FrequencyShiftBounds.From(matrix, CancellationCheckpoint.FromToken(ct)),
+                cancellationToken).ConfigureAwait(false);
+
+            if (cancellationToken.IsCancellationRequested
+                || key.DatasetRevision != _renderCoordinator.DatasetRevision)
+            {
+                return null;
+            }
+
+            lock (_frequencyShiftBoundsLock)
+            {
+                _frequencyShiftBoundsCache[key] = bounds;
+            }
+            return bounds;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public void ClearFrequencyShiftBoundsCache()
+    {
+        lock (_frequencyShiftBoundsLock)
+        {
+            _frequencyShiftBoundsCache.Clear();
+        }
+    }
+
+    public void RemoveFrequencyShiftBoundsEntriesForStandardizedPath(string path)
+    {
+        string standardized = Path.GetFullPath(path);
+        StringComparison cmp = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        lock (_frequencyShiftBoundsLock)
+        {
+            var keysToRemove = _frequencyShiftBoundsCache.Keys
+                .Where(k => string.Equals(k.StandardizedPath, standardized, cmp))
+                .ToArray();
+            foreach (FrequencyShiftBoundsKey key in keysToRemove)
+            {
+                _frequencyShiftBoundsCache.Remove(key);
+            }
+        }
+    }
+
+    public void RemoveCachedData(string path)
+    {
+        string standardized = Path.GetFullPath(path);
+        StringComparison cmp = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        _renderCoordinator.RemoveMatrixEntriesForStandardizedPath(standardized);
+        RemoveFrequencyShiftBoundsEntriesForStandardizedPath(standardized);
+        if (SelectedFile is { } selected
+            && string.Equals(Path.GetFullPath(selected.Path), standardized, cmp))
+        {
+            _renderCoordinator.DiscardProcessedData();
+        }
+    }
+
     public Task<WriteableBitmap?> ThumbnailForAsync(
         SXMMetadata file,
         CancellationToken ct = default)

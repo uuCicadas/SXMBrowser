@@ -8,6 +8,10 @@ struct InspectorView: View {
     @Bindable var model: AppModel
     @State private var isRawHeaderExpanded = false
     @State private var rawHeaderQuery = ""
+    @State private var loadedFrequencyShiftBounds: (
+        key: FrequencyShiftBoundsKey,
+        bounds: FrequencyShiftBounds?
+    )?
 
     var isSingle: Bool { model.mode == .single && model.selectedFile != nil }
     var canEditScanDisplay: Bool { model.selectedFile != nil && !model.files.isEmpty }
@@ -22,6 +26,32 @@ struct InspectorView: View {
         }
     }
 
+    private var frequencyShiftBoundsKey: FrequencyShiftBoundsKey? {
+        guard let file = model.selectedFile,
+              let metadataPresentation,
+              metadataPresentation.isFrequencyShiftChannel else {
+            return nil
+        }
+        return model.frequencyShiftBoundsKey(
+            for: file,
+            channel: metadataPresentation.channelName,
+            direction: model.selectedDirection
+        )
+    }
+
+    private var frequencyShiftBoundsLoadTrigger: FrequencyShiftBoundsKey? {
+        model.actualInspectorVisible ? frequencyShiftBoundsKey : nil
+    }
+
+    private var activeFrequencyShiftBounds: FrequencyShiftBounds? {
+        guard let key = frequencyShiftBoundsKey else { return nil }
+        if let cached = model.cachedFrequencyShiftBounds(for: key) {
+            return cached
+        }
+        guard loadedFrequencyShiftBounds?.key == key else { return nil }
+        return loadedFrequencyShiftBounds?.bounds
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -30,7 +60,8 @@ struct InspectorView: View {
                        let metadataPresentation {
                         acquisitionSummaryBlock(
                             file: file,
-                            presentation: metadataPresentation
+                            presentation: metadataPresentation,
+                            frequencyShiftBounds: activeFrequencyShiftBounds
                         )
                     } else {
                         Text("No file selected.")
@@ -348,12 +379,33 @@ struct InspectorView: View {
             }
             .padding(12)
         }
+        .task(id: frequencyShiftBoundsLoadTrigger) {
+            guard let key = frequencyShiftBoundsLoadTrigger,
+                  let file = model.selectedFile,
+                  file.id == key.fileID else {
+                loadedFrequencyShiftBounds = nil
+                return
+            }
+            if let cached = model.cachedFrequencyShiftBounds(for: key) {
+                loadedFrequencyShiftBounds = (key, cached)
+                return
+            }
+            let bounds = await model.loadFrequencyShiftBounds(
+                for: file,
+                key: key
+            )
+            guard !Task.isCancelled, key == frequencyShiftBoundsKey else {
+                return
+            }
+            loadedFrequencyShiftBounds = (key, bounds)
+        }
     }
 
     @ViewBuilder
     private func acquisitionSummaryBlock(
         file: SXMMetadata,
-        presentation: InspectorMetadataPresentation
+        presentation: InspectorMetadataPresentation,
+        frequencyShiftBounds: FrequencyShiftBounds?
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 6) {
@@ -431,6 +483,26 @@ struct InspectorView: View {
                         AppTheme.formattedDuration
                     ) ?? "—"
                 )
+                if presentation.isFrequencyShiftChannel {
+                    AcquisitionMetricTile(
+                        label: "Δf Min",
+                        value: frequencyShiftBounds.map {
+                            AppTheme.formattedFrequencyShift(
+                                $0.min,
+                                unit: presentation.channelUnit
+                            )
+                        } ?? "—"
+                    )
+                    AcquisitionMetricTile(
+                        label: "Δf Max",
+                        value: frequencyShiftBounds.map {
+                            AppTheme.formattedFrequencyShift(
+                                $0.max,
+                                unit: presentation.channelUnit
+                            )
+                        } ?? "—"
+                    )
+                }
             }
 
             if let comment = presentation.comment {

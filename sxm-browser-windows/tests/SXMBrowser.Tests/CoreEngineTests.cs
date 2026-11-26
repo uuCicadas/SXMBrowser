@@ -15,10 +15,17 @@ public static class TestRepoPaths
         string? dir = AppContext.BaseDirectory;
         while (!string.IsNullOrEmpty(dir))
         {
-            string candidate = Path.Combine(dir, "example-graph");
-            if (File.Exists(Path.Combine(candidate, "Au1110145.sxm")))
+            string[] candidates =
+            [
+                Path.Combine(dir, "examples", "example-graph"),
+                Path.Combine(dir, "example-graph")
+            ];
+            foreach (string candidate in candidates)
             {
-                return candidate;
+                if (File.Exists(Path.Combine(candidate, "Au1110145.sxm")))
+                {
+                    return candidate;
+                }
             }
             dir = Path.GetDirectoryName(dir);
         }
@@ -232,5 +239,29 @@ public sealed class CoreEngineTests
         string[] items = ["scan10.sxm", "scan2.sxm", "scan1.sxm"];
         Array.Sort(items, NaturalStringComparer.CompareFilenames);
         Assert.Equal(["scan1.sxm", "scan2.sxm", "scan10.sxm"], items);
+    }
+
+    [Fact]
+    public void FrequencyShiftChannelClassifierDistinguishesFrequencyShiftFromOtherAfmAndStmChannels()
+    {
+        foreach (string channel in new[] { "OC_M1_Freq._Shift", "Frequency Shift", "Delta f", "df", "\u0394f" })
+        {
+            Assert.True(SXMChannelRules.IsFrequencyShiftChannel(channel));
+        }
+
+        foreach (string channel in new[]
+        {
+            "Z",
+            "Current",
+            "LI Demod 1 X",
+            "dI/dV",
+            "OC_D1_Amplitude",
+            "OC_M1_Excitation",
+            "PLL",
+            "Phase"
+        })
+        {
+            Assert.False(SXMChannelRules.IsFrequencyShiftChannel(channel));
+        }
     }
 }

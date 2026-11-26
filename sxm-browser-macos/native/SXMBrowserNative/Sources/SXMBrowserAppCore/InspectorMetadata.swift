@@ -32,6 +32,66 @@ public struct InspectorHeaderEntry:
     }
 }
 
+public struct FrequencyShiftBounds: Equatable, Sendable {
+    public let min: Double
+    public let max: Double
+
+    public init?(min: Double, max: Double) {
+        guard min.isFinite, max.isFinite, min <= max else { return nil }
+        self.min = min
+        self.max = max
+    }
+
+    public static func from(matrix: Matrix) -> FrequencyShiftBounds? {
+        try! from(matrix: matrix, cancellation: .none)
+    }
+
+    public static func from(
+        matrix: Matrix,
+        cancellation: CancellationCheckpoint
+    ) throws -> FrequencyShiftBounds? {
+        try cancellation.check()
+        var minValue = Double.infinity
+        var maxValue = -Double.infinity
+        for (index, sample) in matrix.values.enumerated() {
+            if index.isMultiple(of: 4_096) {
+                try cancellation.check()
+            }
+            guard sample.isFinite else { continue }
+            let value = Double(sample)
+            if value < minValue { minValue = value }
+            if value > maxValue { maxValue = value }
+        }
+        guard minValue.isFinite, maxValue.isFinite else { return nil }
+        return FrequencyShiftBounds(min: minValue, max: maxValue)
+    }
+}
+
+public struct FrequencyShiftBoundsKey: Hashable, Sendable {
+    public let datasetRevision: UUID
+    public let fileID: SXMMetadata.ID
+    public let standardizedPath: String
+    public let modifiedTime: Date
+    public let channel: String
+    public let direction: ScanDirection
+
+    public init(
+        datasetRevision: UUID,
+        fileID: SXMMetadata.ID,
+        path: URL,
+        modifiedTime: Date,
+        channel: String,
+        direction: ScanDirection
+    ) {
+        self.datasetRevision = datasetRevision
+        self.fileID = fileID
+        self.standardizedPath = path.standardizedFileURL.path
+        self.modifiedTime = modifiedTime
+        self.channel = channel
+        self.direction = direction
+    }
+}
+
 public struct InspectorMetadataPresentation:
     Equatable,
     Sendable
@@ -45,6 +105,7 @@ public struct InspectorMetadataPresentation:
     public let scanAngleDegrees: Double?
     public let channelName: String
     public let channelUnit: String
+    public let isFrequencyShiftChannel: Bool
     public let sampleBiasVolts: Double?
     public let feedbackControllerName: String?
     public let isFeedbackActive: Bool?
@@ -97,6 +158,7 @@ public struct InspectorMetadataPresentation:
         channelName = selectedChannel?.name
             ?? selectedChannelName
         channelUnit = selectedChannel?.unit ?? ""
+        isFrequencyShiftChannel = SXMBrowserCore.isFrequencyShiftChannel(channelName)
 
         let header = metadata.header
         if let rawBias = Self.headerValue(

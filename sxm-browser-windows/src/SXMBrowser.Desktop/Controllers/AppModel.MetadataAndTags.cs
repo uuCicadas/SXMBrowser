@@ -472,7 +472,7 @@ public sealed partial class AppModel
 
         foreach (string path in paths)
         {
-            _renderCoordinator.RemoveMatrixEntriesForStandardizedPath(path);
+            RemoveCachedData(path);
         }
         foreach (Guid id in removedIds)
         {

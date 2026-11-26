@@ -97,6 +97,19 @@ public static class ScientificFormatters
         return $"{k.ToString("G4", CultureInfo.InvariantCulture)} K";
     }
 
+    public static string FormatFrequencyShift(double value, string unit = "Hz")
+    {
+        if (!double.IsFinite(value)) return "\u2014";
+        string number = value.ToString("0.0", CultureInfo.InvariantCulture);
+        if (number == "-0.0")
+        {
+            number = "0.0";
+        }
+        string trimmedUnit = unit.Trim();
+        string displayUnit = trimmedUnit.Length == 0 ? "Hz" : trimmedUnit;
+        return $"{number} {displayUnit}";
+    }
+
     public static bool TryParseScaleInput(string text, string channelUnit, out double value)
     {
         value = 0.0;

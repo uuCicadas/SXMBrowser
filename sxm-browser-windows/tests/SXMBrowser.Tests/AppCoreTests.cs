@@ -168,4 +168,62 @@ public sealed class AppCoreTests
         Assert.Contains("nm", bar!.Label, StringComparison.Ordinal);
         Assert.InRange(bar.ScreenLengthPoints, 48.0, 180.0);
     }
+
+    [Fact]
+    public void InspectorPresentationIdentifiesFrequencyShiftChannels()
+    {
+        var metadata = new SXMMetadata(
+            id: null,
+            path: "/tmp/afm.sxm",
+            filename: "afm.sxm",
+            header: new Dictionary<string, string>(),
+            recordedTime: null,
+            modifiedTime: DateTimeOffset.FromUnixTimeSeconds(200),
+            pixels: (112, 112),
+            scanRange: (4e-9, 4e-9),
+            scanOffset: null,
+            scanAngle: null,
+            scanDir: "down",
+            zControllerOn: false,
+            channels:
+            [
+                new SXMChannel("Z", "m", [ScanDirection.Fwd], ChannelKind.Topography),
+                new SXMChannel("Current", "A", [ScanDirection.Fwd], ChannelKind.ConductanceOrCurrent),
+                new SXMChannel("OC_D1_Amplitude", "m", [ScanDirection.Fwd], ChannelKind.Afm),
+                new SXMChannel("OC_M1_Freq._Shift", "Hz", [ScanDirection.Fwd, ScanDirection.Bwd], ChannelKind.Afm)
+            ],
+            defaultChannel: "OC_M1_Freq._Shift");
+
+        var freqPresentation = new InspectorMetadataPresentation(metadata, "OC_M1_Freq._Shift");
+        Assert.True(freqPresentation.IsFrequencyShiftChannel);
+        Assert.Equal("Hz", freqPresentation.ChannelUnit);
+
+        Assert.False(new InspectorMetadataPresentation(metadata, "Z").IsFrequencyShiftChannel);
+        Assert.False(new InspectorMetadataPresentation(metadata, "Current").IsFrequencyShiftChannel);
+        Assert.False(new InspectorMetadataPresentation(metadata, "OC_D1_Amplitude").IsFrequencyShiftChannel);
+    }
+
+    [Fact]
+    public void FrequencyShiftBoundsIgnoresNonFiniteHandlesConstantsEmptyAndCancellation()
+    {
+        var mixed = new Matrix(3, 2, [-12.34f, float.NaN, 4.56f, float.PositiveInfinity, float.NegativeInfinity, 0.0f]);
+        FrequencyShiftBounds? mixedBounds = FrequencyShiftBounds.From(mixed);
+        Assert.NotNull(mixedBounds);
+        Assert.InRange(Math.Abs(mixedBounds!.Value.Min - (-12.34f)), 0.0, 1e-6);
+        Assert.InRange(Math.Abs(mixedBounds.Value.Max - 4.56f), 0.0, 1e-6);
+
+        var constant = new Matrix(2, 2, [-8.5f, -8.5f, -8.5f, -8.5f]);
+        FrequencyShiftBounds? constantBounds = FrequencyShiftBounds.From(constant);
+        Assert.NotNull(constantBounds);
+        Assert.Equal(-8.5, constantBounds!.Value.Min);
+        Assert.Equal(-8.5, constantBounds.Value.Max);
+
+        Assert.Null(FrequencyShiftBounds.From(new Matrix(0, 0, [])));
+        Assert.Null(FrequencyShiftBounds.From(new Matrix(2, 1, [float.NaN, float.PositiveInfinity])));
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        Assert.Throws<OperationCanceledException>(() =>
+            FrequencyShiftBounds.From(mixed, CancellationCheckpoint.FromToken(cts.Token)));
+    }
 }

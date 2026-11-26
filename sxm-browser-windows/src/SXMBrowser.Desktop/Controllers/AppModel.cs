@@ -101,6 +101,8 @@ public sealed partial class AppModel : INotifyPropertyChanged
     private ViewerTransform _viewerTransform = ViewerTransform.CreateDefault();
     private RenderRequestIdentity<Guid>? _inFlightCoalescedRequest;
     private bool _hasPendingScaleRender;
+    private readonly object _frequencyShiftBoundsLock = new();
+    private readonly Dictionary<FrequencyShiftBoundsKey, FrequencyShiftBounds?> _frequencyShiftBoundsCache = new();
 
     public event PropertyChangedEventHandler? PropertyChanged;
     public event Action? StateChanged;
@@ -116,7 +118,8 @@ public sealed partial class AppModel : INotifyPropertyChanged
         IPlatformFileService? fileService = null,
         IRenderBackend<WriteableBitmap>? renderBackend = null,
         Action<Action>? dispatchToUi = null,
-        Func<Action, Task>? invokeOnUiAsync = null)
+        Func<Action, Task>? invokeOnUiAsync = null,
+        ISxmMatrixReader? matrixReader = null)
     {
         _metadataStore = metadataStore ?? new DatasetMetadataStore();
         _preferencesStore = preferencesStore ?? new BrowserPreferencesStore();
@@ -145,7 +148,7 @@ public sealed partial class AppModel : INotifyPropertyChanged
 
         _thumbnails = new ThumbnailPipeline(_sxmParser);
         _renderCoordinator = new RenderCoordinator<WriteableBitmap>(
-            new DefaultSxmMatrixReader(_sxmParser),
+            matrixReader ?? new DefaultSxmMatrixReader(_sxmParser),
             renderBackend ?? new AvaloniaRenderBackend(),
             dispatchToUi: _dispatchToUi);
         _renderCoordinator.OnEvent = HandleRenderCoordinatorEvent;
@@ -367,6 +370,22 @@ public sealed partial class AppModel : INotifyPropertyChanged
         _selectedRenderState);
 
     public string? LastOpenedFolderPath => _prefs.LastOpenedFolderPath;
+    public Guid DatasetRevision => _renderCoordinator.DatasetRevision;
+
+    public void SetFilesForTesting(IReadOnlyList<SXMMetadata> files)
+    {
+        _allFiles = files.ToArray();
+        _visibleFiles = _allFiles;
+        _gridItems = _visibleFiles.Select(f => (GridBrowserItem)new GridBrowserItem.Sxm(f)).ToArray();
+        _selection.Clear();
+        RaiseStateChanged();
+    }
+
+    public void ResetDatasetRevision(Guid? revision = null)
+    {
+        _renderCoordinator.BeginDataset(revision);
+        ClearFrequencyShiftBoundsCache();
+    }
 
     // --- Folder Open & Rescan ---
 
@@ -408,6 +427,7 @@ public sealed partial class AppModel : INotifyPropertyChanged
         MetadataWarnings.Reset();
         InvalidateActiveRender(clearFrame: true);
         _renderCoordinator.BeginDataset();
+        ClearFrequencyShiftBoundsCache();
         _thumbnails.Reset(_renderCoordinator.DatasetRevision);
         DatasetState = DatasetLoadState.Loading.Instance;
         Status = $"Scanning {FolderName}...";

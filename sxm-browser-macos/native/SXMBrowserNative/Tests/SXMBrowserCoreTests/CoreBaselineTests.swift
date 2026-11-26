@@ -129,3 +129,23 @@ func histogramIgnoresNonFiniteValues() throws {
     #expect(stats.max == 3)
     #expect(stats.hist.reduce(0, +) == 2)
 }
+
+@Test
+func frequencyShiftChannelClassifierDistinguishesFrequencyShiftFromOtherAFMAndSTMChannels() {
+    for channel in ["OC_M1_Freq._Shift", "Frequency Shift", "Delta f", "df", "Δf"] {
+        #expect(isFrequencyShiftChannel(channel))
+    }
+
+    for channel in [
+        "Z",
+        "Current",
+        "LI Demod 1 X",
+        "dI/dV",
+        "OC_D1_Amplitude",
+        "OC_M1_Excitation",
+        "PLL",
+        "Phase",
+    ] {
+        #expect(!isFrequencyShiftChannel(channel))
+    }
+}
