@@ -4,6 +4,13 @@ All notable local builds of SXM Browser are recorded here.
 
 ## Unreleased
 
+## 2.6.1 - 2026-11-26
+
+- Build 98 (2026-11-26): Add Inspector raw `Δf Min` / `Δf Max` bounds for AFM frequency shift channels, fix DAT duplicate column name collisions, and align Windows `v2.6.1`:
+  - Add `isFrequencyShiftChannel(_:)` (`SXMModels.swift` / `SXMParser.swift`), `FrequencyShiftBounds` & `FrequencyShiftBoundsKey` (`InspectorMetadata.swift`), per-direction caching in `AppModel` / `ImageViewerController`, and `Δf Min` / `Δf Max` summary cards (`InspectorView.swift` / `AppTheme.formattedFrequencyShift`) with regression tests across Core, AppCore, and NativeUI.
+  - Merge PR #1 (`@zzdkzz`): reserve literal and numbered DAT header labels before generating unique suffixes so headers like `Current / Current / Current (2)` no longer crash macOS or overwrite columns on Windows.
+  - Port the Frequency Shift Inspector upgrade and `examples/example-graph` lookup parity to `sxm-browser-windows` (`v2.6.1`).
+
 ## 2.6.0 - 2026-11-14
 
 - Build 97 (2026-11-14): Finalize v2.6.0 release docs, promote main branch, and sync installed app.

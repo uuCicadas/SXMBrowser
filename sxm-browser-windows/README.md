@@ -1,6 +1,6 @@
 # SXM Browser — Windows 版（.NET 10 + Avalonia UI）
 
-**SXM Browser Windows 版（`v2.6.0`）** 是面向 Nanonis 扫描探针显微镜（STM / AFM）实验的高速、严格只读 `.sxm` 扫描图像与 `.dat` 谱学检视器，1:1 对齐 macOS 原版 `v2.6.0` 的科学解析引擎、图像处理精度、交互工作流与元数据交换格式，并支持在 macOS 上直接交叉编译产出零依赖 Windows `win-x64` 便携分发包。
+**SXM Browser Windows 版（`v2.6.1`）** 是面向 Nanonis 扫描探针显微镜（STM / AFM）实验的高速、严格只读 `.sxm` 扫描图像与 `.dat` 谱学检视器，1:1 对齐 macOS 原版 `v2.6.1` 的科学解析引擎、图像处理精度、交互工作流与元数据交换格式，并支持在 macOS 上直接交叉编译产出零依赖 Windows `win-x64` 便携分发包。
 
 ---
 
@@ -19,7 +19,7 @@
    - 支持 **Full / 1-99% / 2.5σ / Manual** 快速预设与 SI 单位输入（如 `-120p`、`2.5n`、`1.4µ`）。
 5. **macOS ↔ Windows 元数据 100% 互通**：
    - 本地持久化位于 `%LOCALAPPDATA%\SXM Browser\`（`metadata-v1.json` 与 `preferences-v1.json`，非 Windows 开发环境隔离存储于 `~/.local/share/SXM Browser/`）；
-   - 通过 **`File -> Export Metadata…` / `Import Metadata…`** 读写标准 **`com.sxmbrowser.dataset-metadata` (v1)** 格式，与 macOS `v2.6.0` 逐字节兼容，并支持标签、手动 `.dat` 关联、隐藏曲线与坐标轴偏好的冲突策略预览导入。
+   - 通过 **`File -> Export Metadata…` / `Import Metadata…`** 读写标准 **`com.sxmbrowser.dataset-metadata` (v1)** 格式，与 macOS `v2.6.1` 逐字节兼容，并支持标签、手动 `.dat` 关联、隐藏曲线与坐标轴偏好的冲突策略预览导入。
 
 ---
 
@@ -28,7 +28,7 @@
 ```text
 sxm-browser-windows/
 ├── SXMBrowser.sln                 # .NET 10 解决方案
-├── Directory.Build.props          # 统一 net10.0、v2.6.0 版本与离线编译配置
+├── Directory.Build.props          # 统一 net10.0、v2.6.1 版本与离线编译配置
 ├── nuget.config                   # 本地隔离 NuGet 缓存路径 (.nuget/packages)
 ├── README.md                      # 本文档
 ├── src/
@@ -63,7 +63,7 @@ sxm-browser-windows/
 │   └── publish_windows.sh         # 在 macOS 上交叉发布 win-x64 绿色便携目录与 ZIP 包
 └── dist/                          # 本地发布的 Windows 免安装成品目录（不入 Git）
     ├── SXMBrowser-win-x64/
-    └── SXMBrowser-win-x64-v2.6.0.zip
+    └── SXMBrowser-win-x64-v2.6.1.zip
 ```
 
 ---
@@ -71,7 +71,7 @@ sxm-browser-windows/
 ## Windows 部署与使用说明
 
 ### 1. 免安装便携版运行（推荐）
-1. 将本目录下的 [`dist/SXMBrowser-win-x64-v2.6.0.zip`](file:///Users/wuziyou/Documents/Project/SXMBrowser/sxm-browser-windows/dist/SXMBrowser-win-x64-v2.6.0.zip) 复制到 **Windows 10 / 11 (x64)** 电脑；
+1. 将本目录下的 [`dist/SXMBrowser-win-x64-v2.6.1.zip`](file:///Users/wuziyou/Documents/Project/SXMBrowser/sxm-browser-windows/dist/SXMBrowser-win-x64-v2.6.1.zip) 复制到 **Windows 10 / 11 (x64)** 电脑；
 2. 解压至任意目录（例如 `D:\Tools\SXMBrowser-win-x64`）；
 3. **无需提前安装 .NET Runtime**，直接双击 **`SXMBrowser.exe`** 即可启动。
 

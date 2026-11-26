@@ -1,6 +1,6 @@
 # SXM Browser 工作区总览
 
-本工作区用于开发与维护 **SXM Browser（`v2.6.0`）** 的双平台原生客户端——一款面向扫描探针显微镜（SPM / STM / AFM）实验的高速、只读 Nanonis `.sxm` 扫描图像与 `.dat` 谱学浏览工具，现同时包含 **macOS 原生版（Swift 6）** 与 **Windows 独立迁移版（.NET 10 + Avalonia UI）**。
+本工作区用于开发与维护 **SXM Browser（`v2.6.1`）** 的双平台原生客户端——一款面向扫描探针显微镜（SPM / STM / AFM）实验的高速、只读 Nanonis `.sxm` 扫描图像与 `.dat` 谱学浏览工具，现同时包含 **macOS 原生版（Swift 6）** 与 **Windows 独立迁移版（.NET 10 + Avalonia UI）**。
 
 ---
 

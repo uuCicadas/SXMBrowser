@@ -2,7 +2,7 @@
 
 本地 macOS 原生工具，用来快速浏览与检查 Nanonis `.sxm` 扫描图像及 `.dat` 点谱文件。
 
-当前发行版本：**v2.6.0**（Build 97，Apple Silicon · macOS 14+）。
+当前发行版本：**v2.6.1**（Build 98，Apple Silicon · macOS 14+）。
 
 ## macOS 原生版
 
@@ -102,7 +102,7 @@ Apple Silicon、macOS 14+ 的 Release 构建中执行。
 
 ```bash
 ./scripts/milestone_checkpoint.command \
-  v2.6.0 \
+  v2.6.1 \
   --sample-dir "/path/to/example-graph"
 ```
 

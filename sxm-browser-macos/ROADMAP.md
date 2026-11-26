@@ -1,6 +1,6 @@
 # SXM Browser 项目进展评估与演进规划报告
 
-当前基准：`main` 分支（`v2.6.0`，Build 97，已完成原生 UI 全面美化、Dark/Light 科研绘图适配、主分支合入与系统应用同步）。  
+当前基准：`main` 分支（`v2.6.1`，Build 98，已完成原生 UI 全面美化、Dark/Light 科研绘图适配、AFM `Δf` 原始极值视窗、DAT 重复列名修复与双端同步）。  
 实测验证：全量 **322 项自动化测试通过**（[`SXMBrowserCoreTests`](native/SXMBrowserNative/Tests/SXMBrowserCoreTests) 70 项 + [`SXMBrowserAppCoreTests`](native/SXMBrowserNative/Tests/SXMBrowserAppCoreTests) 239 项 + [`SXMBrowserNativeUITests`](native/SXMBrowserNative/Tests/SXMBrowserNativeUITests) 13 项），标准样例（6 个 `.sxm` + 18 个 `.dat`，0 问题）[`SXMBrowserSmoke`](native/SXMBrowserNative/Sources/SXMBrowserSmoke/main.swift#L1-L473) 契约校验与 500×512×512 性能门禁（中位数 `scan 28.049 ms / image 20.741 ms / thumbnail 21.570 ms`）全部通过。
 
 ---

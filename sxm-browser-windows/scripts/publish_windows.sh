@@ -5,7 +5,7 @@ SCRIPT_DIR="${0:A:h}"
 ROOT_DIR="${SCRIPT_DIR:h}"
 DIST_DIR="$ROOT_DIR/dist"
 OUT_DIR="$DIST_DIR/SXMBrowser-win-x64"
-ZIP_NAME="SXMBrowser-win-x64-v2.6.0.zip"
+ZIP_NAME="SXMBrowser-win-x64-v2.6.1.zip"
 ZIP_PATH="$DIST_DIR/$ZIP_NAME"
 
 export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-/tmp/dotnet-home}"
