@@ -199,6 +199,30 @@ public sealed class CoreEngineTests
     }
 
     [Fact]
+    public void DatDuplicateColumnsPreserveNumberedChannelValues()
+    {
+        string path = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(path,
+                "[DATA]\nBias\tCurrent\tCurrent\tCurrent (2)\tCurrent\n" +
+                "0\t1\t2\t3\t4\n1\t5\t6\t7\t8\n");
+
+            var curve = new SpectroscopyParser().LoadFile(path).Curve;
+
+            Assert.Equal(["Bias", "Current", "Current (3)", "Current (2)", "Current (4)"], curve.Columns);
+            Assert.Equal([1d, 5d], curve.ValuesByColumn["Current"]);
+            Assert.Equal([2d, 6d], curve.ValuesByColumn["Current (3)"]);
+            Assert.Equal([3d, 7d], curve.ValuesByColumn["Current (2)"]);
+            Assert.Equal([4d, 8d], curve.ValuesByColumn["Current (4)"]);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void EngineeringDoubleParserAndNaturalSortBehaveDeterministically()
     {
         Assert.Equal(1.5e-9, SpectroscopyParser.ParseEngineeringDouble("1.5n")!.Value, 15);

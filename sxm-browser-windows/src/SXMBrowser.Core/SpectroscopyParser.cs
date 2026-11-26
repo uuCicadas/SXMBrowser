@@ -451,14 +451,27 @@ public sealed class SpectroscopyParser
 
     private static string[] MakeUniqueColumnNames(string[] columns)
     {
-        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        // Reserve literal labels, including numbered labels appearing later in the header.
+        var reserved = new HashSet<string>(columns, StringComparer.Ordinal);
+        var nextSuffix = new Dictionary<string, int>(StringComparer.Ordinal);
         var result = new string[columns.Length];
         for (int i = 0; i < columns.Length; i++)
         {
             string name = columns[i].Length == 0 ? "Column" : columns[i];
-            int count = counts.GetValueOrDefault(name, 0);
-            counts[name] = count + 1;
-            result[i] = count == 0 ? name : $"{name} ({count + 1})";
+            if (!nextSuffix.TryGetValue(name, out int suffix))
+            {
+                nextSuffix[name] = 2;
+                result[i] = name;
+                continue;
+            }
+
+            string candidate;
+            do
+            {
+                candidate = $"{name} ({suffix++})";
+            } while (reserved.Contains(candidate));
+            nextSuffix[name] = suffix;
+            result[i] = candidate;
         }
         return result;
     }
